@@ -2642,6 +2642,35 @@ describe("author driver case-set validate (W6)", () => {
       .toBe(caseSetIdOfManifest({ manifestVersion: 1, componentId: "x" }));
   });
 
+  test("§W6: локальный валидатор принимает вложенные слоты и отвергает превышение глубины/тотала", () => {
+    const nest = (depth: number): Record<string, unknown> => depth === 0
+      ? { type: "PayButton", version: 1, props: { label: "Pay" } }
+      : { type: "PayRow", version: 1, slotBindings: { action: [nest(depth - 1)] } };
+    const withTree = (child: Record<string, unknown>) => validManifest({
+      dimensions: undefined,
+      cases: [{ id: "nested", props: { state: "default" }, slotBindings: { items: [child] } }],
+    });
+    // Три уровня — предел, четвёртый ловится локально, до сети.
+    expect(caseSetManifestIssues(withTree(nest(2)))).toEqual([]);
+    expect(caseSetManifestIssues(withTree(nest(3))).join("\n")).toContain("limited to 3 levels below the case");
+    // Тотал узлов случая: 96 (8×12) законны, 97-й — нет.
+    const wide = Object.fromEntries(Array.from({ length: 8 }, (_, slot) =>
+      [`slot-${slot}`, Array.from({ length: 12 }, () => ({ type: "PayChild", version: 1 }))]));
+    const wideManifest = (bindings: unknown) => validManifest({
+      dimensions: undefined, cases: [{ id: "wide", props: { state: "default" }, slotBindings: bindings }],
+    });
+    expect(caseSetManifestIssues(wideManifest(wide))).toEqual([]);
+    expect(caseSetManifestIssues(wideManifest({
+      ...wide,
+      "slot-0": [{ type: "PayRow", version: 1, slotBindings: { action: [{ type: "PayButton", version: 1 }] } },
+        ...(wide["slot-0"] as unknown[]).slice(1)],
+    })).join("\n")).toContain("at most 96 children");
+    // Неизвестное поле ребёнка по-прежнему ловится, а лимиты сервера перекрывают дефолты драйвера.
+    expect(caseSetManifestIssues(withTree({ type: "PayRow", version: 1, children: [] })).join("\n")).toContain('unknown field "children"');
+    expect(caseSetManifestIssues(withTree(nest(2)), caseSetLimits({ limits: { caseSetMaxSlotDepth: 2 } })).join("\n"))
+      .toContain("limited to 2 levels below the case");
+  });
+
   test("case-set validate takes exactly one positional and rejects the put-shaped call", () => {
     expect(parseArgs(["case-set", "validate", "matrix.json"]))
       .toMatchObject({ cmd: "case-set", args: ["validate", "matrix.json"] });

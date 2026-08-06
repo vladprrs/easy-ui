@@ -372,6 +372,46 @@ describe("slot bindings in candidate capture (§A6)", () => {
     db.close();
   });
 
+  test("§W6: a nested tree flattens with children indices and dedups pins across all levels", async () => {
+    const { db, service, sourceHash } = await setupCandidate(neverResolves);
+    seedPublishedChild(db, CHILD_ID, "AccSlotChild", "child-hash", CHILD_ASSET);
+    seedPublishedChild(db, OTHER_ID, "AccSlotOther", "other-hash", OTHER_ASSET);
+    const shot = { viewport: { width: 320, height: 200 }, deliver: "bytes" as const };
+    const free = service.peek((await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, shot)).jobId)!;
+
+    // Родитель в слоте `header` несёт собственный слот `action`; тот же ребёнок повторяется на
+    // втором уровне, поэтому пин обязан остаться один.
+    const nested = [{
+      slot: "header", index: 0, componentId: OTHER_ID, name: "AccSlotOther", version: 1,
+      bundleHash: "other-hash", props: {}, propsHash: "p0",
+      children: [
+        { slot: "action", index: 0, componentId: CHILD_ID, name: "AccSlotChild", version: 1, bundleHash: "child-hash", props: { label: "deep" }, propsHash: "p1" },
+      ],
+    }];
+    const job = service.peek((await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash },
+      { ...shot, slotBindings: nested, slotsHash: SLOTS_HASH })).jobId)!;
+
+    expect(job.slotTree).toEqual([
+      { slot: "header", index: 0, name: "AccSlotOther", props: {}, children: [1] },
+      { slot: "action", index: 0, name: "AccSlotChild", props: { label: "deep" } },
+    ]);
+    // Лист `children` не несёт вовсе — «отсутствует, а не пусто».
+    expect(Object.hasOwn(job.slotTree![1]!, "children")).toBe(false);
+    expect(job.slotChildren).toEqual([
+      { id: OTHER_ID, name: "AccSlotOther", version: 1, bundleUrl: `/api/components/${OTHER_ID}/versions/1/bundle.js`, bundleHash: "other-hash", status: "active" },
+      { id: CHILD_ID, name: "AccSlotChild", version: 1, bundleUrl: `/api/components/${CHILD_ID}/versions/1/bundle.js`, bundleHash: "child-hash", status: "active" },
+    ]);
+    // Allowlist покрывает **все** уровни дерева: бандл и ассеты вложенного ребёнка тоже.
+    expect(new Set(job.allowedUrls)).toEqual(new Set([
+      ...free.allowedUrls,
+      `/api/components/${CHILD_ID}/versions/1/bundle.js`,
+      `/api/components/${OTHER_ID}/versions/1/bundle.js`,
+      `/api/assets/${CHILD_ASSET}`,
+      `/api/assets/${OTHER_ASSET}`,
+    ]));
+    db.close();
+  });
+
   test("an empty slotBindings array leaves the job slot-free (absent, never empty)", async () => {
     const { db, service, sourceHash } = await setupCandidate(neverResolves);
     const shot = { viewport: { width: 320, height: 200 }, deliver: "bytes" as const };

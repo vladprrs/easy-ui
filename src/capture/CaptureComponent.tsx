@@ -73,11 +73,15 @@ function paintFieldMargin(): number | null {
 }
 
 /**
- * Дерево кандидатного капчура (план 2026-08-05 §A6). Без `slots` — то же одноэлементное дерево,
- * что и до волны (бесслотовый кадр обязан остаться байт-в-байт прежним). Со слотами — родитель `c`
- * с детьми `s0…sN` в порядке рендера: **именованный** ребёнок несёт `slot`, ребёнок неявного
- * дефолтного слота — не несёт ключа вовсе (§A2a; `runtimeSpec` схлопывает обе формы
- * в `slotIndices.default`). `customTypes` — родитель плюс имена всех детей.
+ * Дерево кандидатного капчура (план 2026-08-05 §A6, вложенность — 2026-08-06 §W6). Без `slots` —
+ * то же одноэлементное дерево, что и до волны (бесслотовый кадр обязан остаться байт-в-байт
+ * прежним). Со слотами — родитель `c` с детьми `s0…sN` в порядке рендера: **именованный** ребёнок
+ * несёт `slot`, ребёнок неявного дефолтного слота — не несёт ключа вовсе (§A2a; `runtimeSpec`
+ * схлопывает обе формы в `slotIndices.default`). `customTypes` — родитель плюс имена всех детей.
+ *
+ * `tree` приезжает **плоским**: вложенность выражена ссылками `entry.children` на индексы того же
+ * массива, а детьми корня становятся записи, на которые никто не ссылается. Рантайм произвольную
+ * глубину слотов умеет сам (`runtimeSpec.ts` — `slotIndices` строится для каждого custom-элемента).
  */
 function captureRuntimeTree(name: string, props: Record<string, unknown>, slots: CaptureSlotsBootstrap | undefined) {
   const entries = slots?.tree ?? [];
@@ -88,9 +92,17 @@ function captureRuntimeTree(name: string, props: Record<string, unknown>, slots:
     );
   }
   const keys = entries.map((_, index) => `s${index}`);
-  const elements: Record<string, unknown> = { c: { type: name, props, children: keys } };
+  const nested = new Set<number>();
+  for (const entry of entries) for (const index of entry.children ?? []) nested.add(index);
+  const rootKeys = keys.filter((_, index) => !nested.has(index));
+  const elements: Record<string, unknown> = { c: { type: name, props, children: rootKeys } };
   entries.forEach((entry, index) => {
-    elements[keys[index]] = { type: entry.name, props: entry.props ?? {}, ...(entry.slot ? { slot: entry.slot } : {}) };
+    const children = (entry.children ?? []).map((child) => keys[child]).filter((key): key is string => key !== undefined);
+    elements[keys[index]] = {
+      type: entry.name, props: entry.props ?? {},
+      ...(entry.slot ? { slot: entry.slot } : {}),
+      ...(children.length === 0 ? {} : { children }),
+    };
   });
   return toRuntimeSpec(
     { root: "c", elements } as Parameters<typeof toRuntimeSpec>[0],

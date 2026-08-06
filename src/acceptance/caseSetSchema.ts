@@ -176,8 +176,11 @@ export const caseSetCropLineageSchema = z.strictObject({
  *    активная версия» сделала бы кадр случая зависящим от чужих публикаций: набор контентно
  *    адресован, а его смысл молча уезжал бы. `bundleHash` в манифесте **нет** — он резолвится
  *    сервером из иммутабельной строки публикации (§A1), иначе клиент диктовал бы байты.
- * 2. **Глубина 1.** `strictObject` ребёнка не знает поля вложенных слотов, поэтому дерево глубже
- *    одного уровня — отказ схемы, а не тихо игнорируемое поле.
+ * 2. **Глубина ограничена, но больше не единицей** (план 2026-08-06 §W6). Ребёнок сам несёт
+ *    опциональные `slotBindings`, поэтому «Lead Block с кнопкой внутри вложенного слота» выразим.
+ *    Потолки — `CASE_SET_MAX_SLOT_DEPTH` уровней от корня случая и `CASE_SET_MAX_SLOT_NODES` узлов
+ *    на случай; оба проверяет **сервер** (`slot_depth_exceeded`/`slot_nodes_exceeded`), а не схема:
+ *    рекурсивный `z.lazy` даёт форму, а осмысленное сообщение с адресом узла — только обход.
  * 3. **Ключ `default` легален** (§A2a): дефолтный слот в этой кодовой базе неявный
  *    (`runtimeSpec.ts` — `slotOf(child) ?? "default"`), компоненты его не объявляют, и без него
  *    карусель из 9 детей осталась бы невыразимой. Проверки принадлежности `extracted.meta.slots` и
@@ -185,6 +188,19 @@ export const caseSetCropLineageSchema = z.strictObject({
  */
 export const CASE_SET_MAX_SLOT_CHILDREN = 12;
 export const CASE_SET_MAX_SLOTS_PER_CASE = 8;
+/**
+ * Глубина дерева слотов, **уровнями от корня случая** (план 2026-08-06 §W6): дети случая — уровень
+ * 1, их дети — 2, и так до `CASE_SET_MAX_SLOT_DEPTH`. Смысл прежних лимитов не меняется:
+ * `CASE_SET_MAX_SLOT_CHILDREN` остаётся потолком **одного слота** на любом уровне, а
+ * `CASE_SET_MAX_SLOTS_PER_CASE` — числом слотов одного узла.
+ */
+export const CASE_SET_MAX_SLOT_DEPTH = 3;
+/**
+ * Тотал узлов дерева слотов **на случай**. Значение равно сегодняшнему максимуму плоского случая
+ * (8 слотов × 12 детей = 96), поэтому проверка строго `≤`: широкий манифест, легальный до этой
+ * волны, обязан остаться легальным (триаж V13).
+ */
+export const CASE_SET_MAX_SLOT_NODES = CASE_SET_MAX_SLOTS_PER_CASE * CASE_SET_MAX_SLOT_CHILDREN;
 /** Неявный слот `children`; в манифесте он именуется явно, в дереве съёмки — отсутствием `slot`. */
 export const DEFAULT_SLOT_KEY = "default";
 /** Тот же charset, что у `definition.slots` (`routes/meta.ts` JSON-схема компонента). */
@@ -192,18 +208,37 @@ export const SLOT_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 const slotKey = z.string().max(32).regex(SLOT_KEY_PATTERN, "slot key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$");
 
-export const caseSetSlotChildSchema = z.strictObject({
+/**
+ * Ребёнок слота. Тип объявлен **вручную**: `z.strictObject` + `z.lazy` теряет инференс на цикле,
+ * и экспортируемый тип обязан быть читаемым, а не `any` (триаж V13; прецедент рекурсивной схемы с
+ * явной аннотацией — `server/contracts.ts` `z.lazy` c `z.ZodType`).
+ */
+export interface CaseSetSlotChild {
+  type: string;
+  version: number;
+  props?: Record<string, unknown>;
+  /** Собственные слоты ребёнка (план 2026-08-06 §W6). Строго `.optional()` без `.default()`. */
+  slotBindings?: CaseSetSlotBindings;
+}
+export type CaseSetSlotBindings = Record<string, CaseSetSlotChild[]>;
+
+export const caseSetSlotChildSchema: z.ZodType<CaseSetSlotChild> = z.lazy(() => z.strictObject({
   /** Имя опубликованного компонента (`components.name` уникально глобально и не переименовывается). */
   type: z.string().min(1).max(64),
   /** Точный пин версии: обязателен по построению (см. инвариант 1). */
   version: z.number().int().positive(),
   props: z.record(z.string(), z.unknown()).optional(),
-});
+  /**
+   * Вложенные слоты (§W6). Тот же самый набор ограничений формы, что и у корня случая; глубину и
+   * тотал узлов судит сервер, потому что осмысленный отказ обязан назвать путь до узла.
+   */
+  slotBindings: caseSetSlotBindingsSchema.optional(),
+}));
 
-export const caseSetSlotBindingsSchema = z
+export const caseSetSlotBindingsSchema: z.ZodType<CaseSetSlotBindings> = z.lazy(() => z
   .record(slotKey, z.array(caseSetSlotChildSchema).min(1).max(CASE_SET_MAX_SLOT_CHILDREN))
   .refine((value) => Object.keys(value).length <= CASE_SET_MAX_SLOTS_PER_CASE,
-    `at most ${CASE_SET_MAX_SLOTS_PER_CASE} slots per case`);
+    `at most ${CASE_SET_MAX_SLOTS_PER_CASE} slots per node`));
 
 export const caseSetCaseSchema = z.strictObject({
   id: caseId,
@@ -268,5 +303,5 @@ export type CaseSetManifest = z.infer<typeof caseSetManifestSchema>;
 export type CaseSetCase = z.infer<typeof caseSetCaseSchema>;
 export type CaseSetCapture = z.infer<typeof caseSetCaptureSchema>;
 export type CaseSetCasePolicy = z.infer<typeof caseSetCasePolicySchema>;
-export type CaseSetSlotChild = z.infer<typeof caseSetSlotChildSchema>;
-export type CaseSetSlotBindings = z.infer<typeof caseSetSlotBindingsSchema>;
+// `CaseSetSlotChild`/`CaseSetSlotBindings` объявлены выше вручную: рекурсивная схема (`z.lazy`)
+// инференс не переживает, а экспортируемый тип обязан оставаться читаемым.

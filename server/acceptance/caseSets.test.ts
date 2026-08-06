@@ -796,12 +796,11 @@ test("§A2a: дефолтный слот легален и не требует �
   db.close();
 });
 
-test("§A1: схема слот-биндингов — глубина 1, лимиты детей и слотов, charset ключа", () => {
+test("§A1: схема слот-биндингов — лимиты детей и слотов, charset ключа, неизвестные поля", () => {
   const db = dbWithSlotFamily();
   const cases = (slotBindings: unknown) => slotManifest([{ id: "one", props: { title: "t" }, slotBindings }]);
-  // Вложенность: `strictObject` ребёнка не знает полей поддерева.
-  fails(() => validateManifest(db, "yp-badge", cases({ items: [{ type: "PayChild", version: 1, slotBindings: { items: [child("a")] } }] })),
-    422, "validation_failed");
+  // §W6: поддерево теперь легально по форме (его смысл судят проверки ниже), а вот произвольное
+  // поле ребёнка — по-прежнему отказ схемы: `strictObject` ничего не игнорирует молча.
   fails(() => validateManifest(db, "yp-badge", cases({ items: [{ type: "PayChild", version: 1, children: [child("a")] }] })),
     422, "validation_failed");
   // Версия обязательна и целая положительная.
@@ -860,5 +859,132 @@ test("откат сборки: нечитаемый сохранённый ма�
   db.run("UPDATE component_case_sets SET manifest_json=? WHERE case_set_id=?",
     [JSON.stringify({ ...parsed, unknownFutureField: 1 }), row.case_set_id]);
   fails(() => manifestOfRow(new CaseSetRepo(db).require(row.case_set_id)), 422, "case_set_manifest_unreadable");
+  db.close();
+});
+
+// ------------------------------------------- вложенные слоты (план 2026-08-06 §W6)
+
+/**
+ * Субъект + двухуровневая цепочка публикаций: `PayRow` сам объявляет именованный слот `action`,
+ * `PayButton` — лист. Ровно эта форма и есть сценарий фидбэка «Lead Block получает реальное
+ * содержимое вложенной кнопки».
+ */
+const dbWithNestedSlotFamily = (): Database => {
+  const db = dbWithSlotFamily();
+  seedPublish(db, { id: "pay-row", name: "PayRow", meta: { slots: ["action"], capabilities: { namedSlots: true } } });
+  // Второй слот-родитель нужен, чтобы строить цепочки глубже двух уровней: повтор одного и того же
+  // компонента по пути — это `slot_self_reference`, а не «просто глубина».
+  seedPublish(db, { id: "pay-row-b", name: "PayRowB", meta: { slots: ["action"], capabilities: { namedSlots: true } } });
+  seedPublish(db, { id: "pay-row-c", name: "PayRowC", meta: { slots: ["action"], capabilities: { namedSlots: true } } });
+  seedPublish(db, { id: "pay-btn", name: "PayButton", meta: {} });
+  seedPublish(db, { id: "pay-leaf", name: "PayLeaf", meta: {} });
+  return db;
+};
+
+const nestedCase = (id = "one") => ({
+  id, props: { title: "t" },
+  slotBindings: {
+    items: [{
+      type: "PayRow", version: 1,
+      slotBindings: { action: [{ type: "PayButton", version: 1, props: { label: "Pay" } }] },
+    }],
+  },
+});
+
+test("§W6: набор глубины 1 хэшируется байт-в-байт как до волны вложенности", () => {
+  // Голдены сняты на НЕИЗМЕНЁННОМ коде перед волной: поле `children` обязано попадать в прообраз
+  // только условным спредом, иначе волна тихо инвалидировала бы каждый прод-кадр со слотами.
+  const depth1 = [
+    { slot: "header", index: 0, componentId: "c1", version: 1, bundleHash: "bh1", propsHash: "ph1" },
+    { slot: "default", index: 0, componentId: "c2", version: 2, bundleHash: "bh2", propsHash: "ph2" },
+  ];
+  expect(slotsHashOf(depth1)).toBe("c7cae4bbd293f7d29635a1acfb67bed2d34ab99f453340301568af4a569c4b9a");
+  // Пустой массив детей нормализуется в отсутствие ключа — «отсутствует, а не пусто».
+  expect(slotsHashOf(depth1.map((item) => ({ ...item, children: [] })))).toBe(slotsHashOf(depth1));
+  expect(dedupSlotsKeyOf({
+    items: [{ type: "A", version: 1, props: { a: 1 } }], default: [{ type: "B", version: 2 }],
+  })).toBe("2d38f4c47bbc6326414b14efedf34b31adf6f419689627c9c2a3e22eba4a6284");
+
+  const db = dbWithNestedSlotFamily();
+  // Адрес набора снят на неизменённом коде для ровно этого литерала манифеста.
+  const flat = validateManifest(db, "yp-badge", {
+    manifestVersion: 1, componentId: "yp-badge", capture: { viewport: { width: 390, height: 844 } },
+    cases: [{ id: "one", props: { title: "SMS" }, slotBindings: { items: [{ type: "PayChild", version: 1, props: { label: "a" } }] } }],
+  });
+  expect(flat.caseSetId).toBe("cset_59037b99c6de3f2de19c58fbd95e77da52f38bda1f9c17eec783a3d5c3e01a70");
+  // Поддерево двигает и ключ дедупа, и адрес набора.
+  const nested = validateManifest(db, "yp-badge", slotManifest([nestedCase()]));
+  expect(nested.caseSetId).not.toBe(flat.caseSetId);
+  expect(dedupSlotsKeyOf(nested.manifest.cases[0]!.slotBindings)).not.toBe(dedupSlotsKeyOf(flat.manifest.cases[0]!.slotBindings));
+  db.close();
+});
+
+test("§W6/B1: граничный манифест 8 слотов × 12 детей (96 узлов) принимается и читается manifestOfRow", () => {
+  const db = dbWithNestedSlotFamily();
+  const wide = Object.fromEntries(Array.from({ length: 8 }, (_, slot) =>
+    [`slot-${slot}`, Array.from({ length: 12 }, (_, index) => child(`s${slot}-${index}`))]));
+  const { manifest: parsed } = validateManifest(db, "yp-badge", slotManifest([{ id: "wide", props: { title: "t" }, slotBindings: wide }]));
+  // Тотал равен прежнему максимуму, проверка строго `≤`: манифест, легальный до волны, легален и после.
+  const { row } = new CaseSetRepo(db).put({ componentId: "yp-badge", designSystem: "yandex-pay", manifest: parsed, createdBy: "user_a" });
+  const read = manifestOfRow(new CaseSetRepo(db).require(row.case_set_id));
+  expect(Object.keys(read.cases[0]!.slotBindings!)).toHaveLength(8);
+  expect(read.cases[0]!.slotBindings!["slot-7"]).toHaveLength(12);
+  db.close();
+});
+
+test("§W6: глубина, тотал узлов и цикл — 422 с адресом узла", () => {
+  const db = dbWithNestedSlotFamily();
+  const rows = ["PayRow", "PayRowB", "PayRowC"];
+  const nest = (depth: number, level = 0): Record<string, unknown> => depth === 0
+    ? { type: "PayButton", version: 1 }
+    : { type: rows[level % rows.length]!, version: 1, slotBindings: { action: [nest(depth - 1, level + 1)] } };
+
+  // Три уровня (PayRow → PayRow → PayButton) — предел, четвёртый — отказ.
+  expect(validateManifest(db, "yp-badge", slotManifest([{ id: "deep", props: { title: "t" }, slotBindings: { items: [nest(2)] } }])).warnings)
+    .toEqual([]);
+  fails(() => validateManifest(db, "yp-badge", slotManifest([{ id: "deep", props: { title: "t" }, slotBindings: { items: [nest(3)] } }])),
+    422, "slot_depth_exceeded");
+
+  // 97-й узел дерева случая — отказ (96 = 8×12 остаётся легальным, тест выше).
+  const wide = Object.fromEntries(Array.from({ length: 8 }, (_, slot) =>
+    [`slot-${slot}`, Array.from({ length: 12 }, (_, index) => child(`s${slot}-${index}`))]));
+  const overflowing = {
+    ...wide,
+    "slot-0": [{ type: "PayRow", version: 1, slotBindings: { action: [{ type: "PayButton", version: 1 }] } },
+      ...(wide["slot-0"] as unknown[]).slice(1)],
+  };
+  fails(() => validateManifest(db, "yp-badge", slotManifest([{ id: "big", props: { title: "t" }, slotBindings: overflowing }])),
+    422, "slot_nodes_exceeded");
+
+  // Цикл считается по всему пути: субъект внутри поддерева и повтор предка — один и тот же отказ.
+  fails(() => validateManifest(db, "yp-badge", slotManifest([{
+    id: "cycle", props: { title: "t" },
+    slotBindings: { items: [{ type: "PayRow", version: 1, slotBindings: { action: [{ type: "YpBadge", version: 1 }] } }] },
+  }])), 422, "slot_self_reference");
+  fails(() => validateManifest(db, "yp-badge", slotManifest([{
+    id: "cycle2", props: { title: "t" },
+    slotBindings: { items: [{ type: "PayRow", version: 1, slotBindings: { action: [{ type: "PayRow", version: 1 }] } }] },
+  }])), 422, "slot_self_reference");
+  db.close();
+});
+
+test("§W6: вложенный слот судится по definition запиненного родителя — отказ уже при PUT", () => {
+  const db = dbWithNestedSlotFamily();
+  // Слот, которого у родителя нет: ждать старта рана незачем — его публикация иммутабельна.
+  fails(() => validateManifest(db, "yp-badge", slotManifest([{
+    id: "one", props: { title: "t" },
+    slotBindings: { items: [{ type: "PayRow", version: 1, slotBindings: { trailing: [{ type: "PayButton", version: 1 }] } }] },
+  }])), 422, "slot_unknown");
+  // Родитель без `capabilities.namedSlots` именованный слот вообще не принимает…
+  fails(() => validateManifest(db, "yp-badge", slotManifest([{
+    id: "one", props: { title: "t" },
+    slotBindings: { items: [{ type: "PayRow", version: 1, slotBindings: { action: [{ type: "PayButton", version: 1,
+      slotBindings: { icon: [{ type: "PayLeaf", version: 1 }] } }] } }] },
+  }])), 422, "slot_bindings_unsupported");
+  // …но дефолтный слот exempt на любом уровне (§A2a).
+  expect(validateManifest(db, "yp-badge", slotManifest([{
+    id: "one", props: { title: "t" },
+    slotBindings: { items: [{ type: "PayRow", version: 1, slotBindings: { default: [{ type: "PayButton", version: 1 }] } }] },
+  }])).warnings).toEqual([]);
   db.close();
 });

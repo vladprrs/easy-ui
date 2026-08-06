@@ -281,6 +281,32 @@ test("`slotBindings: []` нормализуется в отсутствие по
   expect(frameFingerprint({ ...GOLDEN_FRAME_INPUT, slotBindings: [] })).toBe(GOLDEN_FRAME);
 });
 
+test("§W6: вложенные дети байт-нейтральны для depth-1 и двигают кадр сами по себе", () => {
+  // Голден depth-1, снятый на коде ДО волны вложенности: `children` обязан попадать в пре-образ
+  // только условным спредом, иначе волна тихо инвалидировала бы каждый прод-кадр со слотами.
+  expect(frameFingerprint({
+    ...GOLDEN_FRAME_INPUT,
+    slotBindings: [
+      { slot: "header", index: 0, componentId: "c1", version: 1, bundleHash: "bh1", propsHash: "ph1" },
+      { slot: "default", index: 0, componentId: "c2", version: 2, bundleHash: "bh2", propsHash: "ph2" },
+    ],
+  })).toBe("e08725f5606cf36f9fe03a1dddb082c7f2f5aeb268968faf7e8cde3668d8aaf6");
+  // Пустое поддерево — «отсутствует, а не пусто».
+  expect(fingerprints({ ...PLAIN, slotBindings: [{ ...CHILD, children: [] }] }).frame)
+    .toBe(fingerprints({ ...PLAIN, slotBindings: [CHILD] }).frame);
+
+  // Одно лишь появление внука двигает кадр, а его bundleHash — тоже.
+  const grandchild = { ...SECOND_CHILD, slot: "action", index: 0 };
+  const flat = fingerprints({ ...PLAIN, slotBindings: [CHILD] });
+  const nested = fingerprints({ ...PLAIN, slotBindings: [{ ...CHILD, children: [grandchild] }] });
+  expect(nested.frame).not.toBe(flat.frame);
+  expect(nested.comparison).toBe(flat.comparison);
+  const rebuilt = fingerprints({ ...PLAIN, slotBindings: [{ ...CHILD, children: [{ ...grandchild, bundleHash: "bundle-rebuilt" }] }] });
+  expect(rebuilt.frame).not.toBe(nested.frame);
+  // Внук в слоте ребёнка ≠ второй ребёнок того же слота: это разные картинки.
+  expect(fingerprints({ ...PLAIN, slotBindings: [CHILD, grandchild] }).frame).not.toBe(nested.frame);
+});
+
 test("расчёт отпечатков детерминирован и собирается из своих же слоёв", () => {
   const item = { ...PLAIN, referenceAssetId: ASSET_A };
   const first = fingerprints(item);

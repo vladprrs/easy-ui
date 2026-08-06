@@ -25,9 +25,11 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import {
-  CASE_SET_MAX_EXPECTED_TUPLES, COVERAGE_MISSING_TUPLES_LIMIT, DEFAULT_SLOT_KEY, caseSetManifestSchema,
+  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
+  COVERAGE_MISSING_TUPLES_LIMIT, DEFAULT_SLOT_KEY, caseSetManifestSchema,
   expectedTuplesOf,
-  type CaseSetCase, type CaseSetManifest, type CaseSetSlotBindings, type CropSourceSurface,
+  type CaseSetCase, type CaseSetManifest, type CaseSetSlotBindings, type CaseSetSlotChild,
+  type CropSourceSurface,
 } from "../../src/acceptance/caseSetSchema";
 import { ApiError } from "../http";
 import type { CandidateEntry } from "../components/candidates";
@@ -231,7 +233,38 @@ function publishedDefinitionMeta(db: Database, componentId: string): Record<stri
 }
 
 /**
- * Проверки слот-биндингов (§A2). Разделение труда с рантаймом:
+ * Слот-факты **хозяина слота**: какие именованные слоты он объявляет и умеет ли он их вообще.
+ * Хозяин корневого уровня — субъект приёмки (его последняя публикация), хозяин вложенного уровня
+ * (§W6) — запиненная публикация ребёнка-родителя. `null` — метаданных нет, судить нечем.
+ */
+interface SlotHostFacts {
+  declaredSlots: Set<string>;
+  namedSlotsCapable: boolean;
+}
+
+function slotHostFactsOf(meta: Record<string, unknown> | null): SlotHostFacts | null {
+  if (meta === null) return null;
+  const slots = Array.isArray(meta.slots) ? (meta.slots as unknown[]).filter((s): s is string => typeof s === "string") : [];
+  return {
+    declaredSlots: new Set(slots),
+    namedSlotsCapable: (meta.capabilities as { namedSlots?: unknown } | undefined)?.namedSlots === true,
+  };
+}
+
+/** Слот-факты **запиненной публикации** ребёнка — хозяин вложенного уровня (§W6). */
+function slotHostOf(pin: PublishedSlotPin): { slots: Set<string>; capable: boolean; name: string } | null {
+  let meta: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(pin.definitionMeta) as unknown;
+    meta = parsed !== null && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+  } catch { meta = null; }
+  const facts = slotHostFactsOf(meta);
+  return facts === null ? null
+    : { slots: facts.declaredSlots, capable: facts.namedSlotsCapable, name: `${pin.name} v${pin.version}` };
+}
+
+/**
+ * Проверки слот-биндингов (§A2, вложенность — план 2026-08-06 §W6). Разделение труда с рантаймом:
  *
  * - **Опубликованные факты** (ребёнок существует, версия запинена, статус рендерабелен, ДС та же,
  *   props сходятся со схемой пина, props JSON-безопасны) — жёсткие 422 **здесь**: они не зависят
@@ -252,7 +285,7 @@ function validateSlotBindings(db: Database, manifest: CaseSetManifest, component
   // выдумывать отказ по несуществующему факту хуже, чем не проверять его.
   const designSystem = subject?.design_system ?? null;
 
-  // Мемоизация в пределах одного вызова: потолок набора — 64 случая × 8 слотов × 12 детей, и без
+  // Мемоизация в пределах одного вызова: потолок набора — 64 случая × 96 узлов дерева, и без
   // неё один PUT давал бы тысячи одинаковых запросов (триаж раунда 1, «accepted minors»).
   const memo = new Map<string, PublishedSlotPin | null>();
   const pinOf = (name: string, version: number): PublishedSlotPin | null => {
@@ -261,82 +294,144 @@ function validateSlotBindings(db: Database, manifest: CaseSetManifest, component
     return memo.get(key) ?? null;
   };
 
-  const meta = publishedDefinitionMeta(db, componentId);
-  const declaredSlots = new Set(Array.isArray(meta?.slots) ? (meta!.slots as unknown[]).filter((s): s is string => typeof s === "string") : []);
-  const namedSlotsCapable = (meta?.capabilities as { namedSlots?: unknown } | undefined)?.namedSlots === true;
+  const subjectFacts = slotHostFactsOf(publishedDefinitionMeta(db, componentId));
 
   for (const item of bound) {
-    for (const [slot, children] of Object.entries(item.slotBindings!)) {
-      children.forEach((child, index) => {
-        const at = ["cases", item.id, "slotBindings", slot, index];
-        const props = child.props ?? {};
-        if (!jsonSafeChildProps(props)) {
-          throw new ApiError(422, "slot_props_dynamic",
-            `Case ${item.id}: slot "${slot}" child ${child.type} declares $- or __eui-prefixed props;`
-            + " slot children take plain JSON data, not renderer directives",
-            { issues: [issue([...at, "props"], "props must be JSON-safe and free of $-/__eui-prefixed keys")] });
-        }
-        const pin = pinOf(child.type, child.version);
-        if (!pin) {
-          // Строка нашлась бы без фильтра по ДС — значит ребёнок из другой системы, и это другой
-          // отказ: «не опубликован» увёл бы автора искать несуществующую публикацию.
-          const foreign = designSystem === null ? null : publishedPinByNameAndVersion(db, child.type, child.version, null);
-          if (foreign) {
-            throw new ApiError(422, "slot_component_design_system_mismatch",
-              `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version} from design system`
-              + ` ${foreign.designSystem}, but ${componentId} belongs to ${designSystem}`,
-              { issues: [issue(at, `child design system ${foreign.designSystem} != ${designSystem}`)] });
+    // Тотал узлов считается **по случаю** целиком (§W6): 8 слотов × 12 детей = 96 — ровно тот
+    // максимум, который был выразим до волны, поэтому граничный плоский манифест остаётся валиден.
+    let nodes = 0;
+
+    /**
+     * Рекурсивный обход дерева слотов случая. `depth` — уровень **детей**, которых обходит вызов
+     * (дети случая — 1). `host` — тот, **в чей** слот кладут: у корня это последняя публикация
+     * субъекта (голова кандидата может законно отличаться → warning), у вложенного уровня —
+     * `definition_meta` запиненной публикации родителя (факт неизменный → отказ сразу).
+     */
+    const visit = (
+      bindings: CaseSetSlotBindings,
+      at: (string | number)[],
+      depth: number,
+      host: { facts: SlotHostFacts | null; kind: "candidate" | "published"; name: string },
+      ancestors: readonly string[],
+    ): void => {
+      for (const [slot, children] of Object.entries(bindings)) {
+        children.forEach((child, index) => {
+          const nodeAt = [...at, slot, index];
+          const where = `case ${item.id}, slot "${slot}"[${index}]${depth > 1 ? ` nested under ${host.name} (depth ${depth})` : ""}`;
+          if (depth > CASE_SET_MAX_SLOT_DEPTH) {
+            throw new ApiError(422, "slot_depth_exceeded",
+              `${where}: slot trees are limited to ${CASE_SET_MAX_SLOT_DEPTH} levels below the case;`
+              + " flatten the binding or publish the nested composition as a component of its own",
+              { issues: [issue(nodeAt, `depth ${depth} exceeds the limit of ${CASE_SET_MAX_SLOT_DEPTH}`)] });
           }
-          throw new ApiError(422, "slot_component_not_published",
-            `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version}, which is not a published component version`,
-            { issues: [issue(at, `unknown or unpublished component version: ${child.type} v${child.version}`)] });
-        }
-        if (!SLOT_PIN_ACCEPTED_STATUS.has(pin.status)) {
-          throw new ApiError(422, "slot_component_not_published",
-            `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version}, whose publish status is`
-            + ` ${pin.status} and does not render`,
-            { issues: [issue(at, `publish status ${pin.status} is not renderable`)] });
-        }
-        if (pin.componentId === componentId) {
-          throw new ApiError(422, "slot_self_reference",
-            `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version}, which is the subject component itself`,
-            { issues: [issue(at, "a case cannot bind its own component into a slot")] });
-        }
-        const propsIssue = childPropsIssue(props, JSON.parse(pin.definitionMeta) as unknown);
-        if (propsIssue !== null) {
-          throw new ApiError(422, "slot_props_invalid",
-            `Case ${item.id}: slot "${slot}" child ${child.type} v${child.version} has invalid props — ${propsIssue}`,
-            { issues: [issue([...at, "props"], propsIssue)] });
-        }
-        // Коды warning'ов — часть контракта (`slot_pin_deprecated`/`slot_pin_superseded`, дом. паттерн
-        // `repos/prototypes.ts:155-158`); поверхность здесь — строки, поэтому код идёт префиксом.
-        if (pin.status === "deprecated") {
-          warnings.push(`slot_pin_deprecated: case ${item.id}: slot "${slot}" pins ${child.type} v${child.version}, which is deprecated`);
-        } else if (pin.status === "superseded") {
-          warnings.push(`slot_pin_superseded: case ${item.id}: slot "${slot}" pins ${child.type} v${child.version}, which is superseded`);
-        }
-      });
+          nodes += 1;
+          if (nodes > CASE_SET_MAX_SLOT_NODES) {
+            throw new ApiError(422, "slot_nodes_exceeded",
+              `Case ${item.id} declares more than ${CASE_SET_MAX_SLOT_NODES} slot children across its whole tree;`
+              + " split the state into several cases",
+              { issues: [issue(nodeAt, `the slot tree of a case holds at most ${CASE_SET_MAX_SLOT_NODES} nodes`)] });
+          }
+          const props = child.props ?? {};
+          if (!jsonSafeChildProps(props)) {
+            throw new ApiError(422, "slot_props_dynamic",
+              `${where}: child ${child.type} declares $- or __eui-prefixed props;`
+              + " slot children take plain JSON data, not renderer directives",
+              { issues: [issue([...nodeAt, "props"], "props must be JSON-safe and free of $-/__eui-prefixed keys")] });
+          }
+          const pin = pinOf(child.type, child.version);
+          if (!pin) {
+            // Строка нашлась бы без фильтра по ДС — значит ребёнок из другой системы, и это другой
+            // отказ: «не опубликован» увёл бы автора искать несуществующую публикацию.
+            const foreign = designSystem === null ? null : publishedPinByNameAndVersion(db, child.type, child.version, null);
+            if (foreign) {
+              throw new ApiError(422, "slot_component_design_system_mismatch",
+                `${where}: binds ${child.type} v${child.version} from design system`
+                + ` ${foreign.designSystem}, but ${componentId} belongs to ${designSystem}`,
+                { issues: [issue(nodeAt, `child design system ${foreign.designSystem} != ${designSystem}`)] });
+            }
+            throw new ApiError(422, "slot_component_not_published",
+              `${where}: binds ${child.type} v${child.version}, which is not a published component version`,
+              { issues: [issue(nodeAt, `unknown or unpublished component version: ${child.type} v${child.version}`)] });
+          }
+          if (!SLOT_PIN_ACCEPTED_STATUS.has(pin.status)) {
+            throw new ApiError(422, "slot_component_not_published",
+              `${where}: binds ${child.type} v${child.version}, whose publish status is ${pin.status} and does not render`,
+              { issues: [issue(nodeAt, `publish status ${pin.status} is not renderable`)] });
+          }
+          // Цикл считается по **всему пути** (§W6): субъект приёмки — нулевой предок, поэтому одним
+          // правилом ловятся и прямая самоссылка, и «внук равен деду».
+          if (ancestors.includes(pin.componentId)) {
+            throw new ApiError(422, "slot_self_reference",
+              `${where}: binds ${child.type} v${child.version}, which already renders this subtree`
+              + ` (${[...ancestors, pin.componentId].join(" → ")})`,
+              { issues: [issue(nodeAt, "a slot subtree cannot bind the subject component or any of its own ancestors")] });
+          }
+          const childMeta = JSON.parse(pin.definitionMeta) as unknown;
+          const propsIssue = childPropsIssue(props, childMeta);
+          if (propsIssue !== null) {
+            throw new ApiError(422, "slot_props_invalid",
+              `${where}: child ${child.type} v${child.version} has invalid props — ${propsIssue}`,
+              { issues: [issue([...nodeAt, "props"], propsIssue)] });
+          }
+          // Коды warning'ов — часть контракта (`slot_pin_deprecated`/`slot_pin_superseded`, дом. паттерн
+          // `repos/prototypes.ts:155-158`); поверхность здесь — строки, поэтому код идёт префиксом.
+          if (pin.status === "deprecated") {
+            warnings.push(`slot_pin_deprecated: ${where} pins ${child.type} v${child.version}, which is deprecated`);
+          } else if (pin.status === "superseded") {
+            warnings.push(`slot_pin_superseded: ${where} pins ${child.type} v${child.version}, which is superseded`);
+          }
+          // Вложенные слоты ребёнка (§W6): хозяином их проверки членства становится сам ребёнок.
+          if (child.slotBindings !== undefined) {
+            visit(child.slotBindings, [...nodeAt, "slotBindings"], depth + 1, {
+              facts: slotHostFactsOf(childMeta !== null && typeof childMeta === "object" ? childMeta as Record<string, unknown> : null),
+              kind: "published",
+              name: `${child.type} v${child.version}`,
+            }, [...ancestors, pin.componentId]);
+          }
+        });
 
-      // Факты головы кандидата — warning'и (жёсткий отказ на старте рана). Дефолтный слот из этой
-      // проверки исключён целиком: он неявный и в `slots` не объявляется никогда.
-      if (slot === DEFAULT_SLOT_KEY || meta === null) continue;
-      if (!namedSlotsCapable) {
-        warnings.push(`case ${item.id}: slot "${slot}" is a named slot, but the last published version of`
-          + ` ${componentId} declares no capabilities.namedSlots; the candidate head is authoritative and this is`
-          + " re-checked as a refusal when the run starts");
-      } else if (!declaredSlots.has(slot)) {
-        warnings.push(`case ${item.id}: slot "${slot}" is not among the named slots of the last published version of`
-          + ` ${componentId} (${[...declaredSlots].sort().join(", ") || "none"}); re-checked as a refusal when the run starts`);
+        // Дефолтный слот из проверки членства исключён целиком: он неявный и в `slots` не
+        // объявляется никогда (§A2a) — на любом уровне дерева.
+        if (slot === DEFAULT_SLOT_KEY || host.facts === null) continue;
+        const { declaredSlots, namedSlotsCapable } = host.facts;
+        if (host.kind === "candidate") {
+          // Факты головы кандидата — warning'и: голова законно отличается от последней публикации,
+          // а жёсткий отказ по ним выносит старт рана (§A2).
+          if (!namedSlotsCapable) {
+            warnings.push(`case ${item.id}: slot "${slot}" is a named slot, but the last published version of`
+              + ` ${componentId} declares no capabilities.namedSlots; the candidate head is authoritative and this is`
+              + " re-checked as a refusal when the run starts");
+          } else if (!declaredSlots.has(slot)) {
+            warnings.push(`case ${item.id}: slot "${slot}" is not among the named slots of the last published version of`
+              + ` ${componentId} (${[...declaredSlots].sort().join(", ") || "none"}); re-checked as a refusal when the run starts`);
+          }
+        // Родитель вложенного уровня — **запиненная публикация**: её метаданные неизменны, ждать
+        // старта рана незачем, а слот, которого у неё нет, тихо выбросил бы детей из кадра.
+        } else if (!namedSlotsCapable) {
+          throw new ApiError(422, "slot_bindings_unsupported",
+            `Case ${item.id}: ${host.name} declares no capabilities.namedSlots, so its named slot "${slot}" cannot be`
+            + " bound (only the implicit default slot is bindable for it)",
+            { issues: [issue([...at, slot], `${host.name} declares no capabilities.namedSlots`)] });
+        } else if (!declaredSlots.has(slot)) {
+          throw new ApiError(422, "slot_unknown",
+            `Case ${item.id}: ${host.name} declares no named slot "${slot}"`
+            + ` (${[...declaredSlots].sort().join(", ") || "none"})`,
+            { issues: [issue([...at, slot], `unknown named slot of ${host.name}`)] });
+        }
       }
-    }
 
-    // §A2a: дефолтный слот доступен любому компоненту, который рендерит `children`, а «рендерит ли»
-    // по метаданным неразрешимо. Поэтому — warning, а не отказ: он лишь напоминает проверить, что
-    // компонент вообще что-то делает с детьми.
-    if (item.slotBindings![DEFAULT_SLOT_KEY] && meta !== null && !namedSlotsCapable && declaredSlots.size === 0) {
-      warnings.push(`case ${item.id}: binds the default slot, but the last published version of ${componentId}`
-        + " declares neither named slots nor a slot capability — make sure the component renders its children");
-    }
+      // §A2a: дефолтный слот доступен любому компоненту, который рендерит `children`, а «рендерит ли»
+      // по метаданным неразрешимо. Поэтому — warning, а не отказ: он лишь напоминает проверить, что
+      // компонент вообще что-то делает с детьми.
+      if (host.kind === "candidate" && bindings[DEFAULT_SLOT_KEY] !== undefined && host.facts !== null
+        && !host.facts.namedSlotsCapable && host.facts.declaredSlots.size === 0) {
+        warnings.push(`case ${item.id}: binds the default slot, but the last published version of ${componentId}`
+          + " declares neither named slots nor a slot capability — make sure the component renders its children");
+      }
+    };
+
+    visit(item.slotBindings!, ["cases", item.id, "slotBindings"], 1,
+      { facts: subjectFacts, kind: "candidate", name: componentId }, [componentId]);
   }
 }
 
@@ -351,9 +446,16 @@ function validateSlotBindings(db: Database, manifest: CaseSetManifest, component
  */
 export function dedupSlotsKeyOf(slotBindings: CaseSetSlotBindings | undefined): string | null {
   if (slotBindings === undefined) return null;
-  const normalized = Object.fromEntries(Object.entries(slotBindings).map(([slot, children]) => [
-    slot, children.map((child) => ({ type: child.type, version: child.version, propsHash: propsHashOf(child.props) })),
-  ]));
+  // Нормализация рекурсивна (§W6): дерево различается и вложенным содержимым тоже, а два случая с
+  // одинаковыми props и разными внуками — два разных кадра.
+  const normalizeChild = (child: CaseSetSlotChild): Record<string, unknown> => ({
+    type: child.type, version: child.version, propsHash: propsHashOf(child.props),
+    // Условный ключ: набор глубины 1 обязан давать ровно прежний ключ дедупа.
+    ...(child.slotBindings === undefined ? {} : { slotBindings: normalize(child.slotBindings) }),
+  });
+  const normalize = (bindings: CaseSetSlotBindings): Record<string, unknown> => Object.fromEntries(
+    Object.entries(bindings).map(([slot, children]) => [slot, children.map(normalizeChild)]));
+  const normalized = normalize(slotBindings);
   // Пустой объект биндингов ничем не отличается от их отсутствия — иначе он давал бы «другой» кадр
   // при одинаковых props (та же нормализация, что `props: {}` ≡ absent).
   if (Object.keys(normalized).length === 0) return null;
@@ -373,6 +475,8 @@ export interface ResolvedSlotTuple {
   version: number;
   bundleHash: string;
   propsHash: string;
+  /** Вложенные дети (§W6). Отсутствует у листа — и у **всего** дерева глубины 1. */
+  children?: readonly ResolvedSlotTuple[];
 }
 
 /**
@@ -382,10 +486,22 @@ export interface ResolvedSlotTuple {
  * функция хэширования, потому что её прообраз обязан быть определён в одном месте.
  */
 export function slotsHashOf(bindings: readonly ResolvedSlotTuple[]): string {
-  return sha256(canonicalStringify(bindings.map((binding) => ({
+  return sha256(canonicalStringify(slotsHashProjection(bindings)));
+}
+
+/**
+ * Проекция дерева в пре-образ хэша. `children` кладётся **условным спредом** (§W6): набор глубины 1
+ * обязан давать байт-в-байт тот же `slots_hash`, что до волны вложенности, — иначе она молча
+ * инвалидировала бы все прод-кадры со слотами.
+ */
+function slotsHashProjection(bindings: readonly ResolvedSlotTuple[]): Record<string, unknown>[] {
+  return bindings.map((binding) => ({
     slot: binding.slot, index: binding.index, componentId: binding.componentId,
     version: binding.version, bundleHash: binding.bundleHash, propsHash: binding.propsHash,
-  }))));
+    ...(binding.children === undefined || binding.children.length === 0
+      ? {}
+      : { children: slotsHashProjection(binding.children) }),
+  }));
 }
 
 /**
@@ -914,40 +1030,50 @@ export function resolveSlotBindings(input: ResolveSlotBindingsInput): Acceptance
   const declaredSlots = new Set<string>(Array.isArray(meta?.slots) ? meta.slots : []);
   const namedSlotsCapable = meta?.capabilities?.namedSlots === true;
 
-  return input.cases.map((item) => {
-    const bindings = bindingsById.get(item.caseId);
-    if (bindings === undefined) return item;
+  /**
+   * Разрешение одного уровня. `hostSlots`/`hostCapable` — факты того, в чьи слоты кладут: у корня
+   * это голова кандидата, у вложенного уровня (§W6) — `definition_meta` запиненной публикации
+   * родителя. `null`-факты означают «судить нечем» и проверку членства снимают.
+   */
+  const resolveLevel = (
+    caseId: string,
+    bindings: CaseSetSlotBindings,
+    host: { slots: Set<string>; capable: boolean; name: string } | null,
+  ): ResolvedSlotBinding[] => {
     const resolved: ResolvedSlotBinding[] = [];
     for (const [slot, children] of Object.entries(bindings)) {
       // Факты головы кандидата — жёсткий отказ **на старте рана** (при PUT это были warning'и):
       // здесь голова уже зафиксирована кандидатом, и снимать матрицу, чей слот компонент не
       // объявляет, значит снимать пустой слот и объявить матрицу пройденной. Дефолтный слот из
-      // обеих проверок исключён целиком (§A2a).
-      if (input.mode === "gating" && meta !== null && slot !== DEFAULT_SLOT_KEY) {
-        if (!namedSlotsCapable) {
+      // обеих проверок исключён целиком (§A2a) — на любом уровне дерева.
+      if (input.mode === "gating" && host !== null && slot !== DEFAULT_SLOT_KEY) {
+        if (!host.capable) {
           throw new ApiError(422, "slot_bindings_unsupported",
-            `Case ${item.caseId} binds the named slot "${slot}", but candidate ${input.componentId} declares no`
-            + " capabilities.namedSlots; only the default slot can be bound for this component");
+            `Case ${caseId} binds the named slot "${slot}", but ${host.name} declares no`
+            + " capabilities.namedSlots; only the default slot can be bound for it");
         }
-        if (!declaredSlots.has(slot)) {
+        if (!host.slots.has(slot)) {
           throw new ApiError(422, "slot_unknown",
-            `Case ${item.caseId} binds the slot "${slot}", which is not among the named slots of candidate`
-            + ` ${input.componentId} (${[...declaredSlots].sort().join(", ") || "none"})`);
+            `Case ${caseId} binds the slot "${slot}", which is not among the named slots of`
+            + ` ${host.name} (${[...host.slots].sort().join(", ") || "none"})`);
         }
       }
       children.forEach((child, index) => {
         const pin = pinOf(child.type, child.version);
         if (!pin) {
           throw new ApiError(422, "slot_component_not_published",
-            `Case ${item.caseId}: slot "${slot}" binds ${child.type} v${child.version}, which is not a published`
+            `Case ${caseId}: slot "${slot}" binds ${child.type} v${child.version}, which is not a published`
             + " component version");
         }
         if (input.mode === "gating" && !SLOT_PIN_ACCEPTED_STATUS.has(pin.status)) {
           throw new ApiError(422, "slot_component_not_published",
-            `Case ${item.caseId}: slot "${slot}" binds ${child.type} v${child.version}, whose publish status is`
+            `Case ${caseId}: slot "${slot}" binds ${child.type} v${child.version}, whose publish status is`
             + ` ${pin.status} and does not render`);
         }
         const props = child.props ?? {};
+        // Вложенный уровень разрешается **до** записи родителя: `children` обязан быть отсутствующим
+        // ключом, а не пустым массивом (инвариант «отсутствует, а не пусто» — §A4).
+        const nested = child.slotBindings === undefined ? [] : resolveLevel(caseId, child.slotBindings, slotHostOf(pin));
         resolved.push({
           slot, index,
           componentId: pin.componentId,
@@ -956,9 +1082,18 @@ export function resolveSlotBindings(input: ResolveSlotBindingsInput): Acceptance
           bundleHash: pin.bundleHash,
           props,
           propsHash: propsHashOf(props),
+          ...(nested.length === 0 ? {} : { children: nested }),
         });
       });
     }
+    return resolved;
+  };
+
+  return input.cases.map((item) => {
+    const bindings = bindingsById.get(item.caseId);
+    if (bindings === undefined) return item;
+    const resolved = resolveLevel(item.caseId, bindings,
+      meta === null ? null : { slots: declaredSlots, capable: namedSlotsCapable, name: `candidate ${input.componentId}` });
     if (resolved.length === 0) return item;
     return { ...item, slotBindings: resolved, slotsHash: slotsHashOf(resolved) };
   });

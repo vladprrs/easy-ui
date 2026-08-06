@@ -269,6 +269,11 @@ declare module "*/author/driver.mjs" {
     maxDimensions: number;
     maxDimensionValues: number;
     maxExpectedTuples: number;
+    /** Слот-биндинги случая (план 2026-08-05 §A1) и их вложенность (2026-08-06 §W6). */
+    maxSlotChildren: number;
+    maxSlotsPerCase: number;
+    maxSlotDepth: number;
+    maxSlotNodes: number;
   }
   export const CASE_SET_LIMITS: Readonly<DriverCaseSetLimits>;
   export function caseSetLimits(capabilities: unknown): DriverCaseSetLimits;

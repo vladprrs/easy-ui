@@ -687,7 +687,9 @@ Charset `case.id` совпадает с charset имён записей evidence
 | `caseSetMaxDimensionValues` | `64` | значений в одной оси; **≥ `acceptanceMaxCasesPerRun` by design** — одна каноническая ось обязана вмещать целый ран, иначе семья из 49 состояний шардируется только из-за схемы |
 | `caseSetMaxExpectedTuples` | `4096` | потолок декартова произведения `dimensions`; превышение — `422 case_set_coverage_too_large` |
 | `caseSetMaxSlotChildren` | `12` | детей в одном слоте случая (продуктовая планка — карусель на 9 детей) |
-| `caseSetMaxSlotsPerCase` | `8` | слотов в одном случае; кардинальность самого слота сервер не проверяет |
+| `caseSetMaxSlotsPerCase` | `8` | слотов **одного узла** (случая или вложенного ребёнка); кардинальность самого слота сервер не проверяет |
+| `caseSetMaxSlotDepth` | `3` | уровней дерева слотов от корня случая (волна 2026-08-06 §W6); превышение — `422 slot_depth_exceeded` |
+| `caseSetMaxSlotNodes` | `96` | узлов дерева слотов **на случай** целиком; равен прежнему максимуму 8×12, проверка `≤` — граничный плоский манифест остаётся валидным; превышение — `422 slot_nodes_exceeded` |
 
 Потолок произведения проверяется **перемножением длин осей**, до построения хотя бы одной ячейки: 8 осей по 64 значения — это 2.8·10^14 tuples, и материализация такого произведения убила бы процесс. Отказ приходит на обоих путях — при `PUT`/`validate` манифеста и при чтении `/coverage`.
 
@@ -713,7 +715,22 @@ Charset `case.id` совпадает с charset имён записей evidence
 
 **Ключ пина — имя и точная версия.** `type` — имя опубликованного компонента (глобально уникально и никогда не переименовывается), `version` — **обязательный точный** пин. «Последняя активная» здесь недопустима принципиально: набор контентно адресован, и такой пин сделал бы смысл `cset_` зависимым от момента прогона. `bundleHash` в манифесте **нет** — он резолвится сервером из неизменяемой строки публикации и входит уже в отпечаток кадра, а не в адрес набора.
 
-**Глубина 1.** Ребёнок своих детей не несёт (`strictObject` отвергает вложенность). Дерево глубже одного уровня — это композиция, и её место в прототипе, а не в наборе случаев компонента.
+**Вложенность (волна 2026-08-06 §W6).** Ребёнок несёт **собственный** `slotBindings` той же формы, поэтому «Lead Block с реальной кнопкой во вложенном слоте» описывается одним случаем:
+
+```jsonc
+{
+  "id": "lead-block-primary",
+  "props": { "state": "default" },
+  "slotBindings": {
+    "items": [ { "type": "PayRow", "version": 4,
+                 "slotBindings": { "action": [ { "type": "PayButton", "version": 9, "props": { "label": "Оплатить" } } ] } } ]
+  }
+}
+```
+
+Потолки: `caseSetMaxSlotDepth` уровней от корня случая (дети случая — уровень 1) и `caseSetMaxSlotNodes` узлов на **всё** дерево случая; `caseSetMaxSlotChildren` по-прежнему считается **на слот** — на любом уровне. Слот-ключ `default` работает на любом уровне с той же exempt-семантикой. Вложенный именованный слот судится по `definition` **запиненной публикации родителя** (она иммутабельна), поэтому неизвестный вложенный слот отказывает уже на `PUT` (`slot_unknown`/`slot_bindings_unsupported`), а не превращается в тихо потерянных детей на кадре. Цикл считается по всему пути: ребёнок, повторяющий субъект набора **или любого своего предка**, — `422 slot_self_reference`.
+
+Байт-совместимость: набор глубины 1 даёт **тот же** `cset_`, `slots_hash` и `frame_fingerprint`, что и до волны (поле `children` попадает в пре-образы только условным спредом), поэтому вложенность ничего не пересъёмывает. Стоимость съёмки практически не растёт: замер 4 случаев — 3.56 с/кейс на depth-1 против 3.80 с/кейс на depth-3 (+7%, кривая плоская — платят за кадр, а не за узлы).
 
 **Default-слот (§A2a).** Ключ `default` **зарезервирован и легален**: он биндит неявный слот `children`, который в этом кодовом дереве не объявляется в `definition.slots` вовсе (`slotOf(child) ?? "default"`). Поэтому `default` **освобождён** и от проверки членства в `extracted.meta.slots`, и от гейта `capabilities.namedSlots` — любой компонент, который рендерит `children`, квалифицируется; `slot_unknown`/`slot_bindings_unsupported` относятся только к **именованным** ключам. В capture-дерево дети default-слота уезжают **без** поля `slot` (каноническое представление; рантайм схлопывает обе формы в `slotIndices.default`). Если последняя опубликованная версия субъекта не объявляет ни `capabilities.namedSlots`, ни рендер `children`, `PUT` отвечает предупреждением, а не отказом: точно решить это по метаданным нельзя. Именно default-слот разблокировал карусель способов оплаты — 9 детей одним случаем.
 
@@ -723,11 +740,13 @@ Charset `case.id` совпадает с charset имён записей evidence
 |---|---|---|
 | `slot_component_not_published` | имени нет, версии нет, компонент удалён, версия в `archived\|rejected\|staging\|failed` | `PUT` **и** старт рана |
 | `slot_component_design_system_mismatch` | ребёнок из другой дизайн-системы | `PUT` |
-| `slot_self_reference` | ребёнок резолвится в сам субъект набора | `PUT` |
+| `slot_self_reference` | ребёнок резолвится в субъект набора или в любого своего предка по пути | `PUT` |
+| `slot_depth_exceeded` | дерево слотов случая глубже `caseSetMaxSlotDepth` уровней | `PUT` |
+| `slot_nodes_exceeded` | во всём дереве случая больше `caseSetMaxSlotNodes` детей | `PUT` |
 | `slot_props_invalid` | props ребёнка не проходят `propsJsonSchema` пиннутой версии | `PUT` |
 | `slot_props_dynamic` | props ребёнка содержат `$`-директиву или `__eui`-ключ на любой глубине | `PUT` + повторно в `pushDraftCapture` |
-| `slot_unknown` | **именованного** слота нет в `definition.slots` кандидата | старт рана (warning на `PUT`) |
-| `slot_bindings_unsupported` | есть **именованные** ключи, а кандидат не объявил `capabilities.namedSlots` | старт рана (warning на `PUT`) |
+| `slot_unknown` | **именованного** слота нет в `definition.slots` кандидата | старт рана (warning на `PUT`); для **вложенного** слота — сразу `PUT` (родитель опубликован) |
+| `slot_bindings_unsupported` | есть **именованные** ключи, а кандидат не объявил `capabilities.namedSlots` | старт рана (warning на `PUT`); для **вложенного** уровня — сразу `PUT` |
 
 Опубликованный факт (ребёнок существует, версия такая-то, props по схеме) известен уже на публикации набора и отказывает сразу. Факт **головы кандидата** (набор именованных слотов, `namedSlots`) на момент `PUT` может относиться к другой ревизии, чем та, которую потом снимут, — поэтому там это предупреждение, а жёсткий отказ приезжает на старте рана, где кандидат наконец известен. `props` случая — литеральный JSON, директив прототипа в них нет и не будет: `slot_props_dynamic` проверяется рекурсивно и **повторно** на входе капчура (манифест неизменяем, но пояс и подтяжки).
 
@@ -744,7 +763,7 @@ Charset `case.id` совпадает с charset имён записей evidence
 
 **Две разные хеш-величины, которые нельзя путать.** Ключ дедупа `PUT`-времени считается по **манифесту** (`{type, version, propsHash}` каждого ребёнка), живёт только в памяти валидации и никогда не персистится. `slotsHash` (колонка `acceptance_cases.slots_hash`, миграция v31) считается по **разрешённому** списку `[{slot,index,componentId,version,bundleHash,propsHash}]` — тот же пре-образ, что уходит в отпечаток кадра, — и именно он входит в ключ покрытия, в handshake капчура и в evidence.
 
-**Лимиты** — в `GET /api/capabilities → limits`: `caseSetMaxSlotChildren` (**12**; продуктовая планка — 9 детей карусели) и `caseSetMaxSlotsPerCase` (**8**). **Кардинальность слота сервер не проверяет**: сколько детей осмысленно принимает конкретный слот — свойство компонента, а не набора, и объявленного контракта на это нет. Лимиты схемы — единственный потолок.
+**Лимиты** — в `GET /api/capabilities → limits`: `caseSetMaxSlotChildren` (**12**; продуктовая планка — 9 детей карусели), `caseSetMaxSlotsPerCase` (**8**), `caseSetMaxSlotDepth` (**3**) и `caseSetMaxSlotNodes` (**96**). **Кардинальность слота сервер не проверяет**: сколько детей осмысленно принимает конкретный слот — свойство компонента, а не набора, и объявленного контракта на это нет. Лимиты схемы — единственный потолок.
 
 **Откат сборки (blast radius).** Манифест со `slotBindings`, записанный этой сборкой, **не читается** сборкой до неё: чтение строки — повторный `strictObject`-разбор. Такой откат деградирует не в непрозрачную 500, а в именованный `422 case_set_manifest_unreadable` с адресом набора — на всех путях, где манифест читается из строки: `GET /case-sets/:id/coverage`, старт рана, durable-реконструкция случаев рана и `runCoverage` → `promote`. То же латентное свойство уже вносили `referenceSurface` и `cropLineage.sourceSurface`.
 
@@ -1084,10 +1103,13 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 
 | Поле | Правило |
 |---|---|
-| `fileKey` | строка 1..128, `^[A-Za-z0-9_-]+$` |
-| `nodeIds` | 1..50 строк, каждая 1..64, `^[A-Za-z0-9:._-]+$` |
-| `referenceScreenshots?` | ≤50 asset-id (`asset_<64hex>`); каждый обязан существовать в реестре assets, иначе `422 asset_not_found` |
+| `fileKey` | строка 1..128, `^[A-Za-z0-9_-]+$` — **primary**-документ |
+| `nodeIds` | 1..50 строк, каждая 1..64, `^[A-Za-z0-9:._-]+$` — узлы primary-документа |
+| `sources?` | 1..8 дополнительных источников lineage: `{fileKey, nodeIds, role?}` с теми же правилами для `fileKey`/`nodeIds`, `role` — свободная метка 1..64 (`"core"`, `"pay-app"`) |
+| `referenceScreenshots?` | ≤50 asset-id (`asset_<64hex>`); каждый обязан существовать в реестре assets, иначе `422 asset_not_found`. Общие для primary и всех `sources` |
 | `lastSyncedAt?` | ISO-дата (`Date.parse`-валидная), ≤40 символов |
+
+**Multi-source lineage** (план 2026-08-06 §W1). Компонент, собранный из нескольких Figma-документов (например Core + Pay App), перечисляет дополнительные документы в `sources`; верхнеуровневые `fileKey`/`nodeIds` остаются primary-документом, поэтому поле строго additive и существующие записи читаются без изменений. **Один документ — одна запись:** дубликат `fileKey` внутри `sources` или совпадение с primary → `422 validation_failed` с адресом в `issues[].path` (`["sources", <индекс>, "fileKey"]`; на publish-префлайте — с префиксом `figma`). Read-model библиотеки (`GET /catalog/library`) отдаёт `figma.sourceCount` — число дополнительных источников; при их отсутствии ключ опускается, и ответ остаётся прежним. Case-set `source` остаётся одиночным.
 
 ### Provenance компонентов без новых версий
 
@@ -1846,7 +1868,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 
 `Accepted` — **независимый** от `Verified` признак (RFC candidate-acceptance §7): `Verified` говорит о визуальных эталонах, `Accepted` — о том, что версию опубликовал `promote` с терминальным (pass) acceptance-раном. Один не подменяет и не переопределяет другой; `Accepted` **не** входит в проекцию `catalogRevision` — иначе любой acceptance-run глобально сдвигал бы хэш каталога. Тот же признак отдаёт read-model: `status.accepted` в `GET /catalog/library`, а сами ссылки — `candidateId`/`acceptanceRunId` в `GET /components/:id/versions`. Пока promote с кандидатом не вошёл в практику, признак пуст у всего каталога — это ожидаемое состояние, а не пробел в данных: чип-фильтр в таком каталоге просто не показывается (фильтр предлагается, только когда он сужает список), бейджей на карточках нет, а на странице компонента блок «Приёмка» объясняет отсутствие ссылок. Read-only срез покрытия — колонка `acceptance` в `node driver.mjs audit --versions`.
 
-`Rejected`/`Blocked` описывают **последнюю** версию, даже если более старая `active`-версия сохраняет компонент в манифесте — поэтому manifest-запись может читаться как blocked/rejected. Фильтры-чипы объединяются по OR; пока статус компонента не загружен, он не скрывается. Живое превью карточки показывает чип `default` для legacy `example` (`?props=example`) и сортированные чипы `examples` (`?example=<name>`); без обоих остаётся meta-карточка. Figma-бейдж на карточке/в списке — при `figma` на head-ревизии (тултип `fileKey` + число `nodeIds`).
+`Rejected`/`Blocked` описывают **последнюю** версию, даже если более старая `active`-версия сохраняет компонент в манифесте — поэтому manifest-запись может читаться как blocked/rejected. Фильтры-чипы объединяются по OR; пока статус компонента не загружен, он не скрывается. Живое превью карточки показывает чип `default` для legacy `example` (`?props=example`) и сортированные чипы `examples` (`?example=<name>`); без обоих остаётся meta-карточка. Figma-бейдж на карточке/в списке — при `figma` на head-ревизии (тултип `fileKey` + число `nodeIds`, плюс `+N источников` при непустом `sourceCount`).
 
 ## Ошибки и ограничения HTTP
 
@@ -1892,7 +1914,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "computedEntries": 20, "computedFields": 4, "computedTerms": 8, "surfaces": 2,
     "acceptanceMaxCasesPerRun": 64, "acceptanceMaxJobsPerRun": 128, "acceptanceCaseTtlHours": 336, "evidenceMaxBytes": 268435456,
     "caseSetManifestVersion": 1, "caseSetMaxCases": 512, "caseSetMaxDimensions": 8, "caseSetMaxDimensionValues": 64, "caseSetMaxExpectedTuples": 4096,
-    "caseSetMaxSlotChildren": 12, "caseSetMaxSlotsPerCase": 8, "prototypeCandidateOverlayMax": 2,
+    "caseSetMaxSlotChildren": 12, "caseSetMaxSlotsPerCase": 8, "caseSetMaxSlotDepth": 3, "caseSetMaxSlotNodes": 96,
+    "prototypeCandidateOverlayMax": 2,
     "validateUserConcurrent": 1, "validateGlobalConcurrent": 2, "validateCacheTtlHours": 24, "validateCacheMiB": 32 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },

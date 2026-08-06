@@ -191,18 +191,32 @@ export interface FrameSlotBinding {
   version: number;
   bundleHash: string;
   propsHash: string;
+  /**
+   * Вложенные дети (план 2026-08-06 §W6). Кладётся **условным спредом** ровно так же, как само
+   * поле `slotBindings`: дерево глубины 1 обязано давать байт-в-байт прежний `frameFingerprint`,
+   * иначе волна вложенности молча инвалидировала бы каждый прод-кадр со слотами.
+   */
+  children?: readonly FrameSlotBinding[];
+}
+
+/** Проекция дерева слотов в пре-образ кадрового отпечатка (рекурсивна с W6). */
+function frameSlotProjection(bindings: readonly FrameSlotBinding[]): Record<string, unknown>[] {
+  return bindings.map((child) => ({
+    slot: child.slot,
+    index: child.index,
+    componentId: child.componentId,
+    version: child.version,
+    bundleHash: child.bundleHash,
+    propsHash: child.propsHash,
+    ...(child.children === undefined || child.children.length === 0
+      ? {}
+      : { children: frameSlotProjection(child.children) }),
+  }));
 }
 
 export function frameFingerprint(input: FrameFingerprintInput): string {
   const slots = input.slotBindings !== undefined && input.slotBindings.length > 0
-    ? input.slotBindings.map((child) => ({
-      slot: child.slot,
-      index: child.index,
-      componentId: child.componentId,
-      version: child.version,
-      bundleHash: child.bundleHash,
-      propsHash: child.propsHash,
-    }))
+    ? frameSlotProjection(input.slotBindings)
     : undefined;
   return hashOf(definedOnly({
     candidateId: input.candidateId,

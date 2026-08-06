@@ -44,7 +44,8 @@ import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { caseSetIdOf } from "./acceptance/caseSets";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
-  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN, caseSetManifestSchema,
+  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
+  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, caseSetManifestSchema,
 } from "../src/acceptance/caseSetSchema";
 import { prototypeCandidateOverlayMax as PROTOTYPE_CANDIDATE_OVERLAY_MAX } from "./routes/screenshots";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
@@ -707,6 +708,8 @@ describe("route contracts", () => {
       // План 2026-08-05 §A9: потолки слот-биндингов случая и подмен кандидатов на кадр.
       caseSetMaxSlotChildren: CASE_SET_MAX_SLOT_CHILDREN,
       caseSetMaxSlotsPerCase: CASE_SET_MAX_SLOTS_PER_CASE,
+      caseSetMaxSlotDepth: CASE_SET_MAX_SLOT_DEPTH,
+      caseSetMaxSlotNodes: CASE_SET_MAX_SLOT_NODES,
       prototypeCandidateOverlayMax: PROTOTYPE_CANDIDATE_OVERLAY_MAX,
       surfaces: SURFACES_LIMIT,
     });

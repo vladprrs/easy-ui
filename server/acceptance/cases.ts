@@ -71,6 +71,12 @@ export interface ResolvedSlotBinding {
   bundleHash: string;
   props: Record<string, unknown>;
   propsHash: string;
+  /**
+   * Вложенные дети (план 2026-08-06 §W6): собственные слоты этого ребёнка, уже разрешённые до
+   * опубликованных пинов. **Отсутствует, а не пусто** — набор глубины 1 обязан давать прежние
+   * `slotsHash` и кадровый отпечаток.
+   */
+  children?: ResolvedSlotBinding[];
 }
 
 export interface AcceptanceCase {

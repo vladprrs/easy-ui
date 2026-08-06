@@ -39,6 +39,7 @@ import {
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
+  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
 } from "../../src/acceptance/caseSetSchema";
 import { prototypeCandidateOverlayMax } from "./screenshots";
 
@@ -133,6 +134,12 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // компонента, а не набора), поэтому лимит схемы — единственный объявленный потолок.
       caseSetMaxSlotChildren: CASE_SET_MAX_SLOT_CHILDREN,
       caseSetMaxSlotsPerCase: CASE_SET_MAX_SLOTS_PER_CASE,
+      // Вложенные слоты (план 2026-08-06 §W6): уровней от корня случая и узлов на случай целиком.
+      // Смысл двух лимитов выше не меняется — `caseSetMaxSlotChildren` остаётся потолком одного
+      // слота на любом уровне, а тотал 96 равен прежнему максимуму 8×12, поэтому граничный
+      // плоский манифест остаётся валидным.
+      caseSetMaxSlotDepth: CASE_SET_MAX_SLOT_DEPTH,
+      caseSetMaxSlotNodes: CASE_SET_MAX_SLOT_NODES,
       // Подмен кандидатов на один прототипный кадр (§B1): overlay — точечная проверка ревизии
       // уже опубликованного компонента в композиции, а не способ собрать кадр из черновиков.
       prototypeCandidateOverlayMax,

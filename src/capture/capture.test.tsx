@@ -295,7 +295,7 @@ describe("capture component draft (P1b)", () => {
       components: { Carousel: (p: SlotProps) => <ul data-testid="carousel">{p.children as never}</ul>, Chip: chip },
     };
     const childPin = { id: "chip", name: "Chip", version: 4, bundleUrl: "/api/components/chip/versions/4/bundle.js", bundleHash: "chip-bh", status: "active" };
-    const slottedBootstrap = (name: string, tree: { slot?: string; index: number; name: string; props: Record<string, unknown> }[]) => ({
+    const slottedBootstrap = (name: string, tree: { slot?: string; index: number; name: string; props: Record<string, unknown>; children?: number[] }[]) => ({
       ...draftBootstrap(),
       target: { ...draftBootstrap().target, name },
       props: {},
@@ -330,6 +330,34 @@ describe("capture component draft (P1b)", () => {
       await waitFor(() => expect(screen.queryByTestId("carousel")).not.toBeNull());
       expect(screen.getAllByTestId("chip")).toHaveLength(9);
       expect(screen.getByTestId("carousel").textContent).toBe("m0m1m2m3m4m5m6m7m8");
+    });
+
+    // План 2026-08-06 §W6: `tree` приезжает плоским, вложенность выражена индексами `children`,
+    // а корнями уровня случая становятся записи, на которые никто не ссылается.
+    it("renders a nested slot tree (Panel > Row > Chip)", async () => {
+      const nestedRuntime = {
+        definitions: {
+          Panel: panelRuntime.definitions.Panel,
+          Row: { props: z.object({}), description: "row", slots: ["action"], capabilities: { namedSlots: true } },
+          Chip: panelRuntime.definitions.Chip,
+        },
+        components: {
+          Panel: panelRuntime.components.Panel,
+          Row: (p: SlotProps) => <li data-testid="row"><span data-testid="action-slot">{p.slots.action as never}</span></li>,
+          Chip: chip,
+        },
+      };
+      vi.mocked(loadCustomComponents).mockResolvedValueOnce(nestedRuntime as never);
+      window.__EUI_CAPTURE_BOOTSTRAP__ = slottedBootstrap("Panel", [
+        { slot: "items", index: 0, name: "Row", props: {}, children: [1] },
+        { slot: "action", index: 0, name: "Chip", props: { label: "Pay" } },
+      ]);
+      renderDraftCapture();
+      await waitFor(() => expect(screen.queryByTestId("row")).not.toBeNull());
+      // Кнопка живёт внутри вложенного слота строки, а не рядом с ней в слоте панели.
+      expect(screen.getByTestId("action-slot").textContent).toBe("Pay");
+      expect(screen.getByTestId("items-slot").textContent).toBe("Pay");
+      expect(screen.getAllByTestId("chip")).toHaveLength(1);
     });
 
     it("keeps the slot-free draft handshake free of slotsHash", async () => {

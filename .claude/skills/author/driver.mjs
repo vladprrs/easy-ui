@@ -2715,6 +2715,9 @@ export const CASE_SET_LIMITS = Object.freeze({
   maxExpectedTuples: 4096,
   maxSlotChildren: 12,
   maxSlotsPerCase: 8,
+  // Вложенные слоты (план 2026-08-06 §W6): уровней от корня случая и узлов на случай целиком.
+  maxSlotDepth: 3,
+  maxSlotNodes: 96,
 });
 
 /** Лимиты из ответа `/capabilities` поверх дефолтов: сервер — источник истины, драйвер — эхо. */
@@ -2730,38 +2733,57 @@ export function caseSetLimits(capabilities) {
     maxExpectedTuples: number(limits.caseSetMaxExpectedTuples, CASE_SET_LIMITS.maxExpectedTuples),
     maxSlotChildren: number(limits.caseSetMaxSlotChildren, CASE_SET_LIMITS.maxSlotChildren),
     maxSlotsPerCase: number(limits.caseSetMaxSlotsPerCase, CASE_SET_LIMITS.maxSlotsPerCase),
+    maxSlotDepth: number(limits.caseSetMaxSlotDepth, CASE_SET_LIMITS.maxSlotDepth),
+    maxSlotNodes: number(limits.caseSetMaxSlotNodes, CASE_SET_LIMITS.maxSlotNodes),
   };
 }
 
 /**
- * Локальная проверка `slotBindings` случая (план 2026-08-05 §A1/§A2): только форма и потолки.
- * Всё, что требует базы — существование пина, его статус, ДС, схема props ребёнка, — остаётся
- * сервером: `slot_component_not_published`, `slot_props_invalid`, `slot_props_dynamic` и прочие
- * `422` драйвер не предсказывает и не имитирует.
+ * Локальная проверка `slotBindings` случая (план 2026-08-05 §A1/§A2, вложенность — 2026-08-06 §W6):
+ * только форма и потолки, включая глубину дерева и тотал узлов случая. Всё, что требует базы —
+ * существование пина, его статус, ДС, схема props ребёнка, — остаётся сервером:
+ * `slot_component_not_published`, `slot_props_invalid`, `slot_props_dynamic` и прочие `422`
+ * драйвер не предсказывает и не имитирует.
  */
 function slotBindingIssues(bindings, where, limits) {
   const issues = [];
-  if (!isPlainObject(bindings)) return [`${where}.slotBindings must be an object of slot -> children[]`];
-  const slots = Object.entries(bindings);
-  if (slots.length === 0) issues.push(`${where}.slotBindings must not be empty (omit the field instead)`);
-  if (slots.length > limits.maxSlotsPerCase) issues.push(`${where}.slotBindings: at most ${limits.maxSlotsPerCase} slots (got ${slots.length})`);
-  for (const [slot, children] of slots) {
-    if (!CASE_SET_SLOT_KEY.test(slot) || slot.length > 32) {
-      issues.push(`${where}.slotBindings["${slot}"]: slot key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ (<=32 chars); "default" binds the implicit children slot`);
+  // Тотал узлов считается по дереву случая целиком (серверный `slot_nodes_exceeded`).
+  const state = { nodes: 0 };
+  const level = (value, at, depth) => {
+    if (!isPlainObject(value)) { issues.push(`${at} must be an object of slot -> children[]`); return; }
+    const slots = Object.entries(value);
+    if (slots.length === 0) issues.push(`${at} must not be empty (omit the field instead)`);
+    if (slots.length > limits.maxSlotsPerCase) issues.push(`${at}: at most ${limits.maxSlotsPerCase} slots (got ${slots.length})`);
+    for (const [slot, children] of slots) {
+      if (!CASE_SET_SLOT_KEY.test(slot) || slot.length > 32) {
+        issues.push(`${at}["${slot}"]: slot key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ (<=32 chars); "default" binds the implicit children slot`);
+      }
+      if (!Array.isArray(children) || children.length === 0) { issues.push(`${at}["${slot}"] must be a non-empty array of children`); continue; }
+      if (children.length > limits.maxSlotChildren) issues.push(`${at}["${slot}"]: at most ${limits.maxSlotChildren} children (got ${children.length})`);
+      for (const [index, child] of children.entries()) {
+        const childAt = `${at}["${slot}"][${index}]`;
+        state.nodes += 1;
+        if (depth > limits.maxSlotDepth) {
+          issues.push(`${childAt}: slot trees are limited to ${limits.maxSlotDepth} levels below the case (got ${depth})`);
+          continue;
+        }
+        if (state.nodes > limits.maxSlotNodes) {
+          issues.push(`${childAt}: the slot tree of a case holds at most ${limits.maxSlotNodes} children`);
+          continue;
+        }
+        if (!isPlainObject(child)) { issues.push(`${childAt} must be an object {type, version, props?, slotBindings?}`); continue; }
+        for (const key of Object.keys(child)) if (!["type", "version", "props", "slotBindings"].includes(key)) issues.push(`${childAt}: unknown field "${key}"`);
+        if (typeof child.type !== "string" || child.type.length === 0) issues.push(`${childAt}.type must be the published component name`);
+        // Точный пин версии — обязателен: набор контентно адресован, и «последняя активная»
+        // сделала бы его смысл зависимым от момента прогона.
+        if (!Number.isInteger(child.version) || child.version < 1) issues.push(`${childAt}.version must be an exact published version (a positive integer), not "latest"`);
+        if (child.props !== undefined && !isPlainObject(child.props)) issues.push(`${childAt}.props must be an object`);
+        // Поддерево ребёнка (§W6): та же форма, уровнем ниже.
+        if (child.slotBindings !== undefined) level(child.slotBindings, `${childAt}.slotBindings`, depth + 1);
+      }
     }
-    if (!Array.isArray(children) || children.length === 0) { issues.push(`${where}.slotBindings["${slot}"] must be a non-empty array of children`); continue; }
-    if (children.length > limits.maxSlotChildren) issues.push(`${where}.slotBindings["${slot}"]: at most ${limits.maxSlotChildren} children (got ${children.length})`);
-    for (const [index, child] of children.entries()) {
-      const at = `${where}.slotBindings["${slot}"][${index}]`;
-      if (!isPlainObject(child)) { issues.push(`${at} must be an object {type, version, props?}`); continue; }
-      for (const key of Object.keys(child)) if (!["type", "version", "props"].includes(key)) issues.push(`${at}: unknown field "${key}"`);
-      if (typeof child.type !== "string" || child.type.length === 0) issues.push(`${at}.type must be the published component name`);
-      // Точный пин версии — обязателен: набор контентно адресован, и «последняя активная»
-      // сделала бы его смысл зависимым от момента прогона.
-      if (!Number.isInteger(child.version) || child.version < 1) issues.push(`${at}.version must be an exact published version (a positive integer), not "latest"`);
-      if (child.props !== undefined && !isPlainObject(child.props)) issues.push(`${at}.props must be an object`);
-    }
-  }
+  };
+  level(bindings, `${where}.slotBindings`, 1);
   return issues;
 }
 

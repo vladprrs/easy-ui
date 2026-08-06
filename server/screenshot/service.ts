@@ -69,6 +69,8 @@ export interface CaptureSlotBinding {
   bundleHash: string;
   props: Record<string, unknown>;
   propsHash: string;
+  /** Собственные слоты ребёнка (план 2026-08-06 §W6): дерево, а не список. Отсутствует у листа. */
+  children?: CaptureSlotBinding[];
 }
 /**
  * Additive capture-quality contract (wave 7.1): `consoleErrors`/`pageErrors`
@@ -860,33 +862,53 @@ export class ScreenshotService {
    * durable-реконструкция случая, и директива рендерера (`$asset`/`$cond`) или служебный ключ
    * (`__eui…`), просочившиеся в bootstrap, исполнились бы как разметка, а не как данные.
    *
-   * Пины дедуплицируются по паре `(componentId, version)`: у карусели из девяти одинаковых
-   * детей бандл ровно один, а дерево остаётся девятиэлементным.
+   * Пины дедуплицируются по паре `(componentId, version)` **по всему дереву**: у карусели из девяти
+   * одинаковых детей бандл ровно один, а дерево остаётся девятиэлементным.
+   *
+   * Вложенность (план 2026-08-06 §W6) едет **плоским** массивом `tree` со ссылками `children` по
+   * индексам: узлы верхнего уровня — те, на которые никто не ссылается. Плоская форма выбрана
+   * намеренно — `CaptureSlotTreeEntry` уже часть протокола, и добавление одного опционального поля
+   * оставляет бесслотовые и depth-1-джобы байт-в-байт прежними.
    */
   private slotCaptureOf(bindings: CaptureSlotBinding[] | undefined): { children: CapturePin[]; tree: CaptureSlotTreeEntry[] } | undefined {
     if (bindings === undefined || bindings.length === 0) return undefined;
     const children = new Map<string, CapturePin>();
     const tree: CaptureSlotTreeEntry[] = [];
-    for (const binding of bindings) {
-      const props = binding.props ?? {};
-      if (!jsonSafeSlotProps(props)) {
-        throw new ApiError(422, "slot_props_dynamic",
-          `Slot "${binding.slot}" child ${binding.name} declares $- or __eui-prefixed props;`
-          + " slot children take plain JSON data, not renderer directives");
+    /** Возвращает индексы узлов уровня в плоском `tree` (порядок — порядок рендера). */
+    const emit = (level: CaptureSlotBinding[]): number[] => {
+      const indices: number[] = [];
+      for (const binding of level) {
+        const props = binding.props ?? {};
+        if (!jsonSafeSlotProps(props)) {
+          throw new ApiError(422, "slot_props_dynamic",
+            `Slot "${binding.slot}" child ${binding.name} declares $- or __eui-prefixed props;`
+            + " slot children take plain JSON data, not renderer directives");
+        }
+        const key = `${binding.componentId}@${binding.version}`;
+        if (!children.has(key)) {
+          children.set(key, {
+            id: binding.componentId, name: binding.name, version: binding.version,
+            bundleUrl: `/api/components/${binding.componentId}/versions/${binding.version}/bundle.js`,
+            bundleHash: binding.bundleHash,
+            status: this.publishStatusOf(binding.componentId, binding.version),
+          });
+        }
+        // Дефолтный слот — канонически **без** ключа `slot` (§A2a): `runtimeSpec` схлопывает обе
+        // формы в `slotIndices.default`, и одна форма в протоколе избавляет от выбора у поверхности.
+        const entry: CaptureSlotTreeEntry = {
+          ...(binding.slot === "default" ? {} : { slot: binding.slot }), index: binding.index, name: binding.name, props,
+        };
+        const position = tree.push(entry) - 1;
+        indices.push(position);
+        // Потомки эмитятся **после** родителя: индекс родителя уже занят, поэтому ссылки всегда
+        // указывают вперёд и цикл в плоском представлении невыразим.
+        if (binding.children !== undefined && binding.children.length > 0) {
+          entry.children = emit(binding.children);
+        }
       }
-      const key = `${binding.componentId}@${binding.version}`;
-      if (!children.has(key)) {
-        children.set(key, {
-          id: binding.componentId, name: binding.name, version: binding.version,
-          bundleUrl: `/api/components/${binding.componentId}/versions/${binding.version}/bundle.js`,
-          bundleHash: binding.bundleHash,
-          status: this.publishStatusOf(binding.componentId, binding.version),
-        });
-      }
-      // Дефолтный слот — канонически **без** ключа `slot` (§A2a): `runtimeSpec` схлопывает обе
-      // формы в `slotIndices.default`, и одна форма в протоколе избавляет от выбора у поверхности.
-      tree.push({ ...(binding.slot === "default" ? {} : { slot: binding.slot }), index: binding.index, name: binding.name, props });
-    }
+      return indices;
+    };
+    emit(bindings);
     return { children: [...children.values()], tree };
   }
 
@@ -974,7 +996,9 @@ export class ScreenshotService {
    * `/versions/:v`) драфту не нужны: meta/props-схема едут в bootstrap.
    *
    * Дети слотов (план 2026-08-05 §A6) добавляют ровно две вещи на различный пин: бандл версии и
-   * ассеты **этой** версии. DTO ребёнка не добавляется намеренно: загрузчику нужны только
+   * ассеты **этой** версии — на **всех** уровнях дерева (§W6: `slotCaptureOf` дедуплицирует пины по
+   * `(componentId, version)` по всему дереву, поэтому сюда приезжает уже плоское множество пинов).
+   * DTO ребёнка не добавляется намеренно: загрузчику нужны только
    * `{name, bundleUrl, bundleHash}` (meta едет в bootstrap), а `/versions/:v` отдал бы поверхности
    * опубликованный `source` — расширение поверхности утечки ради удобства, которого нет.
    */
