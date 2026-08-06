@@ -63,7 +63,12 @@ export interface GeometryClipLink {
 export interface GeometryDetail {
   key: string;
   instance: number;
-  /** Union border-box'ов **in-flow** потомков в CSS px относительно поверхности. */
+  /**
+   * Union border-box'ов **in-flow** потомков в CSS px относительно поверхности.
+   *
+   * С `GEOMETRY_CONTRACT_VERSION = 2` (W2) в union входят также живые текстовые узлы in-flow
+   * элементов, а каждый бокс пересекается со стеком клипающих предков внутри поддерева маркера.
+   */
   layoutBounds: GeometryBox | null;
   effectSources: GeometryEffectSource[];
   clipChain: GeometryClipLink[];
@@ -86,6 +91,11 @@ export interface GeometryCollection extends GeometryMeasurements {
   viewportOwnership: GeometryViewportOwnership;
   issues: GeometryIssue[];
 }
+/**
+ * Версия семантики измерения `layoutBounds` (план 2026-08-06 §1.3). Кадровый вход
+ * `frameFingerprint`: смена значения инвалидирует накопленные кадры.
+ */
+export const GEOMETRY_CONTRACT_VERSION: number;
 export const GEOMETRY_ROLES: GeometryRole[];
 export const FOOTER_OWNERSHIP_RATIO: number;
 export function roundCssPx(value: number): number;

@@ -208,10 +208,19 @@ const SECOND_CHILD = { ...CHILD, index: 1, componentId: "cmp_second", bundleHash
 
 /**
  * Golden кадрового отпечатка, снятый на **до-слотовом** HEAD (e3a93fc) и зафиксированный планом
- * (§«Design invariants»). `frameFingerprint` не версионируется — в отличие от `case_fingerprint`,
- * у него нет ручки инвалидации, — поэтому появление слотов обязано быть байт-нейтральным для
- * случая без слотов. Литерал, а не пересчёт: значение, вычисленное после изменения, доказывало бы
- * только само себя.
+ * (§«Design invariants»). Литерал, а не пересчёт: значение, вычисленное после изменения,
+ * доказывало бы только само себя.
+ *
+ * **Сдвиг golden'а 2026-08-06 (план `2026-08-06-feedback-3-platform-capabilities.md` §1.3, W2) —
+ * единственный санкционированный.** Волна W2 поменяла семантику измерения `layoutBounds` (живой
+ * текст входит в контур, клипнутое поддерево режется окном клипа), и кадры прежней семантики
+ * переиспользовать нельзя: вердикт геометрии сравнивал бы измерения из разных миров.
+ * `CASE_FINGERPRINT_ALGO_VERSION` для этого не годится — он в `frameFingerprint` не входит
+ * (находка F1), поэтому инвалидация сделана кадровым полем `geometryContractVersion`.
+ *
+ * `GOLDEN_FRAME_V1` — тот самый до-W2 литерал: он никуда не делся, а стал значением при
+ * `geometryContractVersion = 1`. Пара литералов доказывает, что сдвиг вызван ровно версией
+ * контракта, а не случайной правкой состава пре-образа.
  */
 const GOLDEN_FRAME_INPUT = {
   candidateId: "cand_golden-fixture",
@@ -221,7 +230,21 @@ const GOLDEN_FRAME_INPUT = {
   readinessPolicyHash: "readiness-fixture",
   rendererFingerprint: "renderer-fixture",
 } as const;
-const GOLDEN_FRAME = "f29b0c498389404e5e426486bbb6050add243c6c0d97eff579ef127ec9fabeb1";
+const GOLDEN_FRAME_V1 = "f29b0c498389404e5e426486bbb6050add243c6c0d97eff579ef127ec9fabeb1";
+const GOLDEN_FRAME = "668e2b2bcaf8dadbe17b49edd772e6b6238998481326cc0cbe318cc3cd25966f";
+
+test("§W2: geometryContractVersion — кадровый вход, и он двигает кадр", () => {
+  // 1. Версия 1 воспроизводит до-W2 golden байт-в-байт: состав пре-образа не тронут, поле кладётся
+  //    условным спредом, поэтому «версии нет» и «версия 1» — один и тот же хэш.
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT, 1)).toBe(GOLDEN_FRAME_V1);
+  // 2. Рабочее значение (2) даёт другой кадр — то есть пересъёмку, а не тихий перенос вердикта на
+  //    новую семантику layoutBounds.
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT)).not.toBe(GOLDEN_FRAME_V1);
+  // 3. Дифференциальный инвариант на будущее: любая смена версии обязана двигать кадр.
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT, 3)).not.toBe(frameFingerprint(GOLDEN_FRAME_INPUT, 2));
+  // 4. ALGO не участвует: инвалидация кадра стоит на своём поле (F1), а не на версии case-схемы.
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
+});
 
 test("слоты байт-нейтральны для случая без слотов: кадр === golden до-слотового HEAD", () => {
   // Фикстура golden'а несёт синтетические `readinessPolicyHash`/`rendererFingerprint`, которые
@@ -284,13 +307,19 @@ test("`slotBindings: []` нормализуется в отсутствие по
 test("§W6: вложенные дети байт-нейтральны для depth-1 и двигают кадр сами по себе", () => {
   // Голден depth-1, снятый на коде ДО волны вложенности: `children` обязан попадать в пре-образ
   // только условным спредом, иначе волна тихо инвалидировала бы каждый прод-кадр со слотами.
-  expect(frameFingerprint({
+  // Пара литералов, как и у slot-free golden'а: версия 1 — снимок до-W2 кода, версия по умолчанию —
+  // тот же вход после сдвига `geometryContractVersion` (§1.3). Ключа `children` в пре-образе нет
+  // ни там, ни там — это и доказывает байт-нейтральность самой волны вложенности.
+  const DEPTH1 = {
     ...GOLDEN_FRAME_INPUT,
     slotBindings: [
       { slot: "header", index: 0, componentId: "c1", version: 1, bundleHash: "bh1", propsHash: "ph1" },
       { slot: "default", index: 0, componentId: "c2", version: 2, bundleHash: "bh2", propsHash: "ph2" },
     ],
-  })).toBe("e08725f5606cf36f9fe03a1dddb082c7f2f5aeb268968faf7e8cde3668d8aaf6");
+  };
+  expect(frameFingerprint(DEPTH1, 1)).toBe("e08725f5606cf36f9fe03a1dddb082c7f2f5aeb268968faf7e8cde3668d8aaf6");
+  expect(frameFingerprint(DEPTH1)).toBe("b45c3e3993d2acbf7e7b7fa30837876615aeed6fd31968fc64fa2b36dd072683");
+
   // Пустое поддерево — «отсутствует, а не пусто».
   expect(fingerprints({ ...PLAIN, slotBindings: [{ ...CHILD, children: [] }] }).frame)
     .toBe(fingerprints({ ...PLAIN, slotBindings: [CHILD] }).frame);

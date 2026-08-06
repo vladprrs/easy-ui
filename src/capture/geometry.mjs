@@ -1,4 +1,23 @@
 /* global document, Element, getComputedStyle */
+
+/**
+ * Версия **контракта измерения** (план 2026-08-06 §1.3, волна W2).
+ *
+ * Не версия файла и не версия схемы отпечатка: это номер семантики, по которой считается
+ * `layoutBounds`. Кадр, снятый по другой семантике, нельзя переиспользовать — вердикт геометрии
+ * сравнивал бы измерения из разных миров, — поэтому константа заводится **входом**
+ * `frameFingerprint` (`server/acceptance/ids.ts`), а не диагностическим полем рядом с метриками.
+ *
+ * - `1` — исходная семантика Geometry Contract 2.0 (union border-box'ов in-flow **элементов**).
+ * - `2` — W2: в union входят живые текстовые узлы (`Range.getClientRects`, поэтому обёртка
+ *   `display:contents` больше не теряет свою строку) и каждый бокс режется стеком клипающих
+ *   предков внутри поддерева маркера (клипнутая карусель меряется по окну, а не по ленте).
+ *
+ * Значение `1` спредом **не кладётся** — иначе все до-W2 кадры инвалидировались бы задним числом
+ * ещё раз; ветка `> 1` в `frameFingerprint` описывает ровно это.
+ */
+export const GEOMETRY_CONTRACT_VERSION = 2;
+
 /** Round browser geometry without leaking device-pixel noise into the API. */
 export const roundCssPx = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -325,6 +344,32 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
     x: round(rect.left - surfaceRect.left), y: round(rect.top - surfaceRect.top),
     width: round(rect.right - rect.left), height: round(rect.bottom - rect.top),
   });
+  // Читается и цепочкой клипа (восходящей, ниже), и нисходящим стеком W2: «клип объявлен, но не
+  // замечен» — молчаливо неверный вердикт, поэтому шорткат `overflow` разбирается наравне с осевыми.
+  const clipDeclarationOf = (style) => {
+    const shorthand = style.overflow ?? "";
+    const overflowX = style.overflowX || shorthand || "visible";
+    const overflowY = style.overflowY || shorthand || "visible";
+    const clipping = (value) => value.split(/\s+/).some((part) => part === "hidden" || part === "clip");
+    const clipPath = style.clipPath && style.clipPath !== "none" ? style.clipPath : null;
+    const clips = clipping(overflowX) || clipping(overflowY);
+    return clips || clipPath ? { overflowX, overflowY, clipPath } : null;
+  };
+  /** Пересечение бокса со стеком клипающих предков; `null` — клип съел его целиком. */
+  const clipBox = (rect, clips) => {
+    let left = rect.left, top = rect.top, right = rect.right, bottom = rect.bottom;
+    for (const clip of clips) {
+      if (clip.left > left) left = clip.left;
+      if (clip.top > top) top = clip.top;
+      if (clip.right < right) right = clip.right;
+      if (clip.bottom < bottom) bottom = clip.bottom;
+    }
+    if (right <= left || bottom <= top) return null;
+    return { left, top, right, bottom };
+  };
+  // Range нужен ради текстовых узлов: у них нет border-box, и до W2 строка, лежащая прямо в
+  // маркере или в обёртке `display:contents`, не существовала для layout-измерения вовсе.
+  const textRange = typeof document.createRange === "function" ? document.createRange() : null;
   const detailOf = (marker) => {
     const boxes = [];
     const sources = [];
@@ -332,7 +377,27 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
       if (sources.length >= DETAIL_SOURCE_LIMIT) return;
       sources.push({ elementKey: ownerKey(element), elementPath: nodePath(element), cause, rect: boxOf(rect) });
     };
-    const visit = (element, inFlow) => {
+    const keep = (rect, clips) => {
+      const box = clipBox(rect, clips);
+      if (box) boxes.push(box);
+    };
+    /** Живые строки элемента: только непосредственные текстовые дети, только непустые (trimmed). */
+    const visitText = (element, clips) => {
+      if (!textRange) return;
+      for (const node of element.childNodes) {
+        // 3 — Node.TEXT_NODE: числовой литерал, потому что функция сериализуется в страницу и
+        // не должна зависеть от того, какие глобалы там объявлены.
+        if (node.nodeType !== 3) continue;
+        // Whitespace между тегами — не габарит: иначе перенос строки в JSX двигал бы контур.
+        if ((node.data ?? "").trim() === "") continue;
+        textRange.selectNodeContents(node);
+        for (const rect of textRange.getClientRects()) {
+          if (rect.right - rect.left <= 0 && rect.bottom - rect.top <= 0) continue;
+          keep({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, clips);
+        }
+      }
+    };
+    const visit = (element, inFlow, clips) => {
       if (isHidden(element)) return;
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -350,11 +415,21 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
       }
       const keeps = inFlow && !outOfFlow && !transformed;
       if (keeps && style.display !== "contents" && (rect.right - rect.left > 0 || rect.bottom - rect.top > 0)) {
-        boxes.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+        keep({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, clips);
       }
-      for (const child of element.children) visit(child, keeps);
+      if (keeps) visitText(element, clips);
+      // Собственный клип элемента режет **потомков**, а не его самого: стек несётся вниз от
+      // маркера. Восходящая `clipChain` этого не заменяет — она не видит клипающий контейнер
+      // внутри поддерева, а её флаг `effective` считается из уже собранной краски.
+      // `display:contents` не порождает бокса и потому не клипает ничего: его нулевой
+      // `getBoundingClientRect` съел бы всё поддерево.
+      const declaration = keeps && style.display !== "contents" ? clipDeclarationOf(style) : null;
+      const childClips = declaration
+        ? [...clips, { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }]
+        : clips;
+      for (const child of element.children) visit(child, keeps, childClips);
     };
-    visit(marker, true);
+    visit(marker, true, []);
     const union = rectUnion(boxes);
     const sourceBoxes = sources.map((item) => ({
       left: item.rect.x + surfaceRect.left, top: item.rect.y + surfaceRect.top,
@@ -366,16 +441,9 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
     // выглядели бы для политики одинаково.
     const clipChain = [];
     for (let current = marker.parentElement; current instanceof Element; current = current.parentElement) {
-      const style = getComputedStyle(current);
-      // Шорткат `overflow` читается наравне с осевыми: не всякий движок разворачивает его в
-      // computed-паре, а «клип объявлен, но не замечен» — молчаливо неверный вердикт.
-      const shorthand = style.overflow ?? "";
-      const overflowX = style.overflowX || shorthand || "visible";
-      const overflowY = style.overflowY || shorthand || "visible";
-      const clipping = (value) => value.split(/\s+/).some((part) => part === "hidden" || part === "clip");
-      const clips = clipping(overflowX) || clipping(overflowY);
-      const clipPath = style.clipPath && style.clipPath !== "none" ? style.clipPath : null;
-      if (clips || clipPath) {
+      const declaration = clipDeclarationOf(getComputedStyle(current));
+      if (declaration) {
+        const { overflowX, overflowY, clipPath } = declaration;
         const rect = current.getBoundingClientRect();
         const cuts = painted !== null && (painted.left < rect.left - CLIP_EPSILON || painted.top < rect.top - CLIP_EPSILON
           || painted.right > rect.right + CLIP_EPSILON || painted.bottom > rect.bottom + CLIP_EPSILON);

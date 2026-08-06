@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeGeometry, collectGeometry, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
+import { analyzeGeometry, collectGeometry, GEOMETRY_CONTRACT_VERSION, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
 
 type Box = { left:number; top:number; right:number; bottom:number; width:number; height:number; x:number; y:number; toJSON():unknown };
 const box = (left:number, top:number, width:number, height:number):Box => ({ left, top, right:left+width, bottom:top+height, width, height, x:left, y:top, toJSON(){ return this; } });
@@ -13,6 +13,20 @@ function installRects(values:Record<string,Box>) {
     return (value ? [value] : []) as unknown as DOMRectList;
   };
   return () => { Element.prototype.getBoundingClientRect = originalBounding; Element.prototype.getClientRects = originalClient; };
+}
+
+/**
+ * Текстовые узлы измеряются через `Range` (W2), а jsdom не раскладывает текст — стаб отдаёт
+ * прямоугольник по самому тексту, так же как `installRects` отдаёт его по `data-rect`.
+ */
+function installTextRects(values:Record<string,Box>) {
+  const original = Range.prototype.getClientRects;
+  Range.prototype.getClientRects = function () {
+    const node = (this as Range).startContainer as Text;
+    const value = values[(node.data ?? "").trim()];
+    return (value ? [value] : []) as unknown as DOMRectList;
+  };
+  return () => { Range.prototype.getClientRects = original; };
 }
 
 describe("geometry collector", () => {
@@ -177,6 +191,48 @@ describe("layout bounds and attribution", () => {
       expect(detail.layoutBounds).toEqual({ x: 64, y: 64, width: 140, height: 96 });
       expect(detail.clipChain[0]).toMatchObject({ property: "overflow", effective: true });
     } finally { restore(); }
+  });
+
+  // --- W2 (план 2026-08-06 §W2): живой текст и клип-aware union ------------------------------
+
+  it("живая строка в display:contents-обёртке и прямо в маркере входит в layoutBounds", () => {
+    // T2-0 (прогон на dev-стенде): ink-bbox видел строку (paintBounds 200×57.5), а layoutBounds
+    // оставался 200×40 — текстовые узлы не обходились вовсе, и обёртка `display:contents` не
+    // приносила ни одного бокса. Гейт геометрии называл это `paint-overflow-not-clipped`
+    // «no descendant effect explains it», то есть винил компонент в собственной слепоте.
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<div data-rect="body"></div>`
+      + `<div style="display:contents">CHART INFO 12345</div>`
+      + `\n   `
+      + `</span></div>`;
+    const restore = installRects({ surface, body: box(64, 64, 200, 40) });
+    // Пустой ключ — пробел-узел: если бы фильтр по trimmed отсутствовал, контур раздулся бы на всю
+    // поверхность, и провал был бы заметен.
+    const restoreText = installTextRects({ "CHART INFO 12345": box(64, 104, 140, 17.5), "": box(0, 0, 400, 400) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["root"] }).details![0]!;
+      expect(detail.layoutBounds).toEqual({ x: 64, y: 64, width: 200, height: 57.5 });
+    } finally { restoreText(); restore(); }
+  });
+
+  it("клипнутая карусель меряется по окну клипа, а не по ленте", () => {
+    // Нисходящий стек клипов: контейнер 350×40 с overflow:hidden режет ленту 900×40. Восходящая
+    // `clipChain` этого не могла — клипающий контейнер лежит **внутри** поддерева маркера.
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<div data-rect="window" style="overflow:hidden"><div data-rect="strip"></div></div>`
+      + `</span></div>`;
+    const restore = installRects({ surface, window: box(0, 0, 350, 40), strip: box(0, 0, 900, 40) });
+    try {
+      const result = collectGeometry({ detailKeys: ["root"] });
+      expect(result.details![0]!.layoutBounds).toEqual({ x: 0, y: 0, width: 350, height: 40 });
+      // Старое измерение `rects[]` аддитивно и не двигается: на нём стоят прежние потребители.
+      expect(result.rects[0]).toMatchObject({ x: 0, y: 0, width: 900, height: 40 });
+    } finally { restore(); }
+  });
+
+  it("версия контракта измерения объявлена и равна 2", () => {
+    // Значение — кадровый вход `frameFingerprint` (§1.3): его сдвиг честно инвалидирует кадры.
+    expect(GEOMETRY_CONTRACT_VERSION).toBe(2);
   });
 
   it("детали не собираются, пока их не запросили: контракт probe=geometry не меняется", () => {

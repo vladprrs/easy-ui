@@ -19,6 +19,7 @@
  * ключей во входном объекте на хэш не влияет.
  */
 import { canonicalStringify } from "../../src/capture/canonicalJson";
+import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import { rendererFingerprint } from "../capture/renderer";
 import type { AcceptanceCase } from "./cases";
@@ -214,7 +215,20 @@ function frameSlotProjection(bindings: readonly FrameSlotBinding[]): Record<stri
   }));
 }
 
-export function frameFingerprint(input: FrameFingerprintInput): string {
+/**
+ * `geometryContractVersion` — кадровый вход, а не bump `CASE_FINGERPRINT_ALGO_VERSION` (план
+ * 2026-08-06 §1.3, находка F1): ALGO в `frameFingerprint` **не входит**, поэтому его подъём
+ * оставил бы прод-кадры валидными и тихо перенёс бы вердикты со старой семантикой `layoutBounds`
+ * на новую. Условный спред `> 1` держит до-W2 значение (`1`) байт-нейтральным: включи его
+ * безусловно — и сдвинулись бы даже кадры, снятые до появления самого понятия версии.
+ *
+ * Второй параметр — **только для тестов** (дифференциальная проверка «смена версии ⇒ другой
+ * кадр» и воспроизведение до-W2 golden'а); рабочий путь его не передаёт.
+ */
+export function frameFingerprint(
+  input: FrameFingerprintInput,
+  geometryContractVersion: number = GEOMETRY_CONTRACT_VERSION,
+): string {
   const slots = input.slotBindings !== undefined && input.slotBindings.length > 0
     ? frameSlotProjection(input.slotBindings)
     : undefined;
@@ -226,6 +240,7 @@ export function frameFingerprint(input: FrameFingerprintInput): string {
     readinessPolicyHash: input.readinessPolicyHash,
     rendererFingerprint: input.rendererFingerprint,
     slotBindings: slots,
+    ...(geometryContractVersion > 1 ? { geometryContractVersion } : {}),
   }));
 }
 
