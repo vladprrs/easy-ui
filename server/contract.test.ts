@@ -45,7 +45,7 @@ import { caseSetIdOf } from "./acceptance/caseSets";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
-  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, caseSetManifestSchema,
+  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, caseSetManifestSchema,
 } from "../src/acceptance/caseSetSchema";
 import { prototypeCandidateOverlayMax as PROTOTYPE_CANDIDATE_OVERLAY_MAX } from "./routes/screenshots";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
@@ -710,6 +710,9 @@ describe("route contracts", () => {
       caseSetMaxSlotsPerCase: CASE_SET_MAX_SLOTS_PER_CASE,
       caseSetMaxSlotDepth: CASE_SET_MAX_SLOT_DEPTH,
       caseSetMaxSlotNodes: CASE_SET_MAX_SLOT_NODES,
+      // План 2026-08-06 §W3: потолки per-case вердиктных допусков.
+      caseSetMaxCaseSizeDeltaPx: CASE_POLICY_MAX_SIZE_DELTA_PX,
+      caseSetMaxCaseOverflowBudgetPx: CASE_POLICY_MAX_OVERFLOW_BUDGET_PX,
       prototypeCandidateOverlayMax: PROTOTYPE_CANDIDATE_OVERLAY_MAX,
       surfaces: SURFACES_LIMIT,
     });
@@ -769,6 +772,14 @@ describe("route contracts", () => {
       // overlay дополнительно гаснет `EASYUI_VALIDATE_DISABLED` (в тесте префлайт включён).
       caseSetSlotBindings: true,
       prototypeCandidateOverlay: true,
+      // План 2026-08-06 (feedback-3): W1/W2/W5 — свойства кода, W3/W4/W6 — на матричном kill-switch.
+      figmaMultiSource: true,
+      geometryContractV2: true,
+      geometryCaseTolerances: true,
+      comparisonMatte: true,
+      nestedSlotBindings: true,
+      overlayScrollOwnership: true,
+      captureViewportSurface: true,
       computed: true,
       surfaces: true,
       // Write-политика мульти-поверхностных документов — kill-switch EASYUI_SURFACES (D16).

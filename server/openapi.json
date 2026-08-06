@@ -3609,6 +3609,11 @@
                         "defaultPolicyProfile": {
                           "type": "string"
                         },
+                        "geometryContractVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
                         "policyProfiles": {
                           "items": {
                             "type": "string"
@@ -3625,7 +3630,8 @@
                       "required": [
                         "policyProfiles",
                         "defaultPolicyProfile",
-                        "promotionPolicyProfiles"
+                        "promotionPolicyProfiles",
+                        "geometryContractVersion"
                       ],
                       "type": "object"
                     },
@@ -3703,6 +3709,9 @@
                         "captureReadiness": {
                           "type": "boolean"
                         },
+                        "captureViewportSurface": {
+                          "type": "boolean"
+                        },
                         "caseSetSlotBindings": {
                           "type": "boolean"
                         },
@@ -3710,6 +3719,9 @@
                           "type": "boolean"
                         },
                         "catalogMigration": {
+                          "type": "boolean"
+                        },
+                        "comparisonMatte": {
                           "type": "boolean"
                         },
                         "componentDraftPreview": {
@@ -3733,7 +3745,16 @@
                         "computed": {
                           "type": "boolean"
                         },
+                        "figmaMultiSource": {
+                          "type": "boolean"
+                        },
                         "flows": {
+                          "type": "boolean"
+                        },
+                        "geometryCaseTolerances": {
+                          "type": "boolean"
+                        },
+                        "geometryContractV2": {
                           "type": "boolean"
                         },
                         "geometryPaint": {
@@ -3743,6 +3764,12 @@
                           "type": "boolean"
                         },
                         "namedSlots": {
+                          "type": "boolean"
+                        },
+                        "nestedSlotBindings": {
+                          "type": "boolean"
+                        },
+                        "overlayScrollOwnership": {
                           "type": "boolean"
                         },
                         "prototypeCandidateOverlay": {
@@ -3831,7 +3858,14 @@
                         "acceptanceMultiRunPromote",
                         "acceptanceSummaryView",
                         "caseSetSlotBindings",
-                        "prototypeCandidateOverlay"
+                        "prototypeCandidateOverlay",
+                        "figmaMultiSource",
+                        "geometryContractV2",
+                        "geometryCaseTolerances",
+                        "comparisonMatte",
+                        "nestedSlotBindings",
+                        "overlayScrollOwnership",
+                        "captureViewportSurface"
                       ],
                       "type": "object"
                     },
@@ -3858,6 +3892,12 @@
                           "type": "number"
                         },
                         "caseSetManifestVersion": {
+                          "type": "number"
+                        },
+                        "caseSetMaxCaseOverflowBudgetPx": {
+                          "type": "number"
+                        },
+                        "caseSetMaxCaseSizeDeltaPx": {
                           "type": "number"
                         },
                         "caseSetMaxCases": {
@@ -3986,6 +4026,8 @@
                         "caseSetMaxSlotsPerCase",
                         "caseSetMaxSlotDepth",
                         "caseSetMaxSlotNodes",
+                        "caseSetMaxCaseSizeDeltaPx",
+                        "caseSetMaxCaseOverflowBudgetPx",
                         "prototypeCandidateOverlayMax",
                         "surfaces"
                       ],
@@ -4308,6 +4350,28 @@
                         "policyVersion"
                       ],
                       "type": "object"
+                    },
+                    "textAaPresets": {
+                      "additionalProperties": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "maxRawDiffPct": {
+                            "type": "number"
+                          },
+                          "minEdgeResidualPct": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "maxRawDiffPct",
+                          "minEdgeResidualPct"
+                        ],
+                        "type": "object"
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
                     }
                   },
                   "required": [
@@ -4324,6 +4388,7 @@
                     "resolvedSpaceScales",
                     "regions",
                     "features",
+                    "textAaPresets",
                     "acceptance",
                     "renderer",
                     "reuseGate"

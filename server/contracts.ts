@@ -2918,6 +2918,8 @@ export const capabilitiesResponseSchema = z.object({
      * проверка `≤`, поэтому граничный плоский манифест остаётся валидным).
      */
     caseSetMaxSlotDepth: z.number(), caseSetMaxSlotNodes: z.number(),
+    /** Per-case вердиктные допуски (план 2026-08-06 §W3): потолки `sizeDeltaPx` и `overflowBudgetPx`. */
+    caseSetMaxCaseSizeDeltaPx: z.number(), caseSetMaxCaseOverflowBudgetPx: z.number(),
     /** Подмен кандидатов на один прототипный кадр (план 2026-08-05 §B1). */
     prototypeCandidateOverlayMax: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
@@ -3007,7 +3009,28 @@ export const capabilitiesResponseSchema = z.object({
      * `EASYUI_VALIDATE_DISABLED=1`; выключенная фича отвечает на `candidateOverrides` `404`.
      */
     prototypeCandidateOverlay: z.boolean(),
+    /** `figma.sources[]` — дополнительные Figma-документы lineage (план 2026-08-06 §W1). */
+    figmaMultiSource: z.boolean(),
+    /** Layout bounds v2: живой текст + нисходящий clip-стек; версия — `acceptance.geometryContractVersion` (план 2026-08-06 §W2). */
+    geometryContractV2: z.boolean(),
+    /** `policy.perCase.sizeDeltaPx`/`overflowBudgetPx` — per-case вердиктные допуски (план 2026-08-06 §W3). */
+    geometryCaseTolerances: z.boolean(),
+    /** `cases[].comparison.matte` — матирование обеих картинок до метрик (план 2026-08-06 §W4). Пресеты — `textAaPresets`. */
+    comparisonMatte: z.boolean(),
+    /** Вложенные `cases[].slotBindings` (план 2026-08-06 §W6; лимиты `caseSetMaxSlotDepth/Nodes`). */
+    nestedSlotBindings: z.boolean(),
+    /** Overlay v2: maxHeight на всех placement + prop `scroll`; composition-токены `maxHeight:"viewport"`/`scroll` (план 2026-08-06 §W5). */
+    overlayScrollOwnership: z.boolean(),
+    /** `capture.surface:"viewport"` в case-set (план 2026-08-06 §W5). */
+    captureViewportSurface: z.boolean(),
   }),
+  /**
+   * Именованные пресеты live-text AA-бюджета (план 2026-08-06 §W4): значения владеет сервер,
+   * манифест выбирает имя (`cases[].textAaBudget`). Пороги публикуются для воспроизводимости.
+   */
+  textAaPresets: z.record(z.string(), z.object({
+    maxRawDiffPct: z.number(), minEdgeResidualPct: z.number(),
+  })),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`
    * запрос без `intent` проходит с предупреждением, в `enforce` — падает `400 invalid_request`.
@@ -3023,6 +3046,8 @@ export const capabilitiesResponseSchema = z.object({
     policyProfiles: z.array(z.string()),
     defaultPolicyProfile: z.string(),
     promotionPolicyProfiles: z.array(z.string()),
+    /** Версия контракта измерения геометрии — кадровый вход frameFingerprint (план 2026-08-06 §1.3). */
+    geometryContractVersion: z.number().int().positive(),
   }),
   /** Объявленный рендерер этой сборки (план renderer-contract-2 §5 R1). */
   renderer: rendererReportSchema,

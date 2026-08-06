@@ -2036,6 +2036,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "acceptanceMaxCasesPerRun": 64, "acceptanceMaxJobsPerRun": 128, "acceptanceCaseTtlHours": 336, "evidenceMaxBytes": 268435456,
     "caseSetManifestVersion": 1, "caseSetMaxCases": 512, "caseSetMaxDimensions": 8, "caseSetMaxDimensionValues": 64, "caseSetMaxExpectedTuples": 4096,
     "caseSetMaxSlotChildren": 12, "caseSetMaxSlotsPerCase": 8, "caseSetMaxSlotDepth": 3, "caseSetMaxSlotNodes": 96,
+    "caseSetMaxCaseSizeDeltaPx": 64, "caseSetMaxCaseOverflowBudgetPx": 256,
     "prototypeCandidateOverlayMax": 2,
     "validateUserConcurrent": 1, "validateGlobalConcurrent": 2, "validateCacheTtlHours": 24, "validateCacheMiB": 32 },
   "designSystems": ["shadcn", "wireframe", "..."],
@@ -2046,8 +2047,11 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "surfaces": true, "surfacesWrite": false,
     "acceptanceMatrix": false, "acceptanceCandidates": false, "acceptanceRuns": false,
     "caseSetValidate": false, "acceptanceMultiRunPromote": false, "acceptanceSummaryView": false,
-    "caseSetSlotBindings": false, "prototypeCandidateOverlay": false },
-  "acceptance": { "policyProfiles": ["default-v1", "pixel-strict-v1"], "defaultPolicyProfile": "default-v1", "promotionPolicyProfiles": ["default-v1", "pixel-strict-v1"] },
+    "caseSetSlotBindings": false, "prototypeCandidateOverlay": false,
+    "figmaMultiSource": true, "geometryContractV2": true, "overlayScrollOwnership": true,
+    "geometryCaseTolerances": false, "comparisonMatte": false, "nestedSlotBindings": false, "captureViewportSurface": false },
+  "textAaPresets": { "live-text-v1": { "maxRawDiffPct": 0.75, "minEdgeResidualPct": 95 } },
+  "acceptance": { "policyProfiles": ["default-v1", "pixel-strict-v1"], "defaultPolicyProfile": "default-v1", "promotionPolicyProfiles": ["default-v1", "pixel-strict-v1"], "geometryContractVersion": 2 },
   "renderer": { "rendererSchema": 2, "rendererVersion": "r2", "fingerprint": "<sha256>", "policyHash": "<sha256 дефолтной readiness-политики>",
     "os": "linux", "arch": "x64", "nodeVersion": "24.x.y", "playwrightVersion": "1.61.1",
     "browserName": "chromium", "browserVersion": "149.0.7827.55", "browserRevision": "1228",
@@ -2066,6 +2070,20 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 `renderer` — объявленный рендерер этой сборки (см. [Renderer fingerprint 2.0](#renderer-fingerprint-20-волна-r1-план-2026-08-03-renderer-contract-2)): агент сверяет `fingerprint` с `result.renderer.fingerprint` снятой джобы, а деплой — с `renderer-manifest.json` образа. `source: "fallback"` означает рабочее дерево без манифеста: часть полей `null`, отпечаток стабилен внутри процесса, но между хостами не сравним.
 
 `designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/schema.ts`, `src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
+
+### Changelog платформенных capabilities (2026-08-06, feedback-3)
+
+Волны плана `docs/plans/2026-08-06-feedback-3-platform-capabilities.md`; координатору достаточно проверить флаг/лимит в `/api/capabilities` и переиспользовать сохранённые candidates/references — пересъёмку требует только смена `acceptance.geometryContractVersion` (frame-слой), остальные новые поля инвалидируют ровно свой слой (comparison → re-diff, verdict → recompute).
+
+- **`figmaMultiSource`** — `figma.sources[]` (≤8 дополнительных `{fileKey, nodeIds, role?}`; primary остаётся один; дубликаты — 422). PayCard-extension с Core + Pay App references проходит validate.
+- **`geometryContractV2`** (`acceptance.geometryContractVersion: 2`) — layoutBounds учитывает живые текстовые узлы (Range.getClientRects; display:contents больше не теряет строки) и пересекает боксы потомков с нисходящим clip-стеком (клипнутая карусель меряется окном clip, а не скрытой лентой). Смена версии — полная пересъёмка затронутых наборов; инвентаризация — `scripts/audit-geometry-contract.mjs`.
+- **`geometryCaseTolerances`** — `policy.perCase.sizeDeltaPx` (допуск к `expectedGeometry`, побеждает профиль) и `overflowBudgetPx` по сторонам (в пределах бюджета не блокирует, вердикт-класс честен в фактах); оба — verdict-слой (recompute без пересъёмки); конфликт с `allowPaintOverflow` — 422 `case_policy_conflict`.
+- **`comparisonMatte`** + **`textAaPresets`** — `cases[].comparison.matte` (матирование обеих картинок до метрик, comparison-слой, re-diff) и `cases[].textAaBudget: "live-text-v1"` (именованный серверный пресет: pass, когда весь остаток лежит на контурах эталона; пороги — в `textAaPresets`, тюнинг = новый пресет).
+- **`nestedSlotBindings`** — `slotBindings` у детей до `caseSetMaxSlotDepth` уровней и `caseSetMaxSlotNodes` узлов; depth-1 наборы дают байт-в-байт прежние `slots_hash`/frame-хеши.
+- **`overlayScrollOwnership`** — Overlay v2: `maxHeight` из insets на всех 7 placement, prop `scroll` (false → clip, true → внутренний скролл); composition-токены `sizing.maxHeight:"viewport"` и `scroll`.
+- **`captureViewportSurface`** — `capture.surface:"viewport"`: сцена точного размера вьюпорта внутри padded-поверхности со stage host; overlay-aware layout root (`[data-eui-overlay-content]`), paintMargin 16, две ветки канвы сравнения. Geometry-кейсы такой поверхности снимаются с пустой сценой (`scrim:false`) либо объявляют overflow-бюджет.
+- **Осознанно не реализовано (строка 2 фидбэка):** prototype/fixture-ссылка на кандидата **никогда не публиковавшегося** компонента. Документ прототипа принципиально не сохраняется с неопубликованным типом (инвариант `snapshotDefinitions`); обход для координатора: пре-publish доказательство собирается case-set'ом со `slotBindings` (включая вложенные — unpublished parent candidate + опубликованные дети), а прототипная регрессия — `prototypeCandidateOverlay` после первой публикации.
+- **Известное ограничение W5:** host-примитив `Overlay` недостижим из TSX кастомного компонента (ABI экспортирует только token/space/color/Icon) — viewport-поверхность проверяет DOM-контракт оверлея (стабильный маркер `data-eui-overlay-content`), сам примитив покрыт DOM-тестами и прототипным путём; расширение ABI — отдельное решение.
 
 Флаги волны итеративного авторинга описывают возможности, которых на старом образе просто нет, поэтому клиент обязан читать их **до** вызова, а не выяснять по 404:
 

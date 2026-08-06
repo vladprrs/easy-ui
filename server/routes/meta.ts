@@ -40,7 +40,10 @@ import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
+  CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
 } from "../../src/acceptance/caseSetSchema";
+import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
+import { TEXT_AA_PRESETS } from "../acceptance/gates/visual";
 import { prototypeCandidateOverlayMax } from "./screenshots";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
@@ -140,6 +143,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // плоский манифест остаётся валидным.
       caseSetMaxSlotDepth: CASE_SET_MAX_SLOT_DEPTH,
       caseSetMaxSlotNodes: CASE_SET_MAX_SLOT_NODES,
+      // Per-case вердиктные допуски (план 2026-08-06 §W3): потолки схемы, драйвер читает их
+      // отсюда (фолбэк на локальные дефолты в старых сборках).
+      caseSetMaxCaseSizeDeltaPx: CASE_POLICY_MAX_SIZE_DELTA_PX,
+      caseSetMaxCaseOverflowBudgetPx: CASE_POLICY_MAX_OVERFLOW_BUDGET_PX,
       // Подмен кандидатов на один прототипный кадр (§B1): overlay — точечная проверка ревизии
       // уже опубликованного компонента в композиции, а не способ собрать кадр из черновиков.
       prototypeCandidateOverlayMax,
@@ -262,7 +269,33 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // (инструментированный прогон раскрытия). Обе ручки ничего не пишут и **не** зависят от
       // kill-switch'а v3: выбор «композиция или TSX» надо делать до включения записи.
       compositionAnalyze: true,
+      // ── План 2026-08-06 (feedback-3), волны W1–W6. Флаги по правилу caseSetValidate: клиент
+      // обязан проверить именно ту возможность, которую собирается использовать, — старая сборка
+      // отвергнет новое поле схемы как strictObject/unrecognized_keys до всякой семантики. ──
+      // W1: `figma.sources[]` — дополнительные Figma-документы lineage (primary остаётся один).
+      figmaMultiSource: true,
+      // W2: layout bounds v2 (живой текст + нисходящий clip-стек); версия контракта измерения —
+      // в `acceptance.geometryContractVersion`, её смена инвалидирует кадры (frame-слой).
+      geometryContractV2: true,
+      // W3: per-case вердиктные допуски `policy.perCase.sizeDeltaPx`/`overflowBudgetPx`
+      // (потолки — `limits.caseSetMaxCase*`); пересчитываются recompute без пересъёмки.
+      geometryCaseTolerances: options.acceptanceMatrix === true,
+      // W4: `cases[].comparison.matte` — матирование обеих картинок до метрик (comparison-слой).
+      comparisonMatte: options.acceptanceMatrix === true,
+      // W6: вложенные `slotBindings` (лимиты — `limits.caseSetMaxSlotDepth/Nodes`).
+      nestedSlotBindings: options.acceptanceMatrix === true,
+      // W5: Overlay v2 (maxHeight у всех placement + prop `scroll`) и composition-токены
+      // `sizing.maxHeight:"viewport"`/`scroll` — свойство кода, не kill-switch.
+      overlayScrollOwnership: true,
+      // W5: `capture.surface:"viewport"` в case-set (внутренний stage-бокс, overlay-aware root,
+      // paintMargin 16, две ветки канвы сравнения).
+      captureViewportSurface: options.acceptanceMatrix === true,
     },
+    // W4: именованные пресеты live-text AA-бюджета — значения объявляет сервер, автор манифеста
+    // выбирает только имя (`cases[].textAaBudget`). Пороги видны для воспроизводимости вердикта.
+    textAaPresets: Object.fromEntries(Object.entries(TEXT_AA_PRESETS).map(([name, preset]) => [
+      name, { maxRawDiffPct: preset.maxRawDiffPct, minEdgeResidualPct: preset.minEdgeResidualPct },
+    ])),
     /**
      * Политики приёмки (план 2026-08-04 W3, D-A). `policyProfiles` — что примет
      * `POST /acceptance-runs` в `policy` (иначе `422 unknown_policy_profile`);
@@ -275,6 +308,9 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       policyProfiles: Object.keys(ACCEPTANCE_POLICIES),
       defaultPolicyProfile: DEFAULT_ACCEPTANCE_POLICY_ID,
       promotionPolicyProfiles: [...PROMOTION_POLICY_PROFILES],
+      // План 2026-08-06 §1.3: версия контракта измерения геометрии — кадровый вход
+      // frameFingerprint; её смена = полная пересъёмка затронутых наборов.
+      geometryContractVersion: GEOMETRY_CONTRACT_VERSION,
     },
     // План renderer-contract-2 §5 R1: чем именно эта сборка рисует кадры. Агент (и приёмка
     // прода) обязаны иметь возможность сверить отпечаток с тем, что приехало в результате джобы,
