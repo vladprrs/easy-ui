@@ -44,14 +44,51 @@ let cache = nullCache("not configured");
 /** Human line printed only outside --json; JSON mode owns stdout entirely. */
 const out = (line) => { if (!jsonMode) console.log(line); };
 /**
+ * Версия схемы агентской квитанции (`envelope`, план 2026-08-07 §1.4 W6a). Растёт только при
+ * несовместимом изменении формы конверта; добавление полей внутрь `summary` версию не двигает.
+ */
+export const ENVELOPE_SCHEMA_VERSION = 1;
+/**
+ * Верб текущего запуска — как его набрал агент (argv). Нужен общему обработчику отказа
+ * (`requestFailed`): у него нет собственного контекста команды, а квитанция обязана называть
+ * ту команду, которая упала, а не шаг запроса.
+ */
+let currentCommand = null;
+/**
+ * Стабильная агентская квитанция поверх любого `--json`-вывода (план 2026-08-07 §1.4 W6a).
+ *
+ * Форма **вложенная** (`envelope: {...}`), а не плоская: payload'ы вербов уже несут ключи
+ * `warnings`/`artifacts` и целиком спредят ответ сервера — плоский конверт коллидировал бы с
+ * ними. `ok` обязателен и равен `exitCode === EXIT.ok` вызывающего верба: конверт не считает
+ * успех сам, он его лишь публикует. `summary` в W6a пуст — per-verb контракты приезжают в W6b.
+ */
+export function buildEnvelope(envelope) {
+  if (envelope === null || typeof envelope !== "object") throw new TypeError("report() requires an envelope object");
+  if (typeof envelope.ok !== "boolean") throw new TypeError("report() envelope requires a boolean ok");
+  return {
+    schemaVersion: ENVELOPE_SCHEMA_VERSION,
+    command: envelope.command ?? currentCommand ?? null,
+    ok: envelope.ok,
+    summary: envelope.summary ?? {},
+    items: envelope.items ?? [],
+    artifacts: envelope.artifacts ?? [],
+    warnings: envelope.warnings ?? [],
+    nextActions: envelope.nextActions ?? [],
+  };
+}
+/**
  * Terminal output of a verb: a JSON document in --json mode, human lines otherwise.
  *
  * Статус кэша едет в **каждом** отчёте: клиентский кэш — ускоритель, а не свидетельство, и
  * читатель обязан видеть, пришла цифра с сервера или с диска. В человекочитаемом режиме — та же
  * строка в stderr (stdout принадлежит отчёту).
+ *
+ * `envelope` обязателен (W6a) и печатается **только** в `--json`: человекочитаемый вывод
+ * остаётся байт-в-байт прежним.
  */
-function report(lines, payload) {
-  if (jsonMode) process.stdout.write(`${JSON.stringify({ ...payload, cache: cache.summary() }, null, 2)}\n`);
+function report(lines, payload, envelope) {
+  const receipt = buildEnvelope(envelope);
+  if (jsonMode) process.stdout.write(`${JSON.stringify({ ...payload, envelope: receipt, cache: cache.summary() }, null, 2)}\n`);
   else {
     for (const line of [lines].flat()) console.log(line);
     if (cache.enabled) process.stderr.write(`${cache.line()}\n`);
@@ -555,7 +592,12 @@ function requestFailed(step, response) {
   const hint = ERROR_HINTS[code]?.(failure);
   if (hint) lines.push(hint);
   if (Array.isArray(failure.issues)) for (const issue of failure.issues.slice(0, 20)) lines.push(issueLine(issue));
-  if (jsonMode) report(null, { failed: true, step, status: response.status, code, message: failure.message, retryable: failure.retryable === true, details: failure });
+  // Команда — из argv (§1.4 N12): `step` называет запрос, а квитанция обязана называть верб.
+  if (jsonMode) {
+    report(null, { failed: true, step, status: response.status, code, message: failure.message, retryable: failure.retryable === true, details: failure }, {
+      command: currentCommand, ok: false, nextActions: failure.nextSteps ?? [],
+    });
+  }
   throw new CliError(`${lines.join("\n")}${authHint}`);
 }
 
@@ -1011,7 +1053,12 @@ async function runGeometry(args) {
     if (gap?.reason) out(`  gaps: n/a (${gap.reason})`);
     else if (gap) out(`  CSS gap: row=${gap.cssGap.rowGap} column=${gap.cssGap.columnGap}; observed clearance: ${gap.observed.join(", ")}`);
   }
-  if (jsonMode) report(null, { command: "geometry", prototypeId: id, screenId, ...state.result, gaps: gapRows });
+  if (jsonMode) {
+    report(null, { command: "geometry", prototypeId: id, screenId, ...state.result, gaps: gapRows }, {
+      command: "geometry", ok: true, items: state.result.rects ?? [],
+      warnings: (state.result.issues ?? []).map((issue) => `${issue.severity} ${issue.code}: ${issue.message}`),
+    });
+  }
 }
 
 // --- expect: числовая приёмка геометрии против выписки из Figma (план agent-iteration DX, P4) ---
@@ -1235,6 +1282,9 @@ async function runExpect(args, flags) {
     tolerance: evaluation.tolerance, exitCode,
     checks: evaluation.checks.map(({ label, metric, expected, actual, ok, message }) => ({ element: label, metric, expected, actual, ok, message })),
     mismatches: evaluation.mismatches.length,
+  }, {
+    command: "expect", ok: exitCode === EXIT.ok, items: evaluation.checks,
+    warnings: evaluation.mismatches.map((check) => check.message),
   });
   if (exitCode !== EXIT.ok) {
     throw new CliError(`geometry does not match ${expectedPath}: ${evaluation.mismatches.map((check) => check.message).join("; ")}`, { exitCode });
@@ -1485,6 +1535,10 @@ async function runSnap(args, flags, command = "snap") {
       // §B: подмены кадра — часть provenance отчёта, а не деталь вызова; `null` = обычная съёмка.
       candidateOverrides: flags.candidate ?? null,
       receipt: wantReceipt ? flags.receipt : null, screens: rows,
+    }, {
+      command, ok: exitCode === EXIT.ok, items: rows,
+      artifacts: [...rows.map((row) => row.path).filter(Boolean), ...(wantReceipt ? [flags.receipt] : [])],
+      warnings: rows.flatMap((row) => row.productErrors),
     });
   }
   if (exitCode === EXIT.productErrors) throw new CliError("screenshots produced with product errors", { exitCode: EXIT.productErrors });
@@ -1575,6 +1629,10 @@ async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFact
       codes: evidence?.codes ?? [], receipt: flags.receipt ?? null,
       captureClean: summary.captureClean, productErrors: summary.productErrors,
       infraNoise: summary.infraNoise, runtimeWarnings: summary.runtimeWarnings,
+    }, {
+      command: "preview", ok: exitCode === EXIT.ok, items: result.rects ?? [],
+      artifacts: flags.out === undefined ? [] : [flags.out],
+      warnings: [...summary.productErrors, ...summary.runtimeWarnings],
     });
   }
   if (exitCode !== EXIT.ok) throw new CliError("geometry probe reported product errors", { exitCode });
@@ -1677,6 +1735,10 @@ async function runPreview(args, flags) {
       path: summary.imageProduced ? outputPath : null, queueRetries, exitCode, ...summary,
       receiptSha256: evidence.receiptSha256, renderer: evidence.renderer, codes: evidence.codes,
       receipt: wantReceipt ? flags.receipt : null,
+    }, {
+      command: "preview", ok: exitCode === EXIT.ok,
+      artifacts: [...(summary.imageProduced ? [outputPath] : []), ...(wantReceipt ? [flags.receipt] : [])],
+      warnings: [...summary.productErrors, ...summary.runtimeWarnings],
     });
   }
   if (exitCode === EXIT.productErrors) throw new CliError("preview produced a PNG with product errors", { exitCode: EXIT.productErrors });
@@ -1695,8 +1757,13 @@ async function runStatus(args, flags) {
     rows.push({ screenId: screen, ...result });
     out(JSON.stringify(result, null, 2));
   }
-  if (jsonMode) report(null, { command: "status", prototypeId: id, screens: rows });
   const broken = rows.filter((row) => !row.renderable).map((row) => row.screenId);
+  if (jsonMode) {
+    report(null, { command: "status", prototypeId: id, screens: rows }, {
+      command: "status", ok: broken.length === 0, items: rows,
+      warnings: broken.map((screen) => `screen ${screen} is not renderable`),
+    });
+  }
   if (broken.length) throw new CliError(`prototype screen is not renderable: ${broken.join(", ")}`);
 }
 
@@ -1763,6 +1830,11 @@ function failReuseConflict(command, step, response, id) {
       ...(step === "save" ? { created: false } : { draftSaved: true }),
       ...failure,
     },
+    {
+      command, ok: false, items: candidates,
+      warnings: [`STOP: ${failure.code} while attempting to ${step} ${id}`],
+      nextActions: failure.nextSteps ?? [],
+    },
   );
   throw new CliError(`STOP: ${failure.code}; decisionId=${failure.decisionId ?? "-"}; no automatic retry or force-new`, { exitCode: EXIT.productErrors });
 }
@@ -1801,7 +1873,7 @@ async function runCatalog(args, flags) {
     const id = args[1];
     const { manifest, system } = await loadCatalog(id);
     const result = compactCatalog(system, manifest);
-    report(catalogListLines(result), { command: "catalog list", ...result });
+    report(catalogListLines(result), { command: "catalog list", ...result }, { command: "catalog list", ok: true, items: result.custom ?? [] });
     return;
   }
   if (subcommand === "search") {
@@ -1815,13 +1887,13 @@ async function runCatalog(args, flags) {
         ...(flags.limit === undefined ? {} : { limit: flags.limit }),
         proposed: { kind: "composition", ...(doc === undefined ? {} : { compositionDoc: doc }) },
       }));
-      report(catalogSearchLines(result), { command: "catalog search", ...result });
+      report(catalogSearchLines(result), { command: "catalog search", ...result }, { command: "catalog search", ok: true, items: result.candidates ?? [] });
       return;
     }
     const query = new URLSearchParams({ designSystem: id, intent: flags.intent });
     if (flags.limit !== undefined) query.set("limit", String(flags.limit));
     const result = await requireOk("catalog search", await call("GET", `/catalog/candidates?${query}`));
-    report(catalogSearchLines(result), { command: "catalog search", ...result });
+    report(catalogSearchLines(result), { command: "catalog search", ...result }, { command: "catalog search", ok: true, items: result.candidates ?? [] });
     return;
   }
   if (subcommand === "get") {
@@ -1858,7 +1930,7 @@ async function runCatalog(args, flags) {
       }
       artifacts.push({ kind: found.kind, name: found.value.name, details: found.value });
     }
-    report(catalogGetLines(id, artifacts), { command: "catalog get", designSystem: id, artifacts, ...existenceReport() });
+    report(catalogGetLines(id, artifacts), { command: "catalog get", designSystem: id, artifacts, ...existenceReport() }, { command: "catalog get", ok: true, items: artifacts });
     return;
   }
   const [id, output] = args;
@@ -1866,7 +1938,7 @@ async function runCatalog(args, flags) {
   const result = flags.full ? fullCatalog(system, manifest) : compactCatalog(system, manifest);
   const text = `${JSON.stringify(result, null, 2)}\n`;
   if (output) await writeFile(output, text);
-  else report(text.trimEnd(), result);
+  else report(text.trimEnd(), result, { command: "catalog", ok: true });
 }
 
 async function runDiff(args, flags) {
@@ -1878,7 +1950,7 @@ async function runDiff(args, flags) {
   catch (error) { throw new CliError(error.message); }
   const response = await call("GET", `/prototypes/${encodeURIComponent(id)}/revisions/${revisions.toRev}/diff?against=${revisions.againstRev}`);
   const result = await requireOk("diff", response);
-  report(diffSummary(result), result);
+  report(diffSummary(result), result, { command: "diff", ok: true });
 }
 
 async function runBaseline(args, flags) {
@@ -1927,7 +1999,12 @@ async function runBaseline(args, flags) {
     await mkdir(outputDir, { recursive: true });
     for (const capture of captures) await downloadImage(capture.imageUrl, `${outputDir}/${capture.screenId}.png`);
   }
-  if (jsonMode) report(null, { command: "baseline", prototypeId: id, rev: plan.rev, members: result.members });
+  if (jsonMode) {
+    report(null, { command: "baseline", prototypeId: id, rev: plan.rev, members: result.members }, {
+      command: "baseline", ok: true, items: result.members ?? [],
+      artifacts: outputDir ? captures.map((capture) => `${outputDir}/${capture.screenId}.png`) : [],
+    });
+  }
   else for (const member of result.members) console.log(`${member.screenId} -> ${member.referenceId}`);
 }
 
@@ -1960,11 +2037,16 @@ async function runCheck(args, flags) {
     const run = await pollJob(`/visual-runs/${encodeURIComponent(accepted.runId)}`, { deadlineMs: 120_000 });
     rows.push(checkRow(member, baseline.rev, run));
   }
+  const failedChecks = rows.filter((row) => row.status !== "pass");
   report(
     ["screenId\tstatus\tdiffPercent\trefRev->candRev\tdiffUrl", ...rows.map((row) => `${row.screenId}\t${row.status}\t${row.diffPercent ?? "-"}\t${row.revisions}\t${row.diffUrl ?? "-"}`)],
     rows,
+    {
+      command: "check", ok: failedChecks.length === 0, items: rows,
+      warnings: failedChecks.map((row) => `${row.screenId}: ${row.status}`),
+    },
   );
-  if (rows.some((row) => !["pass"].includes(row.status))) throw new CliError("visual check failed");
+  if (failedChecks.length) throw new CliError("visual check failed");
 }
 
 /** Gates the server reports as hard failures; `--verify` refuses to publish while any exists. */
@@ -2000,7 +2082,10 @@ async function runReadiness(args) {
   const [id] = args;
   const readiness = await fetchReadiness(id);
   const exitCode = readinessExitCode(readiness);
-  report(readinessLines(readiness), { command: "readiness", exitCode, ...readiness });
+  report(readinessLines(readiness), { command: "readiness", exitCode, ...readiness }, {
+    command: "readiness", ok: exitCode === EXIT.ok, items: readiness.gates ?? [],
+    warnings: failingGates(readiness).map((gate) => `${gate.id}: ${gate.summary}`),
+  });
   if (exitCode !== EXIT.ok) {
     throw new CliError(`prototype ${id} is not ready to publish: ${(readiness.blocking.length ? readiness.blocking : failingGates(readiness).map((gate) => gate.id)).join(", ")}`, { exitCode });
   }
@@ -2015,6 +2100,10 @@ async function runPublish(args, flags) {
     report(
       ["publish refused by --verify", ...readinessLines(readiness)],
       { command: "publish", prototypeId: id, published: false, exitCode: EXIT.productErrors, refusedBy: failing.map((gate) => gate.id), readiness },
+      {
+        command: "publish", ok: false, items: readiness.gates ?? [],
+        warnings: failing.map((gate) => `${gate.id}: ${gate.summary}`),
+      },
     );
     throw new CliError(`publish refused: failing gates ${failing.map((gate) => gate.id).join(", ")}`, { exitCode: EXIT.productErrors });
   }
@@ -2024,6 +2113,7 @@ async function runPublish(args, flags) {
     report(
       ["publish blocked by readiness gates", ...readinessLines(blocked)],
       { command: "publish", prototypeId: id, published: false, exitCode: EXIT.productErrors, blocking: blocked.blocking ?? [], readiness: blocked },
+      { command: "publish", ok: false, items: blocked.gates ?? [], warnings: blocked.blocking ?? [] },
     );
     throw new CliError(`publish blocked: ${(blocked.blocking ?? []).join(", ") || "readiness gates"}; re-run with --force to override`, { exitCode: EXIT.productErrors });
   }
@@ -2039,6 +2129,10 @@ async function runPublish(args, flags) {
       version: published.version, rev: published.rev, forced: flags.force === true, verified: flags.verify === true,
       screens: (published.screens ?? []).map((screen) => ({ ...screen, url: `${base}${screen.url}` })),
       readiness,
+    },
+    {
+      command: "publish", ok: true,
+      items: (published.screens ?? []).map((screen) => ({ ...screen, url: `${base}${screen.url}` })),
     },
   );
 }
@@ -2071,7 +2165,9 @@ async function runUsages(args, flags) {
   const [id] = args;
   const query = flags.tree ? "?format=tree" : "";
   const usages = await requireOk("usages", await call("GET", `/components/${encodeURIComponent(id)}/usages${query}`));
-  report(flags.tree ? treeLines(usages) : usageLines(usages), { command: "usages", ...usages });
+  report(flags.tree ? treeLines(usages) : usageLines(usages), { command: "usages", ...usages }, {
+    command: "usages", ok: true, items: usages.currentHeadUsages ?? [],
+  });
 }
 
 /**
@@ -2133,7 +2229,10 @@ async function runAudit(flags) {
   );
   const findings = auditFindings(rows);
   const exitCode = auditExitCode(findings);
-  report(auditLines(flags.designSystem, rows, findings), { command: "audit", designSystem: flags.designSystem, exitCode, components: rows, findings });
+  report(auditLines(flags.designSystem, rows, findings), { command: "audit", designSystem: flags.designSystem, exitCode, components: rows, findings }, {
+    command: "audit", ok: exitCode === EXIT.ok, items: rows,
+    warnings: findings.deprecatedInUse.map((componentId) => `deprecated component still in use: ${componentId}`),
+  });
   if (exitCode !== EXIT.ok) throw new CliError(`deprecated components are still used by head revisions: ${findings.deprecatedInUse.join(", ")}`, { exitCode });
 }
 
@@ -2171,6 +2270,7 @@ async function runProvenance(args, flags) {
       ? `provenance ${id} rev ${result.rev} unchanged`
       : `provenance ${id} rev ${result.rev} seq ${result.seq}`,
     { command: "provenance", id, ...result },
+    { command: "provenance", ok: true },
   );
 }
 
@@ -2412,6 +2512,7 @@ async function runPromote(args, flags) {
     // `acceptanceLinkSource` отвечает на вопрос «откуда взялась доказательная база версии»:
     // флаги агента, автовыбор по runs[] кандидата или её нет вовсе (W2b).
     { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId, acceptanceRunIds, acceptanceLinkSource: link ? (link.auto ? "auto" : "flags") : "none", ...existenceReport() },
+    { command: "promote", ok: true, warnings: result.warnings ?? [] },
   );
 }
 
@@ -2686,6 +2787,13 @@ async function reportAcceptance(run, { command, componentId, candidateId, flags,
     {
       command, componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
       exitCode, ...(evidencePath ? { evidence: evidencePath } : {}), ...(summary ?? run), ...existenceReport(),
+    },
+    {
+      // Источник `items` — тот же документ, что и payload: под `--summary` в отчёт не должны
+      // просачиваться полные метрики гейтов, ради компактности сводка и заводилась (W8).
+      command, ok: exitCode === EXIT.ok, items: (summary ?? run).failedCases ?? [],
+      artifacts: evidencePath ? [evidencePath] : [],
+      warnings: ((summary ?? run).failedCases ?? []).map((item) => `case ${item.caseId}: ${item.verdict ?? item.status ?? item.gate}`),
     },
   );
   if (exitCode !== EXIT.ok) {
@@ -3065,7 +3173,8 @@ async function runCaseSetValidate(args) {
       `case-set manifest is locally valid: ${manifest.cases.length} cases for ${componentId}`,
       `local caseSetId: ${caseSetId}`,
       "warning: the server is unreachable — server-side checks (assets, props schema, coverage) were not run",
-    ], { command: "case-set validate", checked: "local", caseSetId, componentId, cases: manifest.cases.length, issues: [] });
+    ], { command: "case-set validate", checked: "local", caseSetId, componentId, cases: manifest.cases.length, issues: [] },
+    { command: "case-set validate", ok: true, warnings: ["the server is unreachable — server-side checks (assets, props schema, coverage) were not run"] });
     return;
   }
   // Лимиты сервера перекрывают локальные дефолты: сборка могла поднять потолок (или опустить).
@@ -3079,7 +3188,8 @@ async function runCaseSetValidate(args) {
       `case-set manifest is locally valid: ${manifest.cases.length} cases for ${componentId}`,
       `local caseSetId: ${caseSetId}`,
       "warning: this server has no dry-run handle (features.caseSetValidate is off); the server-side checks run only on 'case-set put'",
-    ], { command: "case-set validate", checked: "local", caseSetId, componentId, cases: manifest.cases.length, issues: [] });
+    ], { command: "case-set validate", checked: "local", caseSetId, componentId, cases: manifest.cases.length, issues: [] },
+    { command: "case-set validate", ok: true, warnings: ["this server has no dry-run handle (features.caseSetValidate is off); the server-side checks run only on 'case-set put'"] });
     return;
   }
 
@@ -3098,7 +3208,8 @@ async function runCaseSetValidate(args) {
       : []),
     ...coverageLines(result.coverage ?? {}, { caseSetId: result.caseSetId }),
     ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
-  ], { command: "case-set validate", checked: "server", localCaseSetId: caseSetId, ...result });
+  ], { command: "case-set validate", checked: "server", localCaseSetId: caseSetId, ...result },
+  { command: "case-set validate", ok: true, warnings: result.warnings ?? [] });
 }
 
 async function runCaseSet(args, flags) {
@@ -3121,21 +3232,22 @@ async function runCaseSet(args, flags) {
       `case-set ${result.caseSetId} for ${result.componentId} (${result.designSystem}): ${result.cases} cases${result.cached ? " (cached: identical manifest already published)" : ""}`,
       ...coverageLines(result.coverage ?? {}, { caseSetId: result.caseSetId }),
       ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
-    ], { command: "case-set put", ...result, ...existenceReport() });
+    ], { command: "case-set put", ...result, ...existenceReport() },
+    { command: "case-set put", ok: true, warnings: result.warnings ?? [] });
     return;
   }
   const [, caseSetId] = args;
   const encoded = encodeURIComponent(caseSetId);
   if (subcommand === "coverage") {
     const coverage = await requireOk("case-set coverage", await call("GET", `/case-sets/${encoded}/coverage`));
-    report(coverageLines(coverage, coverage), { command: "case-set coverage", ...coverage });
+    report(coverageLines(coverage, coverage), { command: "case-set coverage", ...coverage }, { command: "case-set coverage", ok: true });
     return;
   }
   const result = await requireOk("case-set get", await call("GET", `/case-sets/${encoded}`));
   report([
     `case-set ${result.caseSetId} for ${result.componentId} (${result.designSystem}): ${result.caseCount} cases, created ${result.createdAt}`,
     `source: ${result.source ? `${result.source.fileKey}${result.source.componentSetNodeId ? `#${result.source.componentSetNodeId}` : ""}` : "-"}`,
-  ], { command: "case-set get", ...result });
+  ], { command: "case-set get", ...result }, { command: "case-set get", ok: true });
 }
 
 async function runAccept(args, flags) {
@@ -3209,7 +3321,10 @@ async function runImpact(args, flags) {
     componentId: id, candidateId: flags.candidate, baselineRunId: flags.baselineRun,
     basis: impact.basis, recaptureCount: impact.recaptureCount,
   });
-  report(impactLines(impact, id), { command: "impact", componentId: id, ...impact });
+  report(impactLines(impact, id), { command: "impact", componentId: id, ...impact }, {
+    command: "impact", ok: true, items: impact.affectedCases ?? [],
+    nextActions: [`driver.mjs accept ${id} --baseline-run ${impact.baselineRunId}`],
+  });
 }
 
 /**
@@ -3239,7 +3354,11 @@ async function reportAcceptanceCase(runId, caseId) {
   const exitCode = item.verdict === "fail" || item.verdict === "indeterminate" || item.status === "error"
     ? EXIT.productErrors
     : EXIT.ok;
-  report(lines, { command: "accept-status --case", runId, exitCode, ...item });
+  report(lines, { command: "accept-status --case", runId, exitCode, ...item }, {
+    command: "accept-status", ok: exitCode === EXIT.ok, items: item.gates ?? [],
+    artifacts: (item.artifacts ?? []).map((artifact) => artifact.name),
+    warnings: (item.causes ?? []).map((cause) => `${cause.code} (${cause.confidence}): ${cause.detail}`),
+  });
   if (exitCode !== EXIT.ok) throw new CliError(`case ${caseId} of run ${runId} is ${item.verdict ?? item.status}`, { exitCode });
 }
 
@@ -3260,6 +3379,7 @@ async function runAcceptStatus(args, flags) {
         ? [`acceptance run ${run.runId} is ${run.status} ${run.progress?.completed ?? 0}/${run.progress?.total ?? 0} reused=${run.progress?.reused ?? 0}`]
         : summaryLines(summary, { componentId: run.componentId, evidencePath: null }),
       { command: "accept-status", exitCode: EXIT.ok, ...(summary ?? run) },
+      { command: "accept-status", ok: true },
     );
     return;
   }
@@ -3298,7 +3418,7 @@ async function runReject(args, flags) {
     `rejected candidate ${rejected.candidateId} (${rejected.componentId} rev ${rejected.rev}) by ${rejected.decision?.actor ?? "-"}`,
     `reason: ${rejected.decision?.reason ?? "-"}`,
     `terminal: promote of rev ${rejected.rev} now fails with 409 candidate_rejected; save a new revision to move on`,
-  ], { command: "reject", ...rejected });
+  ], { command: "reject", ...rejected }, { command: "reject", ok: true });
 }
 
 /**
@@ -3394,7 +3514,10 @@ async function runVersionsAudit(flags) {
   const findings = versionAuditFindings(rows);
   const exitCode = versionAuditExitCode(findings);
   const scope = flags.designSystem === undefined ? "" : `designSystem=${flags.designSystem}`;
-  report(versionAuditLines(scope, rows, findings), { command: "audit versions", ...(flags.designSystem === undefined ? {} : { designSystem: flags.designSystem }), exitCode, components: rows, findings });
+  report(versionAuditLines(scope, rows, findings), { command: "audit versions", ...(flags.designSystem === undefined ? {} : { designSystem: flags.designSystem }), exitCode, components: rows, findings }, {
+    command: "audit versions", ok: exitCode === EXIT.ok, items: rows,
+    warnings: findings.noActiveVersion.map((componentId) => `component without an active version: ${componentId}`),
+  });
   if (exitCode !== EXIT.ok) throw new CliError(`components without an active version: ${findings.noActiveVersion.join(", ")}`, { exitCode });
 }
 
@@ -3452,7 +3575,7 @@ async function runReuseAudit(flags) {
     throw new CliError(`reuse audit requires an administrator session (${response.status}): ${JSON.stringify(response.json, null, 2)}`);
   }
   const audit = await requireOk("reuse audit", response);
-  report(reuseAuditLines(audit), { command: "audit reuse", ...audit });
+  report(reuseAuditLines(audit), { command: "audit reuse", ...audit }, { command: "audit reuse", ok: true, items: audit.forceNew ?? [] });
 }
 
 async function runComposition(args, flags) {
@@ -3465,6 +3588,7 @@ async function runComposition(args, flags) {
     report(
       `published composition ${id} version ${response.json.version} (rev ${response.json.rev})`,
       { command: "composition publish", id, version: response.json.version, rev: response.json.rev },
+      { command: "composition publish", ok: true },
     );
     return;
   }
@@ -3482,6 +3606,7 @@ async function runComposition(args, flags) {
   report(
     `saved composition ${id} rev ${response.json.rev} in ${flags.designSystem}${created ? " (created)" : ""}`,
     { command: "composition", id, created, rev: response.json.rev, designSystem: flags.designSystem },
+    { command: "composition", ok: true },
   );
 }
 
@@ -3507,6 +3632,8 @@ async function configureCache(flags) {
 export async function main(argv = process.argv.slice(2)) {
   const { cmd, args, flags } = parseArgs(argv);
   jsonMode = flags.json === true;
+  // Верб квитанции — как его набрали (§1.4): общий обработчик отказа не знает контекста команды.
+  currentCommand = cmd ?? null;
   await configureCache(flags);
   if (cmd === "component") {
     const [id, name, sourcePath] = args;
@@ -3552,7 +3679,7 @@ export async function main(argv = process.argv.slice(2)) {
       ...(figma === undefined ? {} : { figma: true }),
       ...(discovery === undefined ? {} : { discovery }),
       ...(flags.forceNew ? { forceNew: true, acknowledgedCandidateKeys } : {}),
-    });
+    }, { command: "component", ok: true, warnings: published.warnings ?? [] });
   } else if (cmd === "component-move") {
     const [id] = args;
     const meta = await getMeta("components", id, { mutating: true });
@@ -3562,15 +3689,19 @@ export async function main(argv = process.argv.slice(2)) {
     const savedMeta = await getMeta("components", id, { mutating: true });
     out(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
     const published = await publishComponent(id, saved.json.rev, undefined, "component-move");
-    if (jsonMode) report(null, { command: "component-move", id, rev: saved.json.rev, ...published, ...existenceReport() });
+    if (jsonMode) report(null, { command: "component-move", id, rev: saved.json.rev, ...published, ...existenceReport() }, { command: "component-move", ok: true, warnings: published.warnings ?? [] });
   } else if (cmd === "composition") {
     await runComposition(args, flags);
   } else if (cmd === "design-system") {
     const [id, name, description] = args;
     const created = await call("POST", "/design-systems", { id, name, description });
-    if (created.status === 201) process.stdout.write(`${JSON.stringify(created.json, null, 2)}\n`);
-    else if (created.status === 409) process.stdout.write(`${JSON.stringify(await requireOk("design-system", await call("GET", `/design-systems/${encodeURIComponent(id)}`)), null, 2)}\n`);
-    else requestFailed("design-system", created);
+    // W6a: верб больше не пишет в stdout мимо `report()` — человекочитаемый текст тот же
+    // (дамп системы), но `--json` получает общую квитанцию.
+    if (created.status === 201) report(JSON.stringify(created.json, null, 2), created.json, { command: "design-system", ok: true });
+    else if (created.status === 409) {
+      const existing = await requireOk("design-system", await call("GET", `/design-systems/${encodeURIComponent(id)}`));
+      report(JSON.stringify(existing, null, 2), existing, { command: "design-system", ok: true });
+    } else requestFailed("design-system", created);
   } else if (cmd === "prototype") {
     const doc = JSON.parse(await readFile(args[0], "utf8"));
     const meta = await getMeta("prototypes", doc.id, { mutating: true });
@@ -3589,6 +3720,9 @@ export async function main(argv = process.argv.slice(2)) {
         command: "prototype", id: doc.id, rev: result.rev, warnings: result.warnings ?? [],
         componentPins: draft.components, playerUrl: `${base}/p/${doc.id}`,
         screens: (result.screens ?? []).map((screen) => ({ ...screen, url: `${base}${screen.url}` })),
+      }, {
+        command: "prototype", ok: true, warnings: result.warnings ?? [],
+        items: (result.screens ?? []).map((screen) => ({ ...screen, url: `${base}${screen.url}` })),
       });
     }
   } else if (cmd === "catalog") await runCatalog(args, flags);
@@ -3603,7 +3737,13 @@ export async function main(argv = process.argv.slice(2)) {
     const kind = resolveCollection(args[0]);
     const id = args[1];
     const path = kind === "assets" && id ? `/assets/${encodeURIComponent(id)}/usage` : id ? `/${kind}/${encodeURIComponent(id)}` : `/${kind}`;
-    process.stdout.write(`${JSON.stringify(await requireOk("get", await call("GET", path)), null, 2)}\n`);
+    const fetched = await requireOk("get", await call("GET", path));
+    // W6a: тот же дамп в stdout (текстовый режим байт-в-байт), но через `report()` — иначе у
+    // верба нет квитанции. Ответ едет под `result`: коллекции — массив, и спред превратил бы
+    // его в объект с числовыми ключами.
+    report(JSON.stringify(fetched, null, 2), { command: "get", kind, id: id ?? null, result: fetched }, {
+      command: "get", ok: true, items: Array.isArray(fetched) ? fetched : [],
+    });
   } else if (cmd === "delete") {
     const [rawKind, id] = args;
     const kind = resolveCollection(rawKind);
@@ -3617,7 +3757,7 @@ export async function main(argv = process.argv.slice(2)) {
       body = { baseRev: meta.headRev };
     }
     await requireOk("delete", await call("DELETE", `/${kind}/${encodeURIComponent(id)}`, body), [204]);
-    report(`${spec.verb} ${kind}/${id}`, { command: "delete", kind, id, deleted: true, ...existenceReport() });
+    report(`${spec.verb} ${kind}/${id}`, { command: "delete", kind, id, deleted: true, ...existenceReport() }, { command: "delete", ok: true });
   } else if (cmd === "shoot") {
     // R8a: одна съёмочная дорога. Локальный playwright снимал другим браузером, другими
     // шрифтами и без readiness — кадры были несравнимы с эталонами и с приёмкой.

@@ -53,6 +53,13 @@ import {
 
 // W7: `--json`-отчёт всегда несёт статус клиентского кэша; без `--cache-dir` он выключен.
 const CACHE_OFF = { status: "off", reason: "no --cache-dir" };
+/**
+ * W6a: `--json` всегда несёт агентскую квитанцию `envelope` — вложенным объектом, рядом с
+ * прежними ключами payload. Хелпер собирает её каркас, чтобы точные `toEqual` оставались читаемыми.
+ */
+function envelopeOf(command: string, ok: boolean, extra: Record<string, unknown> = {}) {
+  return { schemaVersion: 1, command, ok, summary: {}, items: [], artifacts: [], warnings: [], nextActions: [], ...extra };
+}
 const driver = resolve(".claude/skills/author/driver.mjs");
 const servers: Bun.Server<unknown>[] = [];
 const directories: string[] = [];
@@ -546,15 +553,15 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
 
     const created = await run(api, ["composition", "reusable-image", firstPath, "--design-system", "yandex-pay", "--json"]);
     expect(created.exitCode).toBe(0);
-    expect(JSON.parse(created.stdout)).toEqual({ command: "composition", id: "reusable-image", created: true, rev: 1, designSystem: "yandex-pay", cache: CACHE_OFF });
+    expect(JSON.parse(created.stdout)).toEqual({ command: "composition", id: "reusable-image", created: true, rev: 1, designSystem: "yandex-pay", envelope: envelopeOf("composition", true), cache: CACHE_OFF });
 
     const updated = await run(api, ["composition", "reusable-image", secondPath, "--design-system", "yandex-pay", "--json"]);
     expect(updated.exitCode).toBe(0);
-    expect(JSON.parse(updated.stdout)).toEqual({ command: "composition", id: "reusable-image", created: false, rev: 2, designSystem: "yandex-pay", cache: CACHE_OFF });
+    expect(JSON.parse(updated.stdout)).toEqual({ command: "composition", id: "reusable-image", created: false, rev: 2, designSystem: "yandex-pay", envelope: envelopeOf("composition", true), cache: CACHE_OFF });
 
     const published = await run(api, ["composition", "publish", "reusable-image", "--json"]);
     expect(published.exitCode).toBe(0);
-    expect(JSON.parse(published.stdout)).toEqual({ command: "composition publish", id: "reusable-image", version: 1, rev: 2, cache: CACHE_OFF });
+    expect(JSON.parse(published.stdout)).toEqual({ command: "composition publish", id: "reusable-image", version: 1, rev: 2, envelope: envelopeOf("composition publish", true), cache: CACHE_OFF });
     const meta = await (await fetch(`${api}/compositions/reusable-image`)).json() as { headRev: number; publishedVersion: number; doc: { name: string } };
     expect(meta).toMatchObject({ headRev: 2, publishedVersion: 1, doc: { name: "Updated reusable image" } });
   });
@@ -603,6 +610,7 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
     expect(JSON.parse(component.stdout)).toEqual({
       command: "delete", kind: "components", id: "retire-me", deleted: true, cache: CACHE_OFF,
       existence: { source: "direct-network", refreshed: false, status: 200 },
+      envelope: envelopeOf("delete", true),
     });
     expect(db.query("SELECT deleted_at IS NOT NULL gone FROM components WHERE id='retire-me'").get()).toEqual({ gone: 1 });
 
@@ -2138,7 +2146,7 @@ describe("author driver acceptance summary (W8)", () => {
     expect(payload.remediationGroups).toEqual(FULL_RUN.remediationGroups);
     expect(payload.progress).toEqual(FULL_RUN.progress);
     expect(Object.keys(payload).sort()).toEqual([
-      "cache", "candidateId", "caseSetId", "command", "componentId", "createdAt", "eta", "evidenceManifestHash",
+      "cache", "candidateId", "caseSetId", "command", "componentId", "createdAt", "envelope", "eta", "evidenceManifestHash",
       "exitCode", "failedCases", "finishedAt", "gates", "idempotencyKey", "impact", "policy",
       "progress", "refresh", "remediationGroups", "runId", "startedAt", "status", "statusReason",
     ]);
@@ -2731,5 +2739,78 @@ describe("author driver case-set validate (W6)", () => {
     for (const args of [["case-set", "validate"], ["case-set", "validate", "pay-card", "matrix.json"]]) {
       expect(() => parseArgs(args)).toThrow();
     }
+  });
+});
+
+/**
+ * W6a: агентская квитанция `envelope` — один вложенный ключ поверх прежнего `--json`-payload.
+ * Инвариант волны один и проверяется таблицей по вербам: `envelope.ok === (exit === 0)`, версия
+ * схемы 1, `command` — имя верба (у общего обработчика отказа — верб из argv, а не шаг запроса).
+ */
+describe("author driver receipt envelope (W6a)", () => {
+  test("ok matches the exit code for every verb, and the command names the verb", async () => {
+    const { api, db, directory } = await setup();
+    const ready = await fixture("env-ready");
+    await saveDoc(api, ready);
+    const screenId = ready.screens[0]!.id;
+    const documentPath = resolve(directory, "env-doc.json");
+    await Bun.write(documentPath, JSON.stringify(await fixture("env-saved")));
+    seedComponent(db, "env-stars", "EnvStars");
+    seedPinnedPrototype(db, "env-pinned", "env-stars", "EnvStars");
+    await createThreeRevisions(api, "env-diff");
+    const expectedPath = resolve(directory, "env-expected.json");
+    const actualPath = resolve(directory, "env-actual.json");
+    await Bun.write(actualPath, JSON.stringify({ kind: "geometry", surface: "component", rects: expectFixtureRects() }));
+    await Bun.write(expectedPath, JSON.stringify({ elements: [{ key: "stack", size: { width: 328, height: 56 }, gap: 8, padding: 16 }] }));
+    const assetId = await uploadAsset(api);
+    await saveDoc(api, await assetDoc("env-broken", assetId));
+    dropAssets(db);
+
+    // `ok` в таблице — ожидание волны, а не эхо прогона: рядом стоит независимая проверка
+    // «ok === (exit === 0)», поэтому строка ловит и перепутанный знак, и уехавший exit code.
+    const table: { argv: string[]; command: string; ok: boolean }[] = [
+      { argv: ["get", "prototypes"], command: "get", ok: true },
+      { argv: ["get", "components", "nope"], command: "get", ok: false },
+      { argv: ["catalog", "list", "yandex-pay"], command: "catalog list", ok: true },
+      { argv: ["catalog", "search", "yandex-pay", "--intent", "payment card"], command: "catalog search", ok: true },
+      { argv: ["catalog", "get", "yandex-pay", "Overlay"], command: "catalog get", ok: true },
+      { argv: ["catalog", "yandex-pay"], command: "catalog", ok: true },
+      { argv: ["design-system", "env-system", "Env system", "envelope fixture"], command: "design-system", ok: true },
+      { argv: ["prototype", documentPath], command: "prototype", ok: true },
+      { argv: ["diff", "env-diff", "1"], command: "diff", ok: true },
+      { argv: ["expect", expectedPath, actualPath], command: "expect", ok: false },
+      { argv: ["status", "env-ready", screenId], command: "status", ok: true },
+      { argv: ["readiness", "env-ready"], command: "readiness", ok: true },
+      { argv: ["readiness", "env-broken"], command: "readiness", ok: false },
+      { argv: ["publish", "env-broken", "--verify"], command: "publish", ok: false },
+      { argv: ["publish", "env-ready", "--verify"], command: "publish", ok: true },
+      { argv: ["usages", "env-stars"], command: "usages", ok: true },
+      { argv: ["audit", "--design-system", "yandex-pay"], command: "audit", ok: true },
+      { argv: ["audit", "--versions"], command: "audit versions", ok: true },
+      { argv: ["delete", "prototype", "env-saved"], command: "delete", ok: true },
+    ];
+
+    for (const row of table) {
+      const result = await run(api, [...row.argv, "--json"]);
+      const payload = JSON.parse(result.stdout) as { envelope?: Record<string, unknown> };
+      const envelope = payload.envelope;
+      expect(`${row.argv.join(" ")}: ${JSON.stringify(envelope)}`).toContain("\"schemaVersion\":1");
+      expect(envelope).toMatchObject({ schemaVersion: 1, command: row.command, ok: row.ok, summary: {} });
+      expect(Array.isArray(envelope?.items)).toBe(true);
+      expect(Array.isArray(envelope?.artifacts)).toBe(true);
+      expect(Array.isArray(envelope?.warnings)).toBe(true);
+      expect(Array.isArray(envelope?.nextActions)).toBe(true);
+      // Единственный инвариант W6a: конверт не считает успех сам, он публикует exit code верба.
+      expect(envelope?.ok).toBe(result.exitCode === 0);
+    }
+  }, 60_000);
+
+  test("the human-readable mode carries no envelope: text output is unchanged", async () => {
+    const { api } = await setup();
+    await saveDoc(api, await fixture("env-text"));
+    const human = await run(api, ["readiness", "env-text"]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).not.toContain("envelope");
+    expect(human.stdout).not.toContain("schemaVersion");
   });
 });

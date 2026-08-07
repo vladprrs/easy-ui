@@ -29,6 +29,33 @@ declare module "*/author/driver.mjs" {
     };
   }
   export const flagSpecs: Readonly<Record<string, Readonly<Record<string, DriverFlagSpec>>>>;
+  /**
+   * Агентская квитанция `--json`-вывода (план 2026-08-07 §1.4, W6a): один вложенный ключ
+   * `envelope` рядом с прежними ключами payload. `ok` равен `exitCode === EXIT.ok` верба;
+   * `summary` в W6a пуст — per-verb контракты приезжают в W6b.
+   */
+  export interface DriverEnvelope {
+    schemaVersion: number;
+    command: string | null;
+    ok: boolean;
+    summary: Record<string, unknown>;
+    items: unknown[];
+    artifacts: unknown[];
+    warnings: unknown[];
+    nextActions: unknown[];
+  }
+  /** Вход `buildEnvelope`: `ok` обязателен, остальное — необязательные поля каркаса. */
+  export interface DriverEnvelopeInput {
+    command?: string | null;
+    ok: boolean;
+    summary?: Record<string, unknown>;
+    items?: readonly unknown[];
+    artifacts?: readonly unknown[];
+    warnings?: readonly unknown[];
+    nextActions?: readonly unknown[];
+  }
+  export const ENVELOPE_SCHEMA_VERSION: number;
+  export function buildEnvelope(envelope: DriverEnvelopeInput): DriverEnvelope;
   export function parseArgs(argv: readonly string[]): DriverParsedArgs;
   export function rendererPreflightWarning(capabilities: unknown): string | null;
   export interface DriverViewport { width: number; height: number }
