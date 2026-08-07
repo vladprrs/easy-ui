@@ -216,6 +216,9 @@ function orderedCases(): [string, Case][] {
     ["POST /api/prototypes/{id}/lifecycle", { run: () => call("POST", "/api/prototypes/contract-proto/lifecycle", { kind: "evidence", tags: ["contract"], derivedFrom: null }), expected: ok() }],
     ["GET /api/prototypes/{id}/readiness", { run: () => call("GET", "/api/prototypes/contract-proto/readiness"), expected: ok() }],
     ["POST /api/prototypes/{id}/repin", { run: () => call("POST", "/api/prototypes/contract-proto/repin?dryRun=1", {}), expected: ok() }],
+    // §W5 (план 2026-08-07): импакт-план галерейной съёмки — read-only, кадров у контрактного
+    // прототипа нет, поэтому все экраны приезжают `capture:new`.
+    ["POST /api/prototypes/{id}/snap-plan", { run: () => call("POST", "/api/prototypes/contract-proto/snap-plan", { viewport: { width: 320, height: 480 } }), expected: ok() }],
     // Сценарии взаимодействия (волна 6)
     ["POST /api/prototypes/{id}/scenarios", { run: () => call("POST", "/api/prototypes/contract-proto/scenarios", { id: "contract-scenario", name: "Contract scenario", steps: [{ type: "expectScreen", screenId: state.screenId }, { type: "expectText", text: "Hello" }] }), expected: ok(201) }],
     ["GET /api/prototypes/{id}/scenarios", { run: () => call("GET", "/api/prototypes/contract-proto/scenarios"), expected: ok() }],

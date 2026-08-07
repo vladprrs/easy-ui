@@ -19,6 +19,10 @@ import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { componentManifestHashOf, docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
+import {
+  impactedSnapEnabled, recordScreenFrame, screenFrameOf,
+  type ScreenFrameInputs,
+} from "../prototypes/screenFrames";
 import { resolveCaptureMode } from "../capture/modes";
 import { buildCaptureReceipt, type CaptureReceipt, type CaptureReceiptOutput, type CaptureReceiptTarget } from "../../src/capture/receipt";
 import { getJobReceipt, putAssetReceipt, putJobReceipt, putReceipt, readReceipt, receiptsDisabled } from "../capture/receiptStore";
@@ -446,6 +450,16 @@ interface InternalJob {
   owner: { kind: "prototype" | "component"; id: string };
   /** Адрес receipt'а этого капчура (R5), если он собран. */
   receiptSha256?: string;
+  /**
+   * Отпечаток кадра экрана (план 2026-08-07 §W5): считается **на постановке**, вместе с пинами и
+   * темой, и записывается в `prototype_screen_frames` после успешной съёмки. Присутствует только у
+   * обычной прототипной джобы: у probe-джобы кадра нет вовсе, а overlay-джоба рисует
+   * неопубликованный код — доказывать таким кадром reuse нельзя.
+   *
+   * Величина в приёмку не входит ни одним байтом (инвариант §W5): это ключ переиспользования
+   * галерейной съёмки, а не вход вердикта.
+   */
+  screenFrame?: { prototypeId: string; rev: number; screenId: string; fingerprint: string; inputs: ScreenFrameInputs };
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
   jobOutcome?: JobOutcome;
   /** Типизированная причина капчура (R3), если она известна: едет в `GET /api/screenshot-jobs/:id`. */
@@ -511,7 +525,12 @@ export const BACKGROUND_QUEUE_RESERVE = 2;
 export const GEOMETRY_RECT_LIMIT = REPEAT_RENDER_COST_BUDGET;
 const RESULT_TTL_MS = 10 * 60_000;
 
-function validateViewport(viewport: unknown, dsf: unknown): { viewport: Viewport; dsf: number } {
+/**
+ * Разбор и потолки поверхности съёмки. Экспортируется ради `POST /api/prototypes/:id/snap-plan`
+ * (§W5): план обязан нормализовать `viewport`/`dsf` **той же** функцией, что и постановка джобы, —
+ * иначе `1` и `1.0` дали бы разные отпечатки кадра у плана и у съёмки.
+ */
+export function validateViewport(viewport: unknown, dsf: unknown): { viewport: Viewport; dsf: number } {
   const vp = viewport as { width?: unknown; height?: unknown } | undefined;
   const width = vp?.width, height = vp?.height;
   const scale = dsf === undefined ? 1 : dsf;
@@ -521,6 +540,16 @@ function validateViewport(viewport: unknown, dsf: unknown): { viewport: Viewport
   if (!isInt(scale) || ![1, 2, 3].includes(scale)) throw new ApiError(422, "invalid_viewport", "deviceScaleFactor must be 1, 2, or 3");
   if (width * height * scale * scale > 20_000_000) throw new ApiError(422, "invalid_viewport", "width × height × dsf² must not exceed 20 megapixels");
   return { viewport: { width, height }, dsf: scale };
+}
+
+/**
+ * Отпечаток кадра экрана (§W5) на постановке джобы: провал вычисления гасится в «кадр не
+ * доказуем». Съёмка не обязана падать из-за учёта переиспользования — цена отказа ровно одна
+ * лишняя пересъёмка следующим планом.
+ */
+function safeScreenFrame<T>(compute: () => T): T | undefined {
+  try { return compute(); }
+  catch (error) { console.warn(`[screenshot] screen frame fingerprint skipped: ${error instanceof Error ? error.message : String(error)}`); return undefined; }
 }
 
 function propsHashOf(props: unknown): string {
@@ -730,6 +759,24 @@ export class ScreenshotService {
       : capturePins.filter((pin) => pin.candidate !== undefined)
         .map((pin) => ({ componentId: pin.id, candidateId: pin.candidate!.candidateId, bundleHash: pin.bundleHash, sourceHash: pin.candidate!.sourceHash }));
     const componentPins = capturePins.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
+    // §W5: отпечаток кадра экрана — из тех же фактов, что уже резолвила постановка (пины ревизии,
+    // тела композиций, пины темы, политика готовности). Второе чтение ревизии здесь было бы не
+    // экономией, а риском: план и запись обязаны считать одну и ту же величину.
+    // Отпечаток — бухгалтерия reuse, а не условие съёмки: любой отказ его вычисления обязан стоить
+    // ровно одну недоказанную пересъёмку, а не постановку джобы (`safeScreenFrame`).
+    const screenFrame = opts.probe === undefined && overrides.size === 0 && impactedSnapEnabled()
+      ? safeScreenFrame(() => screenFrameOf(this.deps.db, {
+        doc: full.doc,
+        prototypeInstanceId: full.prototypeInstanceId,
+        rev: snap.rev,
+        builtinCatalogHash: full.builtinCatalogHash,
+        pins: full.components.map((pin) => ({ id: pin.id, name: pin.name, version: pin.version, bundleHash: pin.bundleHash })),
+        compositions: full.compositions.map((entry) => ({ id: entry.id, doc: entry.doc })),
+        themePins,
+        viewport, dsf, theme,
+        ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
+      }, screenId))
+      : undefined;
     const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: captureManifestHash, builtinCatalogHash: full.builtinCatalogHash, designSystem: screenDesignSystem ?? null, dsMetaVersion: screenMetaVersion, rendererBuild: this.rendererBuild, ...(candidateOverlay === undefined ? {} : { candidateOverlay: candidateOverlay.map(({ componentId, candidateId, bundleHash }) => ({ componentId, candidateId, bundleHash })) }) };
     const allowedUrls = this.prototypeAllowedUrls(
       id,
@@ -752,6 +799,7 @@ export class ScreenshotService {
       // W2 (§1.5, триаж O-M4): опт-ин `readiness:"barrier"` прототипного запроса. Поле условное —
       // джоба без опт-ина обязана остаться байт-в-байт прежней (bootstrap без ключа `readiness`).
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
+      ...(screenFrame === undefined ? {} : { screenFrame: { prototypeId: id, rev: snap.rev, screenId, fingerprint: screenFrame.fingerprint, inputs: screenFrame.inputs } }),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
     return {jobId,expected,components:capturePins};
   }
@@ -1342,6 +1390,24 @@ export class ScreenshotService {
       if (receiptSha256 !== undefined) {
         try { await putAssetReceipt(this.deps.dataDir, ingest.asset.id, receiptSha256); }
         catch (error) { quality.runtimeWarnings.push(`receipt_asset_index_failed: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      // §W5: кадр экрана записывается **после** ингеста и никогда не валит джобу. Бухгалтерия
+      // reuse не важнее самого кадра: отказ записи уезжает предупреждением, а следующий план
+      // просто увидит меньше доказательств и снимет экран заново.
+      if (job.screenFrame !== undefined && impactedSnapEnabled()) {
+        try {
+          recordScreenFrame(this.deps.db, {
+            prototypeId: job.screenFrame.prototypeId, rev: job.screenFrame.rev, screenId: job.screenFrame.screenId,
+            screenFrameFingerprint: job.screenFrame.fingerprint,
+            pngSha256: result.pngSha256 ?? new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
+            receipt: {
+              assetId: ingest.asset.id,
+              ...(receiptSha256 === undefined ? {} : { captureReceiptSha256: receiptSha256 }),
+              capturedAt: new Date().toISOString(),
+              inputs: job.screenFrame.inputs,
+            },
+          });
+        } catch (error) { quality.runtimeWarnings.push(`screen_frame_record_failed: ${error instanceof Error ? error.message : String(error)}`); }
       }
       job.result = {
         kind: "image",

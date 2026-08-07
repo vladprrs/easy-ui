@@ -1033,6 +1033,38 @@ export const migrations = [
     db.run("ALTER TABLE acceptance_runs ADD COLUMN overlay_manifest_json TEXT");
     db.run("ALTER TABLE acceptance_runs ADD COLUMN overlay_hash TEXT");
   },
+  (db: Database) => {
+    // v34: кадры экранов галереи — `prototype_screen_frames` (план
+    // `docs/plans/2026-08-07-migration-feedback-wave.md` §1.7/§W5, ретроспектива P1.1).
+    //
+    // Таблица отвечает на один вопрос: «снимался ли уже кадр этого экрана ровно в этих условиях».
+    // Решения формы:
+    //
+    // 1. **Отпечаток в первичном ключе.** Одна ревизия экрана законно снимается в нескольких
+    //    условиях (light/dark, два вьюпорта), и ключ без `screen_frame_fingerprint` затирал бы
+    //    один кадр другим — reuse тёмной темы после светлой съёмки перестал бы доказываться.
+    //    Рост ограничен retention'ом по ревизиям (5 последних, sweep на записи).
+    // 2. **FK на ревизию, а не на прототип.** Кадр относится к паре `(prototype_id, rev)`, и
+    //    удаление ревизии обязано уносить его кадры тем же каскадом, что и пины.
+    // 3. **`receipt_json` nullable и потолочный (64 КБ).** В квитанции лежит разложенный кортеж
+    //    отпечатка — по нему план называет причину пересъёмки (renderer/theme/impacted). Строка
+    //    без квитанции остаётся валидным доказательством самого кадра: причина деградирует до
+    //    `impacted`, но reuse по совпавшему отпечатку продолжает работать.
+    // 4. **Индекс по отпечатку** — единственный горячий lookup плана («есть ли где-то кадр с этим
+    //    отпечатком»); он же покрывает выборку по прототипу.
+    //
+    // Rollback-window (§3.6): миграция **безопасна к откату образа** — таблица ничему не мешает,
+    // а старый код о ней не знает и квитанции игнорирует. Единственное последствие отката —
+    // накопленные кадры перестают доказывать reuse (обратно — тоже: план после отката-возврата
+    // просто увидит меньше строк и снимет больше кадров).
+    db.run(`CREATE TABLE prototype_screen_frames (
+      prototype_id TEXT NOT NULL, rev INTEGER NOT NULL, screen_id TEXT NOT NULL,
+      screen_frame_fingerprint TEXT NOT NULL, png_sha256 TEXT NOT NULL,
+      receipt_json TEXT, created_at TEXT NOT NULL,
+      PRIMARY KEY (prototype_id, rev, screen_id, screen_frame_fingerprint),
+      FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev) ON DELETE CASCADE)`);
+    db.run("CREATE INDEX prototype_screen_frames_fingerprint ON prototype_screen_frames (prototype_id, screen_frame_fingerprint)");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

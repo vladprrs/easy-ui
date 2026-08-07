@@ -18,6 +18,9 @@ import { writeAuditEvent } from "../audit";
 import { BundleClosure } from "../bundle/exporter";
 import { zipResponse } from "./bundles";
 import { computeReadiness } from "../readiness";
+import { buildSnapPlan, impactedSnapEnabled } from "../prototypes/screenFrames";
+import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
+import { validateViewport } from "../screenshot/service";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
 
@@ -186,6 +189,37 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
     recordPrototypeValidation(db,id,result.rev,issues,ok);
     db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,result.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:result.rev,restore:true}});
     return json(result,200,noStore);
+  }
+  // План импакт-съёмки галереи (план 2026-08-07 §W5): какие экраны обязаны быть сняты и почему,
+  // а какие переиспользуются с доказательством. Ручка **ничего не пишет и ничего не ставит в
+  // очередь** — это чистое чтение поверх уже записанных кадров.
+  //
+  // Гейта `EASYUI_ACCEPTANCE_MATRIX` здесь нет намеренно: план работает и без матричной приёмки —
+  // галерейная съёмка к ней не относится. Единственный переключатель — kill-switch волны.
+  if(tail[0]==="snap-plan"&&tail.length===1) {
+    if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    if(!impactedSnapEnabled()) throw new ApiError(404,"not_found","Impacted snap planning is disabled (EASYUI_IMPACTED_SNAP_DISABLED)");
+    requirePrototypeOwner(db,id,principal);
+    const b=objectBody(await readJson(request));
+    const rev=b.rev===undefined?undefined:integer(b.rev,"rev");
+    const version=b.version===undefined?undefined:integer(b.version,"version");
+    if(rev!==undefined&&version!==undefined) throw new ApiError(400,"invalid_request","rev and version are mutually exclusive");
+    // Нормализация поверхности — общей функцией постановки джобы: план и съёмка обязаны считать
+    // один и тот же отпечаток.
+    const {viewport,dsf}=validateViewport(b.viewport,b.deviceScaleFactor);
+    if(b.theme!==undefined&&b.theme!=="light"&&b.theme!=="dark") throw new ApiError(400,"invalid_request","theme must be light or dark");
+    if(b.readiness!==undefined&&b.readiness!=="barrier") throw new ApiError(400,"invalid_request","readiness must be \"barrier\"");
+    let screenIds:string[]|undefined;
+    if(b.screens!==undefined) {
+      if(!Array.isArray(b.screens)||b.screens.some(screen=>typeof screen!=="string"||screen.length===0)) throw new ApiError(400,"invalid_request","screens must be an array of screen ids");
+      screenIds=b.screens as string[];
+    }
+    return json(buildSnapPlan(db,{
+      prototypeId:id,rev,version,viewport,dsf,
+      theme:b.theme==="dark"?"dark":"light",
+      ...(b.readiness==="barrier"?{readinessPolicy:barrierAwareReadinessPolicy("gallery")}:{}),
+      ...(screenIds?{screenIds}:{}),
+    }),200,noStore);
   }
   if(tail[0]==="readiness"&&tail.length===1) {
     if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");

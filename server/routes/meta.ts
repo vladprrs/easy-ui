@@ -46,6 +46,7 @@ import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { TEXT_AA_PRESETS } from "../acceptance/gates/visual";
 import { prototypeCandidateOverlayMax } from "./screenshots";
+import { impactedSnapEnabled, SNAP_PLAN_MAX_SCREENS } from "../prototypes/screenFrames";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -155,6 +156,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // Не путать с `prototypeCandidateOverlayMax`: тот про **swap опубликованных** пинов
       // прототипного кадра, этот — про неопубликованные зависимости приёмочного графа.
       caseSetMaxOverlayNodes: CASE_SET_MAX_OVERLAY_NODES,
+      // Экранов в одном плане импакт-съёмки (план 2026-08-07 §W5). Потолок объявлен, потому что
+      // план стоит раскрытия композиций и резолва темы на каждый экран; 256 — с шестикратным
+      // запасом к крупнейшей известной галерее миграции YP v2 (43 экрана).
+      snapPlanMaxScreens: SNAP_PLAN_MAX_SCREENS,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,
@@ -295,6 +300,12 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // W5: `capture.surface:"viewport"` в case-set (внутренний stage-бокс, overlay-aware root,
       // paintMargin 16, две ветки канвы сравнения).
       captureViewportSurface: options.acceptanceMatrix === true,
+      // ── План 2026-08-07 (ретроспектива миграции YP v2) ──
+      // §W5: `POST /api/prototypes/:id/snap-plan` — импакт-план галерейной съёмки (какие экраны
+      // снимать и почему, какие переиспользуются с доказательством). Матричной приёмкой **не**
+      // гейтится: галерея к ней не относится. false — при `EASYUI_IMPACTED_SNAP_DISABLED=1`, и
+      // тогда ручка отвечает 404, а кадры не пишутся вовсе (потолок плана — `limits.snapPlanMaxScreens`).
+      impactedSnap: impactedSnapEnabled(),
     },
     // W4: именованные пресеты live-text AA-бюджета — значения объявляет сервер, автор манифеста
     // выбирает только имя (`cases[].textAaBudget`). Пороги видны для воспроизводимости вердикта.

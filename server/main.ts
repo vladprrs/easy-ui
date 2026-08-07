@@ -46,6 +46,7 @@ import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
 import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
+import { impactedSnapEnabled } from "./prototypes/screenFrames";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -266,6 +267,11 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // создавать нельзя — старый образ промоутит такой ран **без** верификации графа зависимостей.
     if(!candidateOverlayEnabled()) console.warn("[acceptance] EASYUI_CANDIDATE_OVERLAY_DISABLED=1: candidate dependency overlay off, case-set manifests with candidateOverlay are refused (422 candidate_overlay_disabled)");
     if(RESOURCE_BARRIER_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_DISABLED=1: resource barrier off, profiles fall back to their pre-wave readiness policies (default-v1 → v1, pixel-strict-v1 → v2, reference → v2)");
+    // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —
+    // ручку плана (404) и запись кадров экранов на горячем пути съёмки, — потому что писать в
+    // таблицу v34 при откате образа некуда. Уже записанные кадры не трогаются: включение обратно
+    // просто снова начинает их доказывать.
+    if(!impactedSnapEnabled()) console.warn("[capture] EASYUI_IMPACTED_SNAP_DISABLED=1: impacted snap planning off, POST /api/prototypes/:id/snap-plan answers 404 and screen frames are not recorded");
     const dataDir=process.env.DATA_DIR??"data";
     // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,
     // а DATA_DIR в проде — постоянный том (план 2026-07-31 §3.5).

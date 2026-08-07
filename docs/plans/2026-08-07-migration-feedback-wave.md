@@ -212,6 +212,8 @@ clipExpectation: z.literal("root-does-not-clip-layout").optional(),
 
 **Done (AC §7):** все три пункта; KPI «recaptured ≤ new + impacted».
 
+**Execution-триаж W5 (2026-08-07, принято при реализации):** (1) `rev` НЕ входит в хеш кадра (остался колонкой строки/квитанции) — буквальное вхождение `rev` в кортеж §1.7 противоречило AC волны «addition-only ⇒ 1 capture + N proven-reuse» (любое сохранение делало бы все экраны недоказуемыми); пиксельную информацию покрывают `screenSpecHash` + пин-подмножество + `builtinCatalogHash` + тема; вместо него в кортеж добавлен `screenId`. (2) Отдельного env-гейта `EASYUI_IMPACTED_SNAP` нет — фича включена по умолчанию, объявлена `features.impactedSnap`, выключается `EASYUI_IMPACTED_SNAP_DISABLED=1` (прецедент `EASYUI_VALIDATE_DISABLED`). (3) PK `prototype_screen_frames` включает fingerprint (одна ревизия экрана легитимно снимается в нескольких условиях — light/dark, viewport'ы). (4) `limits.snapPlanMaxScreens = 256`, отказ `snap_plan_too_many_screens`. (5) Kill-switch гейтит и роут, и запись кадров (откат образа в окне v34 не пишет в несуществующую таблицу).
+
 ### W4. Migration commit transaction (P0.4) — миграция v35
 
 Как v1 плюс триаж (§1.3): фаза `verify`; `idempotency_key NOT NULL` + partial unique in-flight по `component_id`; watchdog на старте + на запросах; `regressionMode` в квитанции; гейт `EASYUI_ACCEPTANCE_MATRIX`; честная граница KPI. API/фазы/квитанция/dry-run — как v1. v35: таблица `migration_commits` (без nullable-ключа идемпотентности).

@@ -1132,7 +1132,8 @@ describe("author driver preview verb", () => {
     expect(badProps.exitCode).toBe(1);
     expect(JSON.parse(badProps.stdout)).toMatchObject({ failed: true, status: 422, code: "invalid_props" });
     expect(badProps.stderr).toContain("prop secretDetail must be of type string");
-  });
+    // Таймаут поднят с дефолтных 5с: под полным `bun test server` тест флейчит по нагрузке.
+  }, 30_000);
 
   test("429 queue_full is retried with backoff until the queue drains", async () => {
     let release!: () => void;

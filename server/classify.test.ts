@@ -29,6 +29,8 @@ function v14():Database {
   db.run("ALTER TABLE design_system_versions DROP COLUMN spacing_resolver");
   // v24 завела таблицу пинов темы (мульти-поверхностные документы) — тот же приём.
   db.run("DROP TABLE IF EXISTS prototype_revision_theme_pins");
+  // v34 завела кадры экранов галереи (impacted snap) — тот же приём.
+  db.run("DROP TABLE IF EXISTS prototype_screen_frames");
   // v25 завела durable-слой acceptance и колонки-свидетельства — снимаем таблицы и колонки,
   // иначе повторный migrate() упрётся в "table already exists"/duplicate column.
   for(const table of ["acceptance_case_results","acceptance_cases","acceptance_runs","component_candidates"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);

@@ -31759,6 +31759,295 @@
         "x-easyui-validated": true
       }
     },
+    "/api/prototypes/{id}/snap-plan": {
+      "post": {
+        "operationId": "post_prototypes_id_snap_plan",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "deviceScaleFactor": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "readiness": {
+                    "const": "barrier",
+                    "type": "string"
+                  },
+                  "rev": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "screens": {
+                    "items": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "theme": {
+                    "enum": [
+                      "light",
+                      "dark"
+                    ],
+                    "type": "string"
+                  },
+                  "version": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "viewport": {
+                    "properties": {
+                      "height": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "width": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "width",
+                      "height"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "viewport"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "deviceScaleFactor": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "prototypeId": {
+                      "type": "string"
+                    },
+                    "rev": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "screens": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "action": {
+                            "enum": [
+                              "capture",
+                              "reuse"
+                            ],
+                            "type": "string"
+                          },
+                          "reason": {
+                            "enum": [
+                              "proven-reuse",
+                              "new",
+                              "unprovable",
+                              "renderer",
+                              "theme",
+                              "impacted"
+                            ],
+                            "type": "string"
+                          },
+                          "reuseReceipt": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "previousPngSha256": {
+                                "type": "string"
+                              },
+                              "previousRev": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "provenAt": {
+                                "type": "string"
+                              },
+                              "screenFrameFingerprint": {
+                                "type": "string"
+                              },
+                              "screenId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "screenId",
+                              "screenFrameFingerprint",
+                              "previousRev",
+                              "previousPngSha256",
+                              "provenAt"
+                            ],
+                            "type": "object"
+                          },
+                          "screenFrameFingerprint": {
+                            "type": "string"
+                          },
+                          "screenId": {
+                            "type": "string"
+                          },
+                          "unprovable": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "screenId",
+                          "action",
+                          "reason",
+                          "screenFrameFingerprint"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "summary": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capture": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "reuse": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "total": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "capture",
+                        "reuse"
+                      ],
+                      "type": "object"
+                    },
+                    "theme": {
+                      "enum": [
+                        "light",
+                        "dark"
+                      ],
+                      "type": "string"
+                    },
+                    "viewport": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "height": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "width": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "prototypeId",
+                    "rev",
+                    "viewport",
+                    "deviceScaleFactor",
+                    "theme",
+                    "screens",
+                    "summary"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | revision_not_found | version_not_found | screen_not_found (a screen id in `screens[]` does not exist in the resolved revision) | not_found (impacted snap planning is disabled (EASYUI_IMPACTED_SNAP_DISABLED=1))"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_viewport | snap_plan_too_many_screens (more than limits.snapPlanMaxScreens screens were requested)"
+          }
+        },
+        "summary": "Plan an impact-driven gallery re-capture (plan 2026-08-07 §W5, `capabilities.features.impactedSnap`): for every screen of the resolved revision the server answers `capture` or `reuse` and NAMES the reason. Read-only — it enqueues nothing and writes nothing. The proof is `screenFrameFingerprint` = sha256 of the tuple that decides the pixels of ONE screen: the prototype handshake tuple (`prototypeInstanceId`, `screenId`, `componentManifestHash` OF THE SCREEN'S PIN SUBSET, `builtinCatalogHash`, the design system OF THE SCREEN'S SURFACE and its pinned theme version — `rev` is deliberately NOT hashed, it is provenance: adding one screen is a new revision, and hashing `rev` would make every other screen unprovable exactly when the feature is supposed to prove them), `screenSpecHash` (the screen plus the document-level render inputs `state`/`computed`/`device`/`designSystem`/`surfaces` — navigation and naming are excluded so that ADDING a screen costs exactly one capture), `viewport`/`deviceScaleFactor`/`theme`, `readinessPolicyHash`, `rendererFingerprint`, and the RESOLVED theme meta version of that screen's design system plus its spacing-resolver version (there is no separate theme content hash: design-system versions are immutable and append-only, so an unpinned theme resolves to the head version and a new theme version honestly moves every screen of that system). A frame is reused only when a frame with the SAME fingerprint was already captured for this prototype (`reuseReceipt` carries `previousRev`, `previousPngSha256`, `provenAt`); anything else is a capture whose `reason` is `new` (no frame of this screen at all), `renderer` (the renderer fingerprint moved — the readiness policy is part of it), `theme` (theme version, pin, spacing resolver or builtin catalog hash moved), `unprovable` or `impacted`. UNPROVABLE MEANS CAPTURE: a screen holding an element whose resolved tree does not expand completely — a composition whose body is not resolvable at that revision, a type with no component pin, nesting deeper than the expansion limit — is ALWAYS captured, and `unprovable` says which element. `readiness: \"barrier\"` plans against the same readiness policy the barrier opt-in of the screenshot route uses; `screens[]` limits the plan to a subset (at most `limits.snapPlanMaxScreens`). Frames are recorded by the ordinary gallery capture path (asset-delivered prototype screenshots without a probe and without a candidate overlay) and retained for the last 5 revisions per prototype. The fingerprint is a REUSE key only: it enters no acceptance fingerprint and no verdict. With EASYUI_IMPACTED_SNAP_DISABLED=1 the route answers 404 and no frames are recorded.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/prototypes/{id}/status": {
       "post": {
         "operationId": "post_prototypes_id_status",

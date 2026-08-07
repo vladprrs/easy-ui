@@ -1173,6 +1173,47 @@ export const readinessReportSchema = z.strictObject({
   enabledGates: z.record(z.string(), z.enum(["fail", "warn"])),
 });
 
+// --- Импакт-план галерейной съёмки (план 2026-08-07 §W5, миграция v34) ---
+const snapPlanScreenSchema = z.strictObject({
+  screenId: z.string(),
+  action: z.enum(["capture", "reuse"]),
+  reason: z.enum(["proven-reuse", "new", "unprovable", "renderer", "theme", "impacted"]),
+  screenFrameFingerprint: z.string(),
+  unprovable: z.string().optional(),
+  reuseReceipt: z.strictObject({
+    screenId: z.string(), screenFrameFingerprint: z.string(),
+    previousRev: positiveInt, previousPngSha256: z.string(), provenAt: isoDate,
+  }).optional(),
+});
+
+export const snapPlanContract = registerContract({
+  method: "POST", path: "/api/prototypes/{id}/snap-plan",
+  summary: "Plan an impact-driven gallery re-capture (plan 2026-08-07 §W5, `capabilities.features.impactedSnap`): for every screen of the resolved revision the server answers `capture` or `reuse` and NAMES the reason. Read-only — it enqueues nothing and writes nothing. The proof is `screenFrameFingerprint` = sha256 of the tuple that decides the pixels of ONE screen: the prototype handshake tuple (`prototypeInstanceId`, `screenId`, `componentManifestHash` OF THE SCREEN'S PIN SUBSET, `builtinCatalogHash`, the design system OF THE SCREEN'S SURFACE and its pinned theme version — `rev` is deliberately NOT hashed, it is provenance: adding one screen is a new revision, and hashing `rev` would make every other screen unprovable exactly when the feature is supposed to prove them), `screenSpecHash` (the screen plus the document-level render inputs `state`/`computed`/`device`/`designSystem`/`surfaces` — navigation and naming are excluded so that ADDING a screen costs exactly one capture), `viewport`/`deviceScaleFactor`/`theme`, `readinessPolicyHash`, `rendererFingerprint`, and the RESOLVED theme meta version of that screen's design system plus its spacing-resolver version (there is no separate theme content hash: design-system versions are immutable and append-only, so an unpinned theme resolves to the head version and a new theme version honestly moves every screen of that system). A frame is reused only when a frame with the SAME fingerprint was already captured for this prototype (`reuseReceipt` carries `previousRev`, `previousPngSha256`, `provenAt`); anything else is a capture whose `reason` is `new` (no frame of this screen at all), `renderer` (the renderer fingerprint moved — the readiness policy is part of it), `theme` (theme version, pin, spacing resolver or builtin catalog hash moved), `unprovable` or `impacted`. UNPROVABLE MEANS CAPTURE: a screen holding an element whose resolved tree does not expand completely — a composition whose body is not resolvable at that revision, a type with no component pin, nesting deeper than the expansion limit — is ALWAYS captured, and `unprovable` says which element. `readiness: \"barrier\"` plans against the same readiness policy the barrier opt-in of the screenshot route uses; `screens[]` limits the plan to a subset (at most `limits.snapPlanMaxScreens`). Frames are recorded by the ordinary gallery capture path (asset-delivered prototype screenshots without a probe and without a candidate overlay) and retained for the last 5 revisions per prototype. The fingerprint is a REUSE key only: it enters no acceptance fingerprint and no verdict. With EASYUI_IMPACTED_SNAP_DISABLED=1 the route answers 404 and no frames are recorded.",
+  requestSchema: z.object({
+    rev: z.number().int().optional(), version: z.number().int().optional(),
+    viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(),
+    theme: z.enum(["light", "dark"]).optional(),
+    readiness: z.literal("barrier").optional(),
+    screens: z.array(z.string().min(1)).optional(),
+  }),
+  responseSchema: z.strictObject({
+    prototypeId: z.string(), rev: positiveInt,
+    viewport: viewportSchema, deviceScaleFactor: z.number().int(), theme: z.enum(["light", "dark"]),
+    screens: z.array(snapPlanScreenSchema),
+    summary: z.strictObject({ total: z.number().int(), capture: z.number().int(), reuse: z.number().int() }),
+  }),
+  errors: [
+    errorCatalog.invalidRequest,
+    { status: 403, code: "forbidden" },
+    errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound,
+    { status: 404, code: "version_not_found" },
+    { status: 404, code: "screen_not_found", description: "a screen id in `screens[]` does not exist in the resolved revision" },
+    { status: 404, code: "not_found", description: "impacted snap planning is disabled (EASYUI_IMPACTED_SNAP_DISABLED=1)" },
+    { status: 422, code: "invalid_viewport" },
+    { status: 422, code: "snap_plan_too_many_screens", description: "more than limits.snapPlanMaxScreens screens were requested" },
+  ],
+});
+
 export const getPrototypeReadinessContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/readiness",
   summary: "Ready-to-publish report for the head revision: one row per gate, plus the blocking set. Read-only — it never enqueues screenshot or visual jobs.",
