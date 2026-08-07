@@ -793,6 +793,8 @@ describe("promotion policy (план 2026-08-04 W3)", () => {
       policyProfiles: ["default-v1", "pixel-strict-v1"],
       defaultPolicyProfile: "default-v1",
       promotionPolicyProfiles: ["default-v1", "pixel-strict-v1"],
+      geometryContractVersion: 2,
+      comparisonSurfaces: ["root", "layoutUnion", "paint", "referenceExport"],
     });
   }, 180_000);
 });
