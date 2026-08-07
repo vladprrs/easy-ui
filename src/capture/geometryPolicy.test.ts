@@ -187,3 +187,235 @@ describe("geometry policy", () => {
     expect(drift(5).policyVerdict).toBe("layout-overflow");
   });
 });
+
+/**
+ * Четыре поверхности геометрии (план `docs/plans/2026-08-07-migration-feedback-wave.md` §W1a).
+ *
+ * Два предмета, и первый важнее второго: **легаси-вход обязан исполнять прежний код байт-в-байт**
+ * (иначе включённый по умолчанию recompute сдвинул бы вердикты всего накопленного корпуса при
+ * замороженном `CASE_FINGERPRINT_ALGO_VERSION = 7`), и только потом — сами per-surface вердикты.
+ */
+describe("geometry surfaces (W1a)", () => {
+  /**
+   * Golden байт-идентичности легаси-ветки. Литералы, а не пересчёт: значение, вычисленное после
+   * правки, доказывало бы только само себя. Матрица покрывает все пять исходов легаси-вердикта.
+   */
+  const LEGACY_MATRIX: [string, GeometryPolicyInput][] = [
+    ["clean", { layoutBounds: layout, paintBounds: { ...layout }, paintBoundsSource: "alpha" }],
+    ["paint-overflow-not-clipped", {
+      layoutBounds: layout, paintBounds: { x: 46.5, y: 47, width: 175, height: 130 },
+      paintBoundsSource: "alpha", effectSources: [blurSource],
+    }],
+    ["paint-overflow-clipped", {
+      layoutBounds: layout, paintBounds: { x: 46.5, y: 47, width: 175, height: 130 },
+      paintBoundsSource: "alpha", effectSources: [blurSource],
+      clipChain: [{ key: "card", property: "overflow", value: "hidden hidden", effective: true }],
+    }],
+    ["layout-overflow", {
+      layoutBounds: layout, paintBounds: { ...layout }, paintBoundsSource: "alpha",
+      tolerances: { expectedGeometry: { width: 120, height: 96 } },
+    }],
+    ["indeterminate (no layout)", { layoutBounds: null, paintBounds: null }],
+    ["indeterminate (no paint)", { layoutBounds: layout, paintBounds: null }],
+    ["indeterminate (clamped)", {
+      layoutBounds: layout, paintBounds: { ...layout }, paintBoundsSource: "alpha",
+      paintClamped: { left: true, right: false, top: false, bottom: false },
+    }],
+  ];
+
+  it("легаси-вход исполняет прежний код: ни одного нового ключа в результате", () => {
+    for (const [name, input] of LEGACY_MATRIX) {
+      const result = evaluateGeometryPolicy(input);
+      // Новые поля кладутся только новым путём — присутствие ключа со значением `undefined` уже
+      // сдвинуло бы `geometry.json` и производные артефакты всего корпуса.
+      expect(Object.keys(result).sort(), name).toEqual(
+        ["clippedBy", "expectedGeometryDelta", "overflow", "policyVerdict", "reasons"],
+      );
+      expect("surfaces" in result, name).toBe(false);
+    }
+  });
+
+  it("легаси-вердикты байт-в-байт: golden JSON всей матрицы", () => {
+    const golden = LEGACY_MATRIX.map(([name, input]) => [name, evaluateGeometryPolicy(input)] as const);
+    expect(JSON.stringify(golden)).toBe(JSON.stringify([
+      ["clean", { policyVerdict: "clean", overflow: { left: 0, right: 0, top: 0, bottom: 0, sources: [] }, expectedGeometryDelta: null, clippedBy: null, reasons: [] }],
+      ["paint-overflow-not-clipped", {
+        policyVerdict: "paint-overflow-not-clipped",
+        overflow: {
+          left: 17.5, right: 17.5, top: 17, bottom: 17,
+          sources: [{ elementKey: "highlight", elementPath: "div>div.highlight", cause: "filter:blur(68px)", contribution: { left: 17.5, right: 17.5, top: 17, bottom: 17, total: 69 } }],
+        },
+        expectedGeometryDelta: null, clippedBy: null,
+        reasons: ["ink extends past the layout bounds by left 17.5 / right 17.5 / top 17 / bottom 17 CSS px; sources: highlight (filter:blur(68px), 69px)"],
+      }],
+      ["paint-overflow-clipped", {
+        policyVerdict: "paint-overflow-clipped",
+        overflow: {
+          left: 17.5, right: 17.5, top: 17, bottom: 17,
+          sources: [{ elementKey: "highlight", elementPath: "div>div.highlight", cause: "filter:blur(68px)", contribution: { left: 17.5, right: 17.5, top: 17, bottom: 17, total: 69 } }],
+        },
+        expectedGeometryDelta: null, clippedBy: { key: "card", property: "overflow", value: "hidden hidden" },
+        reasons: ["ink extends past the layout bounds by left 17.5 / right 17.5 / top 17 / bottom 17 CSS px and is clipped by overflow: hidden hidden; sources: highlight (filter:blur(68px), 69px)"],
+      }],
+      ["layout-overflow", {
+        policyVerdict: "layout-overflow", overflow: { left: 0, right: 0, top: 0, bottom: 0, sources: [] },
+        expectedGeometryDelta: { expected: { width: 120, height: 96 }, actual: { width: 140, height: 96 }, widthDelta: 20, heightDelta: 0 },
+        clippedBy: null,
+        reasons: ["layout bounds 140×96 differ from the expected 120×96 (Δ 20×0 CSS px)"],
+      }],
+      ["indeterminate (no layout)", {
+        policyVerdict: "indeterminate", overflow: { left: 0, right: 0, top: 0, bottom: 0, sources: [] },
+        expectedGeometryDelta: null, clippedBy: null,
+        reasons: ["layout bounds were not measured: the capture surface reported no in-flow descendant boxes"],
+      }],
+      ["indeterminate (no paint)", {
+        policyVerdict: "indeterminate", overflow: { left: 0, right: 0, top: 0, bottom: 0, sources: [] },
+        expectedGeometryDelta: null, clippedBy: null,
+        reasons: ["paint bounds were not measured: capture the case with probe=\"paint\" (transparent surface + margin field)"],
+      }],
+      ["indeterminate (clamped)", {
+        policyVerdict: "indeterminate", overflow: { left: 0, right: 0, top: 0, bottom: 0, sources: [] },
+        expectedGeometryDelta: null, clippedBy: null,
+        reasons: ["ink touches the left edge of the capture field: increase the paint margin and recapture"],
+      }],
+    ]));
+  });
+
+  it("пустая карта поверхностей — всё ещё легаси-вход (дискриминатор это декларация, а не ключ)", () => {
+    const result = evaluateGeometryPolicy({
+      layoutBounds: layout, paintBounds: { ...layout }, paintBoundsSource: "alpha",
+      tolerances: { expectedSurfaces: {} },
+    });
+    expect(result.surfaces).toBeUndefined();
+    expect(result.policyVerdict).toBe("clean");
+  });
+
+  /**
+   * Головной кейс ретроспективы (Payment Schedule): одно число `expectedGeometry` отвечало на
+   * четыре разных вопроса — корень 343×88, экспорт Figma 367×88, union потомков 480×88 при одной
+   * ширине поля и 558×88 при другой. Теперь каждая величина проверяется своей поверхностью.
+   */
+  const PAYMENT_SCHEDULE = {
+    layoutBounds: { x: 64, y: 64, width: 480, height: 88 },
+    paintBounds: { x: 64, y: 64, width: 480, height: 88 },
+    paintBoundsSource: "alpha" as const,
+    rootBounds: { x: 64, y: 64, width: 343, height: 88 },
+    referenceExportDims: { width: 367, height: 88 },
+  };
+
+  it("Payment Schedule: четыре поверхности — четыре независимых вердикта", () => {
+    const result = evaluateGeometryPolicy({
+      ...PAYMENT_SCHEDULE,
+      tolerances: {
+        expectedSurfaces: {
+          root: { width: 343, height: 88 },
+          layoutUnion: { width: 480, height: 88 },
+          paint: { width: 480, height: 88 },
+          referenceExport: { width: 367, height: 88 },
+        },
+      },
+    });
+    expect(result.policyVerdict).toBe("clean");
+    expect(result.divergingSurfaces).toEqual([]);
+    for (const name of ["root", "layoutUnion", "paint", "referenceExport"] as const) {
+      expect(result.surfaces?.[name]?.verdict, name).toBe("clean");
+    }
+    // Ровно тот же кадр против **другой** ширины поля: расходится только union, и вердикт называет
+    // именно его — а не обвиняет компонент целиком, как делал единственный `expectedGeometry`.
+    const otherWidth = evaluateGeometryPolicy({
+      ...PAYMENT_SCHEDULE,
+      tolerances: {
+        expectedSurfaces: {
+          root: { width: 343, height: 88 },
+          layoutUnion: { width: 558, height: 88 },
+          referenceExport: { width: 367, height: 88 },
+        },
+      },
+    });
+    expect(otherWidth.policyVerdict).toBe("surface-mismatch");
+    expect(otherWidth.divergingSurfaces).toEqual(["layoutUnion"]);
+    expect(otherWidth.surfaces?.root?.verdict).toBe("clean");
+    expect(otherWidth.surfaces?.referenceExport?.verdict).toBe("clean");
+    // Проекция на легаси-поле сохраняется: прежние читатели метрик не ломаются.
+    expect(otherWidth.expectedGeometryDelta).toEqual({
+      expected: { width: 558, height: 88 }, actual: { width: 480, height: 88 },
+      widthDelta: -78, heightDelta: 0,
+    });
+    expect(geometryVerdictBlocks(otherWidth.policyVerdict, otherWidth.overflow)).toBe(true);
+    // Бюджет краски и бланкетное разрешение к размеру поверхности отношения не имеют.
+    expect(geometryVerdictBlocks(otherWidth.policyVerdict, otherWidth.overflow, { allowPaintOverflow: true })).toBe(true);
+  });
+
+  it("порядок divergingSurfaces — root → layoutUnion → paint → referenceExport", () => {
+    const result = evaluateGeometryPolicy({
+      ...PAYMENT_SCHEDULE,
+      tolerances: {
+        expectedSurfaces: {
+          referenceExport: { width: 1, height: 1 },
+          paint: { width: 1, height: 1 },
+          layoutUnion: { width: 1, height: 1 },
+          root: { width: 1, height: 1 },
+        },
+      },
+    });
+    expect(result.divergingSurfaces).toEqual(["root", "layoutUnion", "paint", "referenceExport"]);
+  });
+
+  it("факта нет — `not-measured`, а не подстановка чужого числа", () => {
+    // Доволновой кадр: `rootBounds`/`referenceExportDims` в нём отсутствуют вовсе.
+    const result = evaluateGeometryPolicy({
+      layoutBounds: { x: 64, y: 64, width: 480, height: 88 },
+      paintBounds: null,
+      tolerances: {
+        expectedSurfaces: {
+          root: { width: 343, height: 88 },
+          layoutUnion: { width: 480, height: 88 },
+          paint: { width: 480, height: 88 },
+          referenceExport: { width: 367, height: 88 },
+        },
+      },
+    });
+    expect(result.surfaces?.root?.verdict).toBe("not-measured");
+    expect(result.surfaces?.paint?.verdict).toBe("not-measured");
+    expect(result.surfaces?.referenceExport?.verdict).toBe("not-measured");
+    expect(result.surfaces?.layoutUnion?.verdict).toBe("clean");
+    // «Не измерили» — не «разошлось»: обвинения нет, вердикт уходит по прежней ветке краски.
+    expect(result.divergingSurfaces).toEqual([]);
+    expect(result.policyVerdict).toBe("indeterminate");
+  });
+
+  it("допуск поверхности — существующий sizeDeltaPx, единый для всех поверхностей", () => {
+    const drift = (sizeTolerancePx: number) => evaluateGeometryPolicy({
+      ...PAYMENT_SCHEDULE,
+      tolerances: { sizeTolerancePx, expectedSurfaces: { layoutUnion: { width: 474, height: 88 } } },
+    });
+    expect(drift(1).policyVerdict).toBe("surface-mismatch");
+    expect(drift(6).policyVerdict).toBe("clean");
+    expect(drift(5).policyVerdict).toBe("surface-mismatch");
+  });
+
+  it("clipExpectation: без rootBounds — null, с эффективным клипом — нарушено", () => {
+    const withoutRoot = evaluateGeometryPolicy({
+      layoutBounds: layout, paintBounds: { ...layout }, paintBoundsSource: "alpha",
+      tolerances: { expectedSurfaces: { layoutUnion: { width: 140, height: 96 } }, clipExpectation: "root-does-not-clip-layout" },
+    });
+    expect(withoutRoot.clipSatisfied).toBeNull();
+    expect(withoutRoot.policyVerdict).toBe("clean");
+
+    const clipped = evaluateGeometryPolicy({
+      ...PAYMENT_SCHEDULE,
+      clipChain: [{ key: "card", property: "overflow", value: "hidden hidden", effective: true }],
+      tolerances: { expectedSurfaces: { root: { width: 343, height: 88 } }, clipExpectation: "root-does-not-clip-layout" },
+    });
+    expect(clipped.clipSatisfied).toBe(false);
+    expect(clipped.policyVerdict).toBe("surface-mismatch");
+    expect(geometryVerdictBlocks(clipped.policyVerdict, clipped.overflow)).toBe(true);
+
+    const honest = evaluateGeometryPolicy({
+      ...PAYMENT_SCHEDULE,
+      tolerances: { expectedSurfaces: { root: { width: 343, height: 88 } }, clipExpectation: "root-does-not-clip-layout" },
+    });
+    expect(honest.clipSatisfied).toBe(true);
+    expect(honest.policyVerdict).toBe("clean");
+  });
+});

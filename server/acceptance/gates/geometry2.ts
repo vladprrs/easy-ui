@@ -17,8 +17,10 @@
  */
 import {
   evaluateGeometryPolicy, geometryVerdictBlocks,
-  type GeometryOverflowSides, type GeometryPolicyRect, type GeometryPolicyVerdict, type GeometryTolerancesInput,
+  type GeometryOverflowSides, type GeometryPolicyRect, type GeometryPolicyResult, type GeometryPolicyVerdict,
+  type GeometryTolerancesInput,
 } from "../../../src/capture/geometryPolicy";
+import { declaresSurfaces, type GeometrySurface } from "../../../src/acceptance/surfaces";
 import type { CaptureCode } from "../../../src/capture/failureCodes";
 import type { GeometryDetail } from "../../../src/capture/geometry.mjs";
 import { putArtifact } from "../evidence";
@@ -52,17 +54,57 @@ export interface GeometryFacts {
  * Допуски случая: профиль даёт пороги в px, манифест (W2) — намерения
  * `allowPaintOverflow`/`expectedClip`, а с W3 (план 2026-08-06) ещё и числа: `sizeDeltaPx`
  * **побеждает** профильный (случай — объявленное исключение из нормы семьи) и `overflowBudgetPx`
- * задаёт per-side допуск краски.
+ * задаёт per-side допуск краски. С волны 2026-08-07 сюда же приезжают **объявленные поверхности**
+ * (`expectedSurfaces`/`clipExpectation`) — они и служат дискриминатором нового пути вердикта.
  */
+
+/**
+ * Kill-switch волны (`EASYUI_GEOMETRY_SURFACES_DISABLED=1`, план 2026-08-07 §W11): новый путь
+ * вердикта откатывается на легаси-ветку **целиком** — поверхности перестают попадать в допуски,
+ * значит `evaluateGeometryPolicy` не видит дискриминатора и исполняет прежний код. Точка одна на
+ * обоих потребителей допусков (гейт и `recompute.ts`): два независимых тумблера означали бы, что
+ * свежий вердикт и пересчитанный расходятся при полуоткрученном флаге.
+ */
+export const geometrySurfacesEnabled = (): boolean => process.env.EASYUI_GEOMETRY_SURFACES_DISABLED !== "1";
+
 export function geometryTolerancesOf(ctx: GateContext): GeometryTolerancesInput {
   const perCase = ctx.case.casePolicy ?? {};
+  // Поверхности кладутся **только** при явной декларации случая (§1.1, N3): результат нормализации
+  // `expectedGeometry → {layoutUnion}` сюда не попадает никогда, иначе весь накопленный корпус
+  // молча переехал бы на новый путь вердикта.
+  const surfaces = geometrySurfacesEnabled() && declaresSurfaces(ctx.case)
+    ? { expectedSurfaces: ctx.case.expectedSurfaces!, ...(ctx.case.clipExpectation === undefined ? {} : { clipExpectation: ctx.case.clipExpectation }) }
+    : {};
   return {
+    ...surfaces,
     tolerancePx: ctx.policy.geometry.overflowPx,
     sizeTolerancePx: perCase.sizeDeltaPx ?? ctx.policy.geometry.sizeDeltaPx,
     expectedGeometry: ctx.case.expectedGeometry ?? null,
     ...(perCase.allowPaintOverflow === undefined ? {} : { allowPaintOverflow: perCase.allowPaintOverflow }),
     ...(perCase.expectedClip === undefined ? {} : { expectedClip: perCase.expectedClip }),
     ...(perCase.overflowBudgetPx === undefined ? {} : { overflowBudgetPx: perCase.overflowBudgetPx }),
+  };
+}
+
+/**
+ * Провал обязан назвать виновника (инвариант гейта). До волны виновником был источник эффекта либо
+ * `expectedGeometry`-расхождение; теперь им может быть **имя поверхности** — и это такое же
+ * названное обвинение, а не догадка, поэтому `surface-mismatch` не деградирует в `indeterminate`.
+ */
+export function geometryVerdictIsNamed(policy: GeometryPolicyResult): boolean {
+  return policy.overflow.sources.length > 0
+    || policy.expectedGeometryDelta !== null
+    || (policy.divergingSurfaces?.length ?? 0) > 0
+    || policy.clipSatisfied === false;
+}
+
+/** Поверхностные факты вердикта — только у нового пути (условный спред, см. инвариант байт-в-байт). */
+export function surfaceFacts(policy: GeometryPolicyResult): Record<string, unknown> {
+  if (policy.surfaces === undefined) return {};
+  return {
+    surfaces: policy.surfaces,
+    divergingSurfaces: policy.divergingSurfaces ?? [],
+    clipSatisfied: policy.clipSatisfied ?? null,
   };
 }
 
@@ -89,8 +131,19 @@ export function geometryCodes(
   overflow: GeometryOverflowSides | null,
   tolerances: GeometryTolerancesInput,
   reasons: readonly string[],
+  divergingSurfaces: readonly GeometrySurface[] = [],
 ): CaptureCode[] {
   if (verdict === "clean" || verdict === "indeterminate") return [];
+  // W1a: расхождение поверхности — свой код с `ref = <поверхность>`, по коду на поверхность.
+  // Читатель отчёта обязан узнать **что** разошлось, а не только «геометрия упала».
+  if (verdict === "surface-mismatch") {
+    return divergingSurfaces.map((surface) => ({
+      code: "surface_mismatch" as const,
+      severity: "error" as const,
+      detail: reasons.find((reason) => reason.startsWith(`surface ${surface} `)) ?? `surface ${surface} diverges from its declared dimensions`,
+      ref: surface,
+    }));
+  }
   const blocks = geometryVerdictBlocks(verdict, overflow, tolerances);
   return [{
     code: "surface_overflow",
@@ -154,6 +207,9 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         overflow: policy.overflow,
         expectedGeometryDelta: policy.expectedGeometryDelta,
         clippedBy: policy.clippedBy,
+        // W1a: поверхности кладутся условным спредом — легаси-вердикт обязан дать байт-в-байт
+        // прежний `geometry.json`, иначе производные артефакты корпуса сдвинулись бы без причины.
+        ...surfaceFacts(policy),
         effectSources: detail?.effectSources ?? [],
         clipChain: detail?.clipChain ?? [],
         geometry,
@@ -170,7 +226,7 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
       const artifact = await putArtifact(ctx.dataDir, record as unknown as Record<string, unknown>);
       artifacts.push({ name: "geometry.json", sha256: artifact.sha256, bytes: artifact.bytes });
 
-      const named = policy.overflow.sources.length > 0 || policy.expectedGeometryDelta !== null;
+      const named = geometryVerdictIsNamed(policy);
       const blocks = geometryVerdictBlocks(policy.policyVerdict, policy.overflow, tolerances);
       // Инвариант: провал обязан назвать виновника. Иначе — `indeterminate` (D10 всё равно не даст
       // такому случаю `pass`, но вердикт не будет ложно обвинять компонент).
@@ -192,7 +248,10 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           policyVerdict: policy.policyVerdict,
           // R3: тот же вердикт типизированным кодом — `surface_overflow` (плюс коды readiness
           // кадра, если поверхность их принесла: paint-джоба несёт доказательство).
-          codes: [...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons), ...(capture.readiness?.readinessCodes ?? [])],
+          codes: [
+            ...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons, policy.divergingSurfaces ?? []),
+            ...(capture.readiness?.readinessCodes ?? []),
+          ],
           layoutBounds: record.layoutBounds,
           paintBounds: record.paintBounds,
           paintBoundsSource: record.paintBoundsSource,
@@ -202,6 +261,7 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           overflow: policy.overflow,
           expectedGeometryDelta: policy.expectedGeometryDelta,
           clippedBy: policy.clippedBy,
+          ...surfaceFacts(policy),
           // W5b: атрибуция причин работает по коробкам источников эффектов, а не только по
           // сводке overflow — поэтому сами `effectSources` едут в метрики, а не только в артефакт.
           effectSources: record.effectSources,

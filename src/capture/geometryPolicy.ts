@@ -22,6 +22,10 @@
  *    маргин, снять непрозрачный фон), а не обвиняет компонент.
  */
 
+import {
+  GEOMETRY_SURFACES, type ClipExpectation, type ExpectedSurfaces, type GeometrySurface, type SurfaceDims,
+} from "../acceptance/surfaces";
+
 export interface GeometryPolicyRect { x: number; y: number; width: number; height: number }
 
 /** Ink упёрся в соответствующую сторону поля — измерение обрезано холстом, а не компонентом. */
@@ -63,6 +67,16 @@ export interface GeometryTolerancesInput {
    * остаётся честным (`paint-overflow-*`), меняется лишь то, блокирует ли он.
    */
   overflowBudgetPx?: { top?: number; right?: number; bottom?: number; left?: number };
+  /**
+   * **Дискриминатор легаси/нового пути** (план 2026-08-07 §1.1, N3). Поле заполняется потребителем
+   * **только** при явной декларации `expectedSurfaces` в манифесте — результат нормализации
+   * `expectedGeometry → {layoutUnion}` сюда не кладётся никогда. Пока поля нет, `evaluateGeometryPolicy`
+   * исполняет прежний код байт-в-байт (golden-тест `geometryPolicy.test.ts`): смена вердикта
+   * накопленного корпуса при замороженном `CASE_FINGERPRINT_ALGO_VERSION = 7` недопустима.
+   */
+  expectedSurfaces?: ExpectedSurfaces;
+  /** «Корень не режет layout» — проверка по clip-стеку (полностью включается W1b). */
+  clipExpectation?: ClipExpectation;
 }
 
 export interface GeometryPolicyInput {
@@ -73,6 +87,13 @@ export interface GeometryPolicyInput {
   paintClamped?: PaintClamp | null;
   effectSources?: GeometryPolicyEffectSource[];
   clipChain?: GeometryPolicyClipLink[];
+  /**
+   * Border-box **самого корневого бокса** компонента (W1b: замер безусловный). `null`/отсутствие —
+   * не измерен: поверхность `root` получает вердикт `not-measured`, а не догадку по `layoutBounds`.
+   */
+  rootBounds?: GeometryPolicyRect | null;
+  /** Габариты эталонного экспорта в **CSS px** (гейт нормализует device px ассета делением на dsf). */
+  referenceExportDims?: SurfaceDims | null;
   tolerances?: GeometryTolerancesInput;
 }
 
@@ -81,7 +102,22 @@ export type GeometryPolicyVerdict =
   | "paint-overflow-clipped"
   | "paint-overflow-not-clipped"
   | "layout-overflow"
+  /**
+   * Новый класс волны 2026-08-07: расхождение **названной поверхности** с объявленным ожиданием.
+   * Прежние классы не переименовываются — легаси-вход по-прежнему отвечает `layout-overflow`,
+   * и накопленные вердикты сохраняют свой смысл.
+   */
+  | "surface-mismatch"
   | "indeterminate";
+
+/** Вердикт одной поверхности. `not-measured` — честное «факта нет», а не молчаливый `clean`. */
+export interface SurfaceVerdict {
+  verdict: "clean" | "size-mismatch" | "not-measured";
+  expected: SurfaceDims;
+  observed: SurfaceDims | null;
+  delta: { widthDelta: number; heightDelta: number } | null;
+  tolerancePx: number;
+}
 
 export interface GeometryOverflowSource {
   elementKey: string | null;
@@ -115,6 +151,16 @@ export interface GeometryPolicyResult {
   clippedBy: { key: string | null; property: string; value: string } | null;
   /** Человекочитаемые причины вердикта — уезжают в `detail` гейта и в evidence. */
   reasons: string[];
+  /**
+   * Per-surface вердикты (новый путь). **Отсутствуют** у легаси-входа — не пустой объект: результат
+   * легаси-ветки обязан быть байт-в-байт прежним, а лишний ключ уехал бы в `geometry.json` и в
+   * метрики и сдвинул бы производные артефакты всего корпуса.
+   */
+  surfaces?: Partial<Record<GeometrySurface, SurfaceVerdict>>;
+  /** Разошедшиеся поверхности в порядке `root → layoutUnion → paint → referenceExport`. */
+  divergingSurfaces?: GeometrySurface[];
+  /** Выполнено ли `clipExpectation`; `null` — проверить не по чему (нет `rootBounds`). */
+  clipSatisfied?: boolean | null;
 }
 
 const DEFAULT_TOLERANCE_PX = 1;
@@ -192,6 +238,19 @@ function attributeSources(
  * (`indeterminate` — виновато поле, не компонент), и только потом сам paint-overflow.
  */
 export function evaluateGeometryPolicy(input: GeometryPolicyInput): GeometryPolicyResult {
+  // Дискриминатор — **только** явная декларация поверхностей (§1.1, N3). Легаси-вход уходит в
+  // прежний код целиком, включая ранний return `layout-overflow`: удалить его значило бы менять
+  // вердикты накопленного корпуса через включённый по умолчанию recompute при замороженном ALGO 7.
+  const declared = input.tolerances?.expectedSurfaces;
+  if (declared !== undefined && Object.keys(declared).length > 0) return evaluateSurfaces(input, declared);
+  return evaluateLegacy(input);
+}
+
+/**
+ * Прежний вердикт — **байт-в-байт** (гейт волны: дифференциальный golden-тест). Тело функции не
+ * правится: любая правка здесь автоматически становится сменой вердикта всего корпуса.
+ */
+function evaluateLegacy(input: GeometryPolicyInput): GeometryPolicyResult {
   const tolerances = input.tolerances ?? {};
   const tolerance = Math.max(tolerances.tolerancePx ?? DEFAULT_TOLERANCE_PX, 0);
   const sizeTolerance = Math.max(tolerances.sizeTolerancePx ?? tolerance, 0);
@@ -270,6 +329,120 @@ export function evaluateGeometryPolicy(input: GeometryPolicyInput): GeometryPoli
 }
 
 /**
+ * Наблюдение поверхности. Каждая читается из **своего** факта, и ни одна не выводится из чужого:
+ * `root` из бокса корня (W1b), `layoutUnion` из union'а in-flow потомков, `paint` из ink-bbox,
+ * `referenceExport` из нормализованных габаритов ассета (W1b). Факта нет — `null`, то есть
+ * `not-measured`, а не «сойдёт `layoutBounds`»: подстановка чужого числа и была исходным дефектом.
+ */
+function observedSurface(input: GeometryPolicyInput, name: GeometrySurface): SurfaceDims | null {
+  if (name === "root") {
+    return input.rootBounds ? { width: input.rootBounds.width, height: input.rootBounds.height } : null;
+  }
+  if (name === "layoutUnion") {
+    return input.layoutBounds ? { width: input.layoutBounds.width, height: input.layoutBounds.height } : null;
+  }
+  if (name === "paint") {
+    return input.paintBounds && input.paintBoundsSource === "alpha"
+      ? { width: input.paintBounds.width, height: input.paintBounds.height }
+      : null;
+  }
+  return input.referenceExportDims ?? null;
+}
+
+/**
+ * Per-surface вердикт (новый путь, план 2026-08-07 §1.1).
+ *
+ * Порядок решений повторяет легаси: сначала названное расхождение ожиданий, и только потом краска.
+ * Разница ровно одна и она же — смысл волны: расхождение теперь **называет поверхность**, а не
+ * прячет четыре разных вопроса за одним числом `expectedGeometry`.
+ *
+ * Допуск на поверхность — существующий `sizeDeltaPx` (per-case побеждает профиль), единый для всех
+ * поверхностей: своя шкала у каждой поверхности была бы четвёртым способом соврать.
+ */
+function evaluateSurfaces(input: GeometryPolicyInput, declared: ExpectedSurfaces): GeometryPolicyResult {
+  const tolerances = input.tolerances ?? {};
+  const tolerance = Math.max(tolerances.tolerancePx ?? DEFAULT_TOLERANCE_PX, 0);
+  const sizeTolerance = Math.max(tolerances.sizeTolerancePx ?? tolerance, 0);
+  const clip = (input.clipChain ?? []).find((link) => link.effective) ?? null;
+  const clippedBy = clip ? { key: clip.key ?? null, property: clip.property, value: clip.value } : null;
+
+  const surfaces: Partial<Record<GeometrySurface, SurfaceVerdict>> = {};
+  const divergingSurfaces: GeometrySurface[] = [];
+  const reasons: string[] = [];
+  for (const name of GEOMETRY_SURFACES) {
+    const expected = declared[name];
+    if (expected === undefined) continue;
+    const observed = observedSurface(input, name);
+    if (observed === null) {
+      surfaces[name] = { verdict: "not-measured", expected, observed: null, delta: null, tolerancePx: sizeTolerance };
+      reasons.push(`surface ${name} was not measured: the frame carries no fact for it`);
+      continue;
+    }
+    const widthDelta = round2(observed.width - expected.width);
+    const heightDelta = round2(observed.height - expected.height);
+    const mismatch = Math.abs(widthDelta) > sizeTolerance || Math.abs(heightDelta) > sizeTolerance;
+    surfaces[name] = {
+      verdict: mismatch ? "size-mismatch" : "clean",
+      expected,
+      observed: { width: round2(observed.width), height: round2(observed.height) },
+      delta: { widthDelta, heightDelta },
+      tolerancePx: sizeTolerance,
+    };
+    if (!mismatch) continue;
+    divergingSurfaces.push(name);
+    reasons.push(`surface ${name} measured ${round2(observed.width)}×${round2(observed.height)}`
+      + ` differs from the expected ${expected.width}×${expected.height}`
+      + ` (Δ ${widthDelta}×${heightDelta} CSS px, tolerance ${sizeTolerance})`);
+  }
+
+  // `clipExpectation` проверяем только когда есть с чем сравнивать: без бокса корня утверждение
+  // «корень не режет layout» непроверяемо, и `null` честнее выдуманного `true`.
+  const clipSatisfied = tolerances.clipExpectation === undefined || input.rootBounds == null
+    ? null
+    : clip === null;
+  if (clipSatisfied === false) {
+    reasons.push(`clipExpectation "${tolerances.clipExpectation!}" is violated:`
+      + ` the layout union is clipped by ${clip!.property}: ${clip!.value}`);
+  }
+
+  // `expectedGeometryDelta` сохраняется как **проекция** `surfaces.layoutUnion`: потребители
+  // (метрики, evidence, отчёты) продолжают читать привычное поле, а не разбирать новую карту.
+  const union = surfaces.layoutUnion;
+  const expectedGeometryDelta: GeometryExpectedDelta | null = union?.verdict === "size-mismatch" && union.observed && union.delta
+    ? {
+      expected: { width: union.expected.width, height: union.expected.height },
+      actual: { width: union.observed.width, height: union.observed.height },
+      widthDelta: union.delta.widthDelta,
+      heightDelta: union.delta.heightDelta,
+    }
+    : null;
+
+  if (divergingSurfaces.length > 0 || clipSatisfied === false) {
+    return {
+      policyVerdict: "surface-mismatch",
+      overflow: emptyOverflow(),
+      expectedGeometryDelta,
+      clippedBy,
+      reasons,
+      surfaces,
+      divergingSurfaces,
+      clipSatisfied,
+    };
+  }
+  // Поверхности сошлись — дальше работает **тот же** аппарат краски, что и у легаси-входа:
+  // `expectedGeometry` у такого случая отсутствует по построению (`case_surface_conflict`),
+  // поэтому ранний return легаси-ветки здесь недостижим, и дублировать её логику не нужно.
+  const paint = evaluateLegacy(input);
+  return {
+    ...paint,
+    reasons: [...reasons, ...paint.reasons],
+    surfaces,
+    divergingSurfaces,
+    clipSatisfied,
+  };
+}
+
+/**
  * Считает ли политика такой вердикт продуктовым провалом при данных допусках. Вынесено сюда, а не
  * в гейт: «что означает `paint-overflow-clipped`» — свойство контракта геометрии, и unit-тест на
  * него не должен поднимать БД и капчур-сервис.
@@ -284,6 +457,10 @@ export function geometryVerdictBlocks(
   tolerances: GeometryTolerancesInput = {},
 ): boolean {
   if (verdict === "layout-overflow") return true;
+  // Новая ветка (план 2026-08-07 §1.1): расхождение объявленной поверхности блокирует безусловно —
+  // допуск у него уже применён внутри самого per-surface вердикта (`sizeDeltaPx`), и второго
+  // послабления быть не может. `overflowBudgetPx`/`allowPaintOverflow` — про краску, не про размер.
+  if (verdict === "surface-mismatch") return true;
   if (verdict !== "paint-overflow-not-clipped" && verdict !== "paint-overflow-clipped") return false;
   if (tolerances.allowPaintOverflow === true) return false;
   if (verdict === "paint-overflow-clipped" && tolerances.expectedClip === true) return false;

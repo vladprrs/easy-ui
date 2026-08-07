@@ -33,6 +33,7 @@ import {
   type NormalizedDiffMetrics, type NormalizedDiffResult, type RunNormalizedDiff,
 } from "../../visual/diff-runner";
 import type { ReferenceSurface, TextAaBudget } from "../../../src/acceptance/caseSetSchema";
+import { comparisonSurfaceOf, expectedSurfacesOf, type GeometrySurface } from "../../../src/acceptance/surfaces";
 import { CAUSE_THRESHOLDS } from "../../visual/causes";
 import { cropIsApplied } from "../caseSets";
 import { putArtifact, readArtifact } from "../evidence";
@@ -153,7 +154,40 @@ export interface ReferenceCanvas {
   marginPx: number;
   deviceScaleFactor: number;
   layoutRoot: { width: number; height: number };
-  layoutRootSource: "expectedGeometry" | "layoutBounds" | "viewport";
+  /**
+   * Откуда взят корень канвы. `surface:<name>` — волна 2026-08-07: случай **назвал** поверхность
+   * сравнения явно, и метрика обязана это показывать; прежние три значения остаются у доволновых
+   * случаев байт-в-байт (их ветка кода не тронута вовсе).
+   */
+  layoutRootSource: "expectedGeometry" | "layoutBounds" | "viewport" | `surface:${GeometrySurface}`;
+}
+
+/**
+ * Канва по **явно названной** поверхности сравнения (план 2026-08-07 §1.1).
+ *
+ * Ветка включается только при объявленном `comparisonSurface`: дефолт (`layoutUnion`) — это ровно
+ * сегодняшнее поведение, и подменять его нормализованным путём значило бы рискнуть байтами канвы
+ * всего накопленного корпуса ради тождественного результата. Габариты поверхности объявлены по
+ * построению (`422 case_comparison_surface_undeclared` на PUT), поэтому догадок здесь нет;
+ * выравнивание — существующий `referencePlacement` с тем же дефолтом `margin × dsf`.
+ */
+function declaredSurfaceCanvasOf(ctx: GateContext, facts: GeometryFacts | undefined, dsf: number): ReferenceCanvas | null {
+  const surface = comparisonSurfaceOf(ctx.case);
+  const dims = expectedSurfacesOf(ctx.case)[surface] ?? null;
+  if (!dims) return null;
+  const marginPx = facts?.paintMargin
+    ?? (ctx.surface.mode === "viewport" ? VIEWPORT_SURFACE_PAINT_MARGIN_PX : COMPARISON_PAINT_MARGIN_PX);
+  return {
+    padTo: {
+      width: Math.round((dims.width + 2 * marginPx) * dsf),
+      height: Math.round((dims.height + 2 * marginPx) * dsf),
+    },
+    placement: ctx.case.referencePlacement ?? { x: Math.round(marginPx * dsf), y: Math.round(marginPx * dsf) },
+    marginPx,
+    deviceScaleFactor: dsf,
+    layoutRoot: { width: dims.width, height: dims.height },
+    layoutRootSource: `surface:${surface}`,
+  };
 }
 
 /**
@@ -162,7 +196,11 @@ export interface ReferenceCanvas {
  * полем, и даже paint-эталон вьюпорта ложится в него не в нулевой офсет).
  */
 export const needsReferenceCanvas = (ctx: GateContext): boolean =>
-  referenceSurfaceOf(ctx) === "content-hug" || ctx.surface.mode === "viewport";
+  referenceSurfaceOf(ctx) === "content-hug" || ctx.surface.mode === "viewport"
+  // Волна 2026-08-07: явно названная поверхность сравнения — это и есть просьба построить канву в
+  // её координатах. Умолчание (поля нет) ничего не включает, поэтому доволновые случаи идут прежней
+  // веткой; сама декларация двигает `comparisonFingerprint`, то есть оплачена re-diff'ом честно.
+  || ctx.case.comparisonSurface !== undefined;
 
 /**
  * Каноническая канва сравнения для content-hug эталона (§W5).
@@ -179,6 +217,8 @@ export const needsReferenceCanvas = (ctx: GateContext): boolean =>
 export function referenceCanvasOf(ctx: GateContext): ReferenceCanvas | null {
   const facts = ctx.shared.get(geometryFactsKey(ctx.case.caseId)) as GeometryFacts | undefined;
   const dsf = ctx.surface.dsf;
+  // Явно названная поверхность сравнения — своя ветка; всё остальное идёт прежним путём.
+  if (ctx.case.comparisonSurface !== undefined) return declaredSurfaceCanvasOf(ctx, facts, dsf);
   if (ctx.surface.mode === "viewport") return viewportReferenceCanvasOf(ctx, facts, dsf);
   const marginPx = facts?.paintMargin ?? COMPARISON_PAINT_MARGIN_PX;
   const expected = ctx.case.expectedGeometry ?? null;

@@ -19,6 +19,7 @@
  *    существование проверяет сервер (`422 asset_not_found`); дедуп эталонов — по sha реестра.
  */
 import { z } from "zod";
+import { CLIP_EXPECTATION, GEOMETRY_SURFACES } from "./surfaces";
 
 /** Единственная поддерживаемая версия манифеста. Новая версия = новое значение литерала. */
 export const CASE_SET_MANIFEST_VERSION = 1;
@@ -94,6 +95,9 @@ const figmaNodeId = z.string().min(1).max(64).regex(/^[A-Za-z0-9:._-]+$/, "nodeI
 
 /** Габариты в CSS px: целые, положительные, в пределах разумного холста капчура. */
 const dimensionPx = z.number().int().positive().max(8192);
+
+/** Габариты одной поверхности геометрии (план 2026-08-07 §W1a) — те же единицы, CSS px. */
+const surfaceDims = z.strictObject({ width: dimensionPx, height: dimensionPx });
 
 /**
  * Поверхности съёмки набора (план 2026-08-06 §W5 T5c). `"hug"` — историческая (и единственная до
@@ -336,6 +340,39 @@ export const caseSetCaseSchema = z.strictObject({
    * (фидбэк P1); теперь она хотя бы называется по-разному и ловится warning'ом при PUT.
    */
   expectedGeometry: z.strictObject({ width: dimensionPx, height: dimensionPx }).optional(),
+  /**
+   * **Четыре поверхности геометрии** (план 2026-08-07 §W1a, ретроспектива миграции P0.1). Все —
+   * CSS px, все `.optional()` **без** `.default()` (C6/C25: `caseSetIdOf` хэширует `parsed.data`).
+   *
+   * - `root` — border-box самого корневого бокса компонента (343×88 головного кейса);
+   * - `layoutUnion` — union in-flow потомков, то есть ровно то, что означал `expectedGeometry`
+   *   (480×88 при одной ширине поля, 558×88 при другой);
+   * - `paint` — ink-bbox краски;
+   * - `referenceExport` — габариты экспорта из Figma (367×88), нормализованные из device px ассета.
+   *
+   * Пустой объект — не «поверхностей нет», а забытое намерение: объявить нужно хотя бы одну.
+   * Вместе с `expectedGeometry` не объявляется (`422 case_surface_conflict`): последнее — легаси-
+   * написание `expectedSurfaces.layoutUnion`, и молча выбирать одно из двух чисел сервер не вправе.
+   */
+  expectedSurfaces: z.strictObject({
+    root: surfaceDims.optional(),
+    layoutUnion: surfaceDims.optional(),
+    paint: surfaceDims.optional(),
+    referenceExport: surfaceDims.optional(),
+  }).refine((value) => Object.keys(value).length > 0, "declare at least one surface").optional(),
+  /**
+   * Поверхность, **в координатах которой** строится каноническая канва визуального сравнения.
+   * Опущено — `layoutUnion`, то есть сегодняшнее поведение (дефолт применяет потребитель,
+   * `server/acceptance/gates/visual.ts`, а не схема). Названная поверхность обязана быть объявлена
+   * (`422 case_comparison_surface_undeclared`) — иначе канва строилась бы наугад.
+   */
+  comparisonSurface: z.enum(GEOMETRY_SURFACES).optional(),
+  /**
+   * «Корень не режет layout»: union потомков **может** превышать `root`, если по пути нет
+   * эффективного клипа. Единственное значение — вариант «root-clips-layout» снят вместе со
+   * сценарием. Требует объявленного `expectedSurfaces.root` (`422 case_clip_expectation_requires_root`).
+   */
+  clipExpectation: z.literal(CLIP_EXPECTATION).optional(),
   cropLineage: caseSetCropLineageSchema.optional(),
   /** Чем является ассет эталона. Дефолт (`"paint"`) — в потребителе, не в схеме (C6/C25). */
   referenceSurface: z.enum(REFERENCE_SURFACES).optional(),

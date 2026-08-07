@@ -415,6 +415,11 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   // либо отсутствуют, либо непусты; здесь это лишь образец полноты типа.
   slotBindings: [],
   slotsHash: "slots-hash",
+  // W1a (план 2026-08-07): поверхности геометрии. Двухслойное поле с расщеплением по под-полям,
+  // `comparisonSurface` — чистое сравнение, `clipExpectation` — чистый вердикт (проверки ниже).
+  expectedSurfaces: {},
+  comparisonSurface: "layoutUnion",
+  clipExpectation: "root-does-not-clip-layout",
 };
 
 test("каждое поле политики, случая и поверхности классифицировано по слоям (D3)", () => {
@@ -450,4 +455,79 @@ test("классификация не даёт полю сравнения уе�
   expect(layerOf("visual.maxRawDiffPct")).toEqual(["verdict"]);
   expect(layerOf("readiness")).toEqual(["frame"]);
   expect(layerOf("propsHash")).toEqual(["frame"]);
+});
+
+
+// ------------------------------------------- поверхности геометрии (W1a, план 2026-08-07)
+
+const SURFACES = {
+  root: { width: 343, height: 88 },
+  layoutUnion: { width: 480, height: 88 },
+  paint: { width: 486, height: 92 },
+  referenceExport: { width: 367, height: 88 },
+} as const;
+
+test("W1a: доволновой случай байт-в-байт — ни один слой не сдвинут", () => {
+  // Инвариант N3: нормализация `expectedGeometry → {layoutUnion}` живёт в потребителе и до хэшей не
+  // доезжает. Промах здесь означал бы вердиктный каскад по **всему** накопленному корпусу.
+  const legacy = { ...PLAIN, referenceAssetId: ASSET_A, expectedGeometry: { width: 480, height: 88 } };
+  const before = fingerprints(legacy);
+  expect(fingerprints({ ...legacy, expectedSurfaces: undefined, comparisonSurface: undefined, clipExpectation: undefined }))
+    .toEqual(before);
+  expect(before.verdictPolicySnapshot.expectedSurfaces).toBeUndefined();
+  expect(before.verdictPolicySnapshot.clipExpectation).toBeUndefined();
+  // Golden кадра тоже не двигается: поверхности вообще не кадровый слой.
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT)).toBe(GOLDEN_FRAME);
+});
+
+test("W1a: expectedSurfaces доезжают до обеих проекций через caseFingerprintsOf", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+
+  // 1. Вердиктная проекция: `root` не трогает сравнение — правка ожидания корня стоит recompute.
+  const root = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, expectedSurfaces: { root: SURFACES.root } });
+  expect(root.frame).toBe(base.frame);
+  expect(root.comparison).toBe(base.comparison);
+  expect(root.verdictPolicy).not.toBe(base.verdictPolicy);
+  expect(root.verdictPolicySnapshot.expectedSurfaces).toEqual({ root: SURFACES.root });
+
+  // 2. Проекция сравнения: `referenceExport` не трогает вердикт — это описание самого эталона.
+  const exported = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, expectedSurfaces: { referenceExport: SURFACES.referenceExport } });
+  expect(exported.frame).toBe(base.frame);
+  expect(exported.comparison).not.toBe(base.comparison);
+  expect(exported.verdictPolicy).toBe(base.verdictPolicy);
+  expect(exported.verdictPolicySnapshot.expectedSurfaces).toBeUndefined();
+
+  // 3. Обе сразу — обе проекции сдвинуты, и ни одна не «съела» другую.
+  const both = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, expectedSurfaces: { ...SURFACES } });
+  expect(both.comparison).not.toBe(base.comparison);
+  expect(both.verdictPolicy).not.toBe(base.verdictPolicy);
+  expect(both.frame).toBe(base.frame);
+  expect(both.verdictPolicySnapshot.expectedSurfaces).toEqual({ root: SURFACES.root, layoutUnion: SURFACES.layoutUnion, paint: SURFACES.paint });
+
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("expectedSurfaces")).toEqual(["comparison", "verdict"]);
+});
+
+test("W1a: comparisonSurface — только сравнение, clipExpectation — только вердикт", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, expectedSurfaces: { ...SURFACES } });
+
+  const compared = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, expectedSurfaces: { ...SURFACES }, comparisonSurface: "referenceExport" });
+  expect(compared.comparison).not.toBe(base.comparison);
+  expect(compared.verdictPolicy).toBe(base.verdictPolicy);
+  expect(compared.frame).toBe(base.frame);
+  // Триаж C-m1: поверхность сравнения в вердиктный снимок не входит вовсе.
+  expect("comparisonSurface" in compared.verdictPolicySnapshot).toBe(false);
+
+  const clipped = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, expectedSurfaces: { ...SURFACES }, clipExpectation: "root-does-not-clip-layout" });
+  expect(clipped.comparison).toBe(base.comparison);
+  expect(clipped.verdictPolicy).not.toBe(base.verdictPolicy);
+  expect(clipped.verdictPolicySnapshot.clipExpectation).toBe("root-does-not-clip-layout");
+
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("comparisonSurface")).toEqual(["comparison"]);
+  expect(layerOf("clipExpectation")).toEqual(["verdict"]);
+});
+
+test("W1a: версия алгоритма отпечатка не двигается — легаси-семантика не менялась", () => {
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
 });

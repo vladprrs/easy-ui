@@ -390,6 +390,10 @@ export class AcceptanceOrchestrator {
           casePolicyHash: item.casePolicyHash ?? CASE_POLICY_HASH_V0,
           referenceAssetId: item.referenceAssetId ?? null,
           expectedGeometry: item.expectedGeometry ?? null,
+          // v32 (W1a): объявленные поверхности пишутся условным спредом — NULL в колонке означает
+          // «случай их не объявлял», а не «неизвестно»: нормализация из `expectedGeometry` живёт в
+          // потребителе и в строку не попадает (инвариант N3).
+          ...(item.expectedSurfaces === undefined ? {} : { expectedSurfaces: item.expectedSurfaces }),
           aliasOfCaseId: item.aliasOfCaseId,
           // `slots_hash` (миграция v31, T2.3) — ключ покрытия и рукопожатия капчура. Пишется
           // условным спредом: инвариант «отсутствует, а не пусто» доезжает до колонки как NULL,

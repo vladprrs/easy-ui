@@ -122,6 +122,13 @@ export interface AcceptanceCaseRow {
   case_policy_hash: string;
   reference_asset_id: string | null;
   expected_geometry_json: string | null;
+  /**
+   * Объявленные поверхности геометрии случая (v32, план 2026-08-07 §W1a). NULL — случай их не
+   * объявлял: поверхности тогда **нормализуются** из `expected_geometry_json` потребителем
+   * (`expectedSurfacesOf`), и backfill'ить тут нечего. Колонка — отчётная, как и соседняя: набор
+   * рана строится из манифеста (`casesOfRun`), а не из этих строк.
+   */
+  expected_surfaces_json: string | null;
   status: AcceptanceCaseStatus;
   verdict: AcceptanceCaseVerdict | null;
   gates_json: string | null;
@@ -202,6 +209,8 @@ export interface NewCaseInput {
   casePolicyHash: string;
   referenceAssetId?: string | null;
   expectedGeometry?: unknown;
+  /** Объявленные поверхности (v32); опущено — колонка остаётся NULL («не объявлял»). */
+  expectedSurfaces?: unknown;
   aliasOfCaseId?: string | null;
   /** Слои отпечатка (v29): считаются на постановке той же функцией, что и в раннере (D7). */
   frameFingerprint?: string | null;
@@ -519,12 +528,12 @@ export class AcceptanceRepo {
     this.db.query(`INSERT INTO acceptance_cases
       (run_id,case_id,case_key,props_hash,case_fingerprint,case_policy_hash,reference_asset_id,expected_geometry_json,
        status,verdict,gates_json,severity_json,capture_quality_json,alias_of_case_id,reuse_reason,started_at,finished_at,
-       frame_fingerprint,comparison_fingerprint,verdict_policy_hash,reuse_receipt_json,slots_hash)
-      VALUES (?,?,?,?,?,?,?,?,'pending',NULL,NULL,NULL,NULL,?,NULL,NULL,NULL,?,?,?,NULL,?)`)
+       frame_fingerprint,comparison_fingerprint,verdict_policy_hash,reuse_receipt_json,slots_hash,expected_surfaces_json)
+      VALUES (?,?,?,?,?,?,?,?,'pending',NULL,NULL,NULL,NULL,?,NULL,NULL,NULL,?,?,?,NULL,?,?)`)
       .run(runId, item.caseId, item.caseKey, item.propsHash, item.caseFingerprint, item.casePolicyHash,
         item.referenceAssetId ?? null, jsonOrNull(item.expectedGeometry), item.aliasOfCaseId ?? null,
         item.frameFingerprint ?? null, item.comparisonFingerprint ?? null, item.verdictPolicyHash ?? null,
-        item.slotsHash ?? null);
+        item.slotsHash ?? null, jsonOrNull(item.expectedSurfaces));
   }
 
   cases(runId: string): AcceptanceCaseRow[] {

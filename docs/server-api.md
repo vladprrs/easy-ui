@@ -559,8 +559,8 @@ CLI: `driver.mjs impact <id> --candidate <candidateId> --baseline-run <runId>` (
 | Слой | Что в нём | Что означает совпадение |
 |---|---|---|
 | `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme + `mode` с W5 2026-08-06 — ключ появляется только у `capture.surface: "viewport"`), `readinessPolicyHash`, `rendererFingerprint`, `slotBindings` — разрешённые дети слотов `[{slot,index,componentId,version,bundleHash,propsHash}]` в порядке рендера (алго 7) | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
-| `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); `referenceSurface`/`referencePlacement` (W5); `comparison.matte` и `textAaBudget` (W4 2026-08-06) | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
-| `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`/`sizeDeltaPx`/`overflowBudgetPx`, `expectedGeometry`, `policy.profile` манифеста | решение по тем же метрикам будет тем же |
+| `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); `referenceSurface`/`referencePlacement` (W5); `comparison.matte` и `textAaBudget` (W4 2026-08-06); `expectedSurfaces.referenceExport` и `comparisonSurface` (W1a 2026-08-07) | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
+| `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`/`sizeDeltaPx`/`overflowBudgetPx`, `expectedGeometry`, `expectedSurfaces.root|layoutUnion|paint` и `clipExpectation` (W1a 2026-08-07), `policy.profile` манифеста | решение по тем же метрикам будет тем же |
 
 `case_fingerprint = sha256({algo: 7, frame, comparison, verdictPolicy})`. **`expectedGeometry` — двухслойное поле**: оно и допуск вердикта геометрии, и (с волны W5) `padTo` нормализации content-hug эталона, поэтому его смена уводит визуал в re-diff, а не в пересчёт по старым метрикам. Разбиение полей по слоям — типизированное и **тотальное**: новое поле политики или случая не соберётся, пока ему не назначен слой (значение `report-only` — обоснованное «ни в одном», а не пропуск).
 
@@ -755,6 +755,57 @@ minEdgeResidualPct, applied}`), не в `causes`. Тюнинг порогов = 
 С этой волны гейт `visual` просит у diff-воркера edge-сигнал **всегда** (опцией задания, а не
 env-флагом), поэтому `edgeResidual` появляется в метриках каждого нового случая. Вердикт случая
 без `textAaBudget` от этого не меняется — растёт только доказательство.
+
+#### Четыре поверхности геометрии (волна 2026-08-07 §W1a)
+
+`expectedGeometry` отвечал одним числом на четыре разных вопроса, и автору приходилось выбирать,
+о чём соврать. Волна заводит **`expectedSurfaces`** — до четырёх именованных поверхностей, все в
+CSS px, все строго опциональные и без zod-дефолтов:
+
+| Поверхность | Что это | Откуда наблюдается |
+|---|---|---|
+| `root` | border-box самого корневого бокса компонента | `detailOf().rootBounds` (замер приезжает волной W1b) |
+| `layoutUnion` | union in-flow потомков — **ровно то**, что всегда означал `expectedGeometry` | `layoutBounds` |
+| `paint` | ink-bbox краски | `paintBounds` (проба `probe:"paint"`) |
+| `referenceExport` | габариты экспорта из Figma | габариты ассета ÷ `deviceScaleFactor` (W1b) |
+
+`comparisonSurface` называет поверхность, **в координатах которой** строится каноническая канва
+сравнения (поле опущено — прежняя ветка `referenceCanvasOf`, байт-в-байт). `clipExpectation:
+"root-does-not-clip-layout"` объявляет, что union потомков вправе превышать корень, пока по пути
+нет эффективного клипа.
+
+**Вердикт называет поверхность.** Новый путь возвращает per-surface вердикты
+(`clean` | `size-mismatch` | `not-measured`), `divergingSurfaces[]` в порядке
+`root → layoutUnion → paint → referenceExport`, класс вердикта `surface-mismatch` и типизированный
+код `surface_mismatch` с `ref = <поверхность>`. Допуск — существующий `sizeDeltaPx` (per-case
+побеждает профиль), единый для всех поверхностей. `expectedGeometryDelta` сохраняется как проекция
+`surfaces.layoutUnion`, поэтому прежние читатели метрик не ломаются.
+
+**Легаси-путь не меняется вовсе.** Дискриминатор — **явная** декларация `expectedSurfaces`:
+нормализация `expectedGeometry → {layoutUnion}` живёт в потребителе, нигде не персистится и не
+входит ни в один хеш, поэтому доволновой случай исполняет прежний код и даёт байт-в-байт прежние
+`cset_`/`comparisonFingerprint`/`verdict_policy_hash` (гейт волны — дифференциальный golden-тест).
+`GEOMETRY_CONTRACT_VERSION` остаётся **2**, `CASE_FINGERPRINT_ALGO_VERSION` — **7**.
+
+**Слои расщеплены по под-полям:** `expectedSurfaces.referenceExport` и `comparisonSurface` — слой
+`comparison` (re-diff), `expectedSurfaces.root|layoutUnion|paint` и `clipExpectation` — слой
+`verdict` (дешёвый recompute). Правка ожидания корня не стоит пересравнения.
+
+**Цена первой декларации на доволновом кадре.** Кадры, снятые до волны, не несут фактов `root` и
+`referenceExport`. Пересчёт вердикта в этом случае **отказывается явно** («поверхность объявлена,
+факта в метриках нет»), и каскад честно уходит на re-diff, а затем на пересъёмку **одного** кейса.
+Кадры после W1b несут все четыре факта, и дальнейшие правки ожиданий — чистый recompute/re-diff.
+Оговорка: per-surface вердикты существуют только при включённом гейте геометрии профиля
+(`gates.geometry: "not-implemented"` ⇒ поверхности не оцениваются).
+
+**Отказы `PUT`** (`422`): `case_surface_conflict` (объявлены и `expectedGeometry`, и
+`expectedSurfaces` — второе есть новое написание первого, и выбирать за автора сервер не станет),
+`case_comparison_surface_undeclared` (сравнивать предложено с поверхностью без объявленных
+габаритов), `case_clip_expectation_requires_root` (ожидание клипа без `expectedSurfaces.root`
+непроверяемо).
+
+**Kill-switch:** `EASYUI_GEOMETRY_SURFACES_DISABLED=1` — новый путь вердикта откатывается на
+легаси-ветку целиком (поверхности перестают попадать в допуски и гейта, и пересчёта).
 
 Charset `case.id` совпадает с charset имён записей evidence-архива (защита от zip-slip), поэтому **Figma node id вида `54863:9537` не проходит** — санитизировать на клиенте.
 

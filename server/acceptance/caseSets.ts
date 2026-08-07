@@ -31,6 +31,7 @@ import {
   type CaseSetCase, type CaseSetManifest, type CaseSetSlotBindings, type CaseSetSlotChild,
   type CropSourceSurface,
 } from "../../src/acceptance/caseSetSchema";
+import { caseSurfaceIssueOf } from "../../src/acceptance/surfaces";
 import { ApiError } from "../http";
 import type { CandidateEntry } from "../components/candidates";
 import { propsHashOf, type AcceptanceCase, type ResolvedSlotBinding } from "./cases";
@@ -680,6 +681,17 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
     }
   }
 
+  // Поверхности геометрии (план 2026-08-07 §W1a): три несовместимости декларации. Смысл каждой
+  // живёт в `caseSurfaceIssueOf` — одной функции на PUT, dry-run и драйвер, — а адрес случая и
+  // статус ответа принадлежат серверу.
+  for (const item of manifest.cases) {
+    const surfaceIssue = caseSurfaceIssueOf(item, item.id);
+    if (surfaceIssue) {
+      throw new ApiError(422, surfaceIssue.code, surfaceIssue.message,
+        { issues: [issue(["cases", item.id], surfaceIssue.message)] });
+    }
+  }
+
   // Per-case политика на алиасе (D16, план 2026-08-04): вердикт алиаса **всегда** идентичен
   // вердикту цели (D10), своей съёмки и своего сравнения у него нет. Допуск, адресованный алиасу,
   // не может быть исполнен ничем — это не «мягкое игнорирование», а объявленное намерение, которое
@@ -965,6 +977,12 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       // инвариант отсутствия: поле, не объявленное манифестом, не доезжает до отпечатков вовсе.
       ...(item.comparison === undefined ? {} : { comparison: item.comparison }),
       ...(item.textAaBudget === undefined ? {} : { textAaBudget: item.textAaBudget }),
+      // W1a (план 2026-08-07): поверхности геометрии протягиваются **как объявлены**. Ни дефолтов,
+      // ни нормализации: `expectedGeometry → {layoutUnion}` считает потребитель (`expectedSurfacesOf`),
+      // и результат не доезжает ни до строки БД, ни до отпечатков — инвариант N3.
+      ...(item.expectedSurfaces === undefined ? {} : { expectedSurfaces: item.expectedSurfaces }),
+      ...(item.comparisonSurface === undefined ? {} : { comparisonSurface: item.comparisonSurface }),
+      ...(item.clipExpectation === undefined ? {} : { clipExpectation: item.clipExpectation }),
       // W5b: координата случая в семье — вход `variantFamily` группировки ремедиаций.
       ...(item.dims ? { dims: item.dims } : {}),
     });

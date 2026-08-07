@@ -88,7 +88,7 @@ const ink = (bounds: { x: number; y: number; width: number; height: number } | n
     clamped: { left: false, right: false, top: false, bottom: false, ...clamped },
   });
 
-async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES } = {}) {
+async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; expectedSurfaces?: Record<string, { width: number; height: number }>; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES } = {}) {
   const dir = await mkdtemp(resolve(process.cwd(), ".geo2-test-"));
   dirs.push(dir);
   const service = new PaintCapture(options.result ?? paintResult());
@@ -102,6 +102,7 @@ async function context(options: { result?: ScreenshotResult; inkBbox?: GateConte
     case: {
       caseId: "alpha", caseKey: "alpha", props: {}, propsHash: "ph", aliasOfCaseId: null,
       ...(options.expectedGeometry ? { expectedGeometry: options.expectedGeometry } : {}),
+      ...(options.expectedSurfaces ? { expectedSurfaces: options.expectedSurfaces as never } : {}),
       ...(options.casePolicy ? { casePolicy: options.casePolicy } : {}),
     },
     surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
@@ -328,4 +329,50 @@ test("acceptance run with geometry v2: real ink beyond the layout box fails the 
   const severity = JSON.parse(row.severity_json!) as { class: string };
   expect(severity.class).toBe("geometry");
   db.close();
+});
+
+
+// ------------------------------------------- поверхности геометрии (W1a, план 2026-08-07)
+
+test("W1a: расхождение поверхности даёт fail с кодом surface_mismatch и ref-поверхностью", async () => {
+  // Кадр меряет union 140×96, случай объявил 160×96: вердикт обязан **назвать** поверхность, а не
+  // деградировать в `indeterminate` («провал без виновника») — имя поверхности и есть виновник.
+  const { ctx, dir } = await context({ expectedSurfaces: { layoutUnion: { width: 160, height: 96 } } });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.status).toBe("fail");
+  expect(result.metrics!.policyVerdict).toBe("surface-mismatch");
+  expect(result.metrics!.divergingSurfaces).toEqual(["layoutUnion"]);
+  expect(result.metrics!.codes).toEqual([
+    { code: "surface_mismatch", severity: "error", detail: expect.stringContaining("surface layoutUnion measured"), ref: "layoutUnion" },
+  ]);
+  // Проекция на легаси-поле сохраняется, и поверхности доезжают до `geometry.json`.
+  expect(result.metrics!.expectedGeometryDelta).toMatchObject({ widthDelta: -20, heightDelta: 0 });
+  const record = JSON.parse(new TextDecoder().decode((await readArtifact(dir,
+    result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!)) as { surfaces: Record<string, { verdict: string }> };
+  expect(record.surfaces.layoutUnion!.verdict).toBe("size-mismatch");
+});
+
+test("W1a: доволновой случай не получает ни одного нового ключа в метриках и артефакте", async () => {
+  const { ctx, dir } = await context({ expectedGeometry: { width: 140, height: 96 } });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics!.surfaces).toBeUndefined();
+  expect("divergingSurfaces" in result.metrics!).toBe(false);
+  const record = JSON.parse(new TextDecoder().decode((await readArtifact(dir,
+    result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!)) as Record<string, unknown>;
+  expect("surfaces" in record).toBe(false);
+});
+
+test("W1a: kill-switch EASYUI_GEOMETRY_SURFACES_DISABLED возвращает легаси-вердикт", async () => {
+  process.env.EASYUI_GEOMETRY_SURFACES_DISABLED = "1";
+  try {
+    const { ctx } = await context({ expectedSurfaces: { layoutUnion: { width: 160, height: 96 } } });
+    const result = await geometry2Gate.run(ctx);
+    // Поверхности до допусков не доехали ⇒ прежний код, прежний вердикт: ожидания просто нет.
+    expect(result.status).toBe("pass");
+    expect(result.metrics!.policyVerdict).toBe("clean");
+    expect(result.metrics!.surfaces).toBeUndefined();
+  } finally {
+    delete process.env.EASYUI_GEOMETRY_SURFACES_DISABLED;
+  }
 });

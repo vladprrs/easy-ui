@@ -1123,3 +1123,75 @@ test("§W4: comparison.matte и textAaBudget доезжают до случая,
   }
   db.close();
 });
+
+// ------------------------------------------- поверхности геометрии (W1a, план 2026-08-07)
+
+const surfaceCase = (extra: Record<string, unknown>): Record<string, unknown> =>
+  manifest({ cases: [{ id: "default", props: { tone: "neutral" }, ...extra }] } as unknown as Partial<CaseSetManifest>);
+
+test("W1a: доволновой манифест байт-в-байт — адрес набора и все три слоя отпечатка", () => {
+  const db = dbWithAsset();
+  // Литерал, а не пересчёт: контентный адрес набора, вычисленный **схемой из HEAD до волны**
+  // (`git show HEAD:src/acceptance/caseSetSchema.ts`) на том же манифесте.
+  // Само существование `expectedSurfaces`/`comparisonSurface`/`clipExpectation` в схеме адрес
+  // двигать не вправе — это и есть инвариант «`.optional()` без `.default()`».
+  const plain = validateManifest(db, "yp-badge", manifest());
+  expect(plain.caseSetId).toBe("cset_ecbd02d58ff8146ed311e0f130d385aff5005916857dbe3deb951f16100e0806");
+  expect(Object.keys(plain.manifest.cases[0]!).sort()).toEqual(["id", "props"]);
+
+  // Легаси-случай с `expectedGeometry`: нормализация в `{layoutUnion}` до отпечатков не доезжает.
+  const legacy = validateManifest(db, "yp-badge", surfaceCase({ expectedGeometry: { width: 480, height: 88 } }));
+  const built = buildCasesFromManifest(legacy.manifest)[0]!;
+  expect(built.expectedSurfaces).toBeUndefined();
+  expect(built.comparisonSurface).toBeUndefined();
+  expect(built.clipExpectation).toBeUndefined();
+  const fingerprints = caseFingerprintsOf({
+    candidateId: `cand_${"0".repeat(64)}`, surface: surfaceOfManifest(legacy.manifest),
+    policy: ACCEPTANCE_POLICIES["default-v1"], case: built,
+  });
+  expect(fingerprints.comparison).toBe(comparisonFingerprintOf({
+    referenceAssetId: null,
+    expectedGeometry: { width: 480, height: 88 },
+    maxDimensionDeltaPx: ACCEPTANCE_POLICIES["default-v1"].visual.maxDimensionDeltaPx,
+    paintMarginPx: 64, deviceScaleFactor: 2,
+  }));
+  expect("expectedSurfaces" in fingerprints.verdictPolicySnapshot).toBe(false);
+  db.close();
+});
+
+test("W1a: объявленные поверхности протягиваются как объявлены и двигают адрес набора", () => {
+  const db = dbWithAsset();
+  const declared = validateManifest(db, "yp-badge", surfaceCase({
+    expectedSurfaces: { root: { width: 343, height: 88 }, layoutUnion: { width: 480, height: 88 } },
+    comparisonSurface: "layoutUnion",
+    clipExpectation: "root-does-not-clip-layout",
+  }));
+  expect(declared.caseSetId).not.toBe(validateManifest(db, "yp-badge", surfaceCase({})).caseSetId);
+  const built = buildCasesFromManifest(declared.manifest)[0]!;
+  expect(built.expectedSurfaces).toEqual({ root: { width: 343, height: 88 }, layoutUnion: { width: 480, height: 88 } });
+  expect(built.comparisonSurface).toBe("layoutUnion");
+  expect(built.clipExpectation).toBe("root-does-not-clip-layout");
+  db.close();
+});
+
+test("W1a: три отказа декларации поверхностей", () => {
+  const db = dbWithAsset();
+  fails(() => validateManifest(db, "yp-badge", surfaceCase({
+    expectedGeometry: { width: 480, height: 88 },
+    expectedSurfaces: { layoutUnion: { width: 480, height: 88 } },
+  })), 422, "case_surface_conflict");
+
+  fails(() => validateManifest(db, "yp-badge", surfaceCase({
+    expectedSurfaces: { root: { width: 343, height: 88 } },
+    comparisonSurface: "referenceExport",
+  })), 422, "case_comparison_surface_undeclared");
+
+  fails(() => validateManifest(db, "yp-badge", surfaceCase({
+    expectedSurfaces: { layoutUnion: { width: 480, height: 88 } },
+    clipExpectation: "root-does-not-clip-layout",
+  })), 422, "case_clip_expectation_requires_root");
+
+  // Схема: пустая карта поверхностей — забытое намерение, а не «поверхностей нет».
+  fails(() => validateManifest(db, "yp-badge", surfaceCase({ expectedSurfaces: {} })), 422, "validation_failed");
+  db.close();
+});

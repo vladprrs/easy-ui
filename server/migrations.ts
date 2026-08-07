@@ -983,6 +983,29 @@ export const migrations = [
     // policy»); это свойство хранилища манифестов, а не этой колонки.
     db.run("ALTER TABLE acceptance_cases ADD COLUMN slots_hash TEXT");
   },
+  (db: Database) => {
+    // v32: четыре поверхности геометрии случая — `acceptance_cases.expected_surfaces_json`
+    // (план `docs/plans/2026-08-07-migration-feedback-wave.md` §W1a, точка 8).
+    //
+    // Форма — **одна аддитивная nullable-колонка, без backfill и без индекса**, ровно как v31:
+    //
+    // 1. **NULL = «случай поверхностей не объявлял»**, а не «неизвестно». Потребитель нормализует
+    //    их из `expected_geometry_json` (`expectedSurfacesOf`: `expectedGeometry → {layoutUnion}`),
+    //    и backfill'ить нечего: он записал бы в БД именно ту производную, которую инвариант N3
+    //    плана запрещает персистить. Персистированная нормализация означала бы, что доволновой
+    //    случай сменил `verdict_policy_hash`, то есть вердиктный каскад по всему корпусу.
+    // 2. **Колонка отчётная.** Набор случаев рана строится из манифеста (`casesOfRun`), а не из
+    //    этих строк, — как и соседний `expected_geometry_json`. Она нужна, чтобы по сохранённому
+    //    рану было видно, против каких поверхностей его судили.
+    // 3. **Индекса нет:** колонка не участвует ни в одном lookup'е (reuse ищется по слоям
+    //    отпечатка, куда поверхности входят по значению — `FIELD_LAYERS`).
+    //
+    // Откат образа переживается: v31-код читает `acceptance_cases` через `SELECT *` и собирает
+    // ответы по именованным полям. Обратная сторона отката — манифесты с `expectedSurfaces`
+    // (`strictObject` при повторном разборе даёт `422 case_set_manifest_unreadable`), поэтому
+    // rollback-window правило волны: в окне отката такие манифесты не публиковать (§3.6).
+    db.run("ALTER TABLE acceptance_cases ADD COLUMN expected_surfaces_json TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

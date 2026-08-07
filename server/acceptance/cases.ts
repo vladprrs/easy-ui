@@ -17,6 +17,7 @@
 import { ApiError } from "../http";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CaseSetComparison, CropSourceSurface, ReferenceSurface, TextAaBudget } from "../../src/acceptance/caseSetSchema";
+import type { ClipExpectation, ExpectedSurfaces, GeometrySurface } from "../../src/acceptance/surfaces";
 import type { CandidateEntry } from "../components/candidates";
 import type { CasePolicyValues, CaseSurface } from "./ids";
 import { acceptanceMaxCasesPerRun } from "./policies";
@@ -131,6 +132,17 @@ export interface AcceptanceCase {
    * вердикта, а `verdictPolicySnapshot` — как вердиктное поле.
    */
   textAaBudget?: TextAaBudget;
+  /**
+   * **Четыре поверхности геометрии** случая (план 2026-08-07 §W1a), CSS px. Присутствуют только при
+   * явной декларации манифеста: нормализация `expectedGeometry → {layoutUnion}` живёт в
+   * `expectedSurfacesOf` и никогда не персистится — иначе доволновой случай сменил бы
+   * `verdict_policy_hash`, и вердиктный каскад прошёл бы по всему корпусу без единой причины.
+   */
+  expectedSurfaces?: ExpectedSurfaces;
+  /** Поверхность канвы сравнения; отсутствует — прежняя ветка `referenceCanvasOf` (слой comparison). */
+  comparisonSurface?: GeometrySurface;
+  /** «Корень не режет layout» — вердиктное ожидание, проверяемое по clip-стеку (слой verdict). */
+  clipExpectation?: ClipExpectation;
   /**
    * Координаты случая в измерениях семьи (`cases[].dims` манифеста W2). В `case_fingerprint` не
    * входят намеренно: смена координаты не меняет ни съёмку, ни вердикт — это ярлык для отчёта.

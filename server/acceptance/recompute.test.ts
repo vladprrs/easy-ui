@@ -342,3 +342,91 @@ test("§W4: пресет без edgeResidual в сохранённых метр�
   expect(result.reevaluable).toBe(false);
   expect(result.reason).toContain("edgeResidual");
 });
+
+// ------------------------------------------- поверхности геометрии (W1a, план 2026-08-07)
+
+const SURFACE_CASE = { ...CASE, expectedSurfaces: { layoutUnion: { width: 480, height: 88 } } };
+
+/** Кадр с фактами доволновой формы: `layoutBounds`/`paintBounds` есть, `rootBounds` — нет. */
+const preWaveGeometryGate = (): GateResult => ({
+  gate: "geometry",
+  status: "pass",
+  metrics: {
+    semantics: "v2-paint",
+    policyVerdict: "clean",
+    layoutBounds: { x: 64, y: 64, width: 480, height: 88 },
+    paintBounds: { x: 64, y: 64, width: 480, height: 88 },
+    paintBoundsSource: "alpha",
+    paintClamped: { left: false, right: false, top: false, bottom: false },
+    overflow: { left: 0, right: 0, top: 0, bottom: 0, sources: [] },
+    expectedGeometryDelta: null,
+    clippedBy: null,
+    effectSources: [],
+    codes: [],
+  },
+  artifacts: [{ name: "geometry.json", sha256: "1".repeat(64), bytes: 10 }],
+});
+
+test("W1a: поверхности классифицированы и попадают в дельту вердикта", () => {
+  expect(GATES_BY_POLICY_FIELD.expectedSurfaces).toEqual(["geometry", "visual"]);
+  expect(GATES_BY_POLICY_FIELD.clipExpectation).toEqual(["geometry"]);
+  // `comparisonSurface` — слой сравнения, в вердиктной карте его быть не должно вовсе.
+  expect("comparisonSurface" in GATES_BY_POLICY_FIELD).toBe(false);
+
+  const before = verdictPolicySnapshotOf(DEFAULT, CASE);
+  expect(verdictPolicyDelta(before, verdictPolicySnapshotOf(DEFAULT, SURFACE_CASE))).toEqual(["expectedSurfaces"]);
+  // Проекция сравнения в снимок не входит ⇒ её правка вердиктной дельты не даёт (она доезжает
+  // промахом `comparisonFingerprint`, то есть re-diff'ом).
+  expect(verdictPolicyDelta(before, verdictPolicySnapshotOf(DEFAULT, {
+    ...CASE, expectedSurfaces: { referenceExport: { width: 367, height: 88 } },
+  }))).toEqual([]);
+});
+
+test("W1a: per-surface пересчёт по сохранённым метрикам — без единого нового пикселя", () => {
+  const gates = [preWaveGeometryGate(), ...structuralGates()];
+  // Ожидание union'а разошлось с измеренным 480×88: вердикт обязан назвать поверхность.
+  const result = reevaluateGates(gates, verdictPolicySnapshotOf(DEFAULT, CASE), verdictPolicySnapshotOf(DEFAULT, {
+    ...CASE, expectedSurfaces: { layoutUnion: { width: 558, height: 88 } },
+  }));
+  expect(result.reevaluable).toBe(true);
+  expect(result.changed).toBe(true);
+  const geometry = result.gates.find((gate) => gate.gate === "geometry")!;
+  expect(geometry.status).toBe("fail");
+  expect(geometry.metrics?.policyVerdict).toBe("surface-mismatch");
+  expect(geometry.metrics?.divergingSurfaces).toEqual(["layoutUnion"]);
+  expect((geometry.metrics?.codes as { code: string; ref?: string }[])[0])
+    .toMatchObject({ code: "surface_mismatch", ref: "layoutUnion", severity: "error" });
+
+  // Совпавшее ожидание — чистый вердикт по тем же метрикам.
+  const clean = reevaluateGates(gates, verdictPolicySnapshotOf(DEFAULT, CASE), verdictPolicySnapshotOf(DEFAULT, SURFACE_CASE));
+  expect(clean.reevaluable).toBe(true);
+  expect(clean.gates.find((gate) => gate.gate === "geometry")!.status).toBe("pass");
+});
+
+test("W1a: поверхность объявлена, факта в метриках нет ⇒ отказ пересчёта (N2)", () => {
+  // Доволновой кадр не несёт `rootBounds`. Существующий guard `layoutBounds === null` его
+  // пропускает насквозь, и без явного отказа вердикт был бы выдан по несуществующим фактам.
+  const result = reevaluateGates([preWaveGeometryGate(), ...structuralGates()],
+    verdictPolicySnapshotOf(DEFAULT, CASE),
+    verdictPolicySnapshotOf(DEFAULT, { ...CASE, expectedSurfaces: { root: { width: 343, height: 88 } } }));
+  expect(result.reevaluable).toBe(false);
+  expect(result.reason).toContain("expectedSurfaces");
+  // Отказ пересчёта — это «сравни/сними заново», а не «перенеси как есть».
+  expect(result.changed).toBe(false);
+});
+
+test("W1a: kill-switch возвращает легаси-ветку вердикта", () => {
+  process.env.EASYUI_GEOMETRY_SURFACES_DISABLED = "1";
+  try {
+    const result = reevaluateGates([preWaveGeometryGate(), ...structuralGates()],
+      verdictPolicySnapshotOf(DEFAULT, CASE),
+      verdictPolicySnapshotOf(DEFAULT, { ...CASE, expectedSurfaces: { root: { width: 343, height: 88 } } }));
+    // Ни отказа по отсутствующему факту, ни per-surface вердикта: поверхности до допусков не доехали.
+    expect(result.reevaluable).toBe(true);
+    const geometry = result.gates.find((gate) => gate.gate === "geometry")!;
+    expect(geometry.metrics?.policyVerdict).toBe("clean");
+    expect(geometry.metrics?.surfaces).toBeUndefined();
+  } finally {
+    delete process.env.EASYUI_GEOMETRY_SURFACES_DISABLED;
+  }
+});

@@ -19,6 +19,10 @@
  * ключей во входном объекте на хэш не влияет.
  */
 import { canonicalStringify } from "../../src/capture/canonicalJson";
+import {
+  comparisonSurfaceProjection, verdictSurfaceProjection,
+  type ClipExpectation, type ExpectedSurfaces, type GeometrySurface,
+} from "../../src/acceptance/surfaces";
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import { rendererFingerprint } from "../capture/renderer";
@@ -286,6 +290,15 @@ export interface ComparisonFingerprintInput {
   textAaBudget?: string | null;
   /** Ожидаемые габариты layout-корня: они же определяют `padTo` нормализации (D1). */
   expectedGeometry?: { width: number; height: number } | null;
+  /**
+   * Четыре поверхности геометрии (волна 2026-08-07). В **этот** слой входит только проекция
+   * `referenceExport`: она описывает сам эталон, то есть вход нормализации канвы. Ожидания
+   * `root`/`layoutUnion`/`paint` мерит браузер — они вердиктные, и гнать из-за них re-diff значило
+   * бы платить сравнением за арифметику (N15).
+   */
+  expectedSurfaces?: ExpectedSurfaces | null;
+  /** Поверхность, в координатах которой строится канва: чистый вход сравнения. */
+  comparisonSurface?: GeometrySurface | null;
   /** Допуск сводимости размеров профиля (`policy.visual.maxDimensionDeltaPx`). */
   maxDimensionDeltaPx: number;
   /** Параметры канвы кадра: поле вокруг компонента и плотность пикселей. */
@@ -313,6 +326,10 @@ export function comparisonFingerprintOf(input: ComparisonFingerprintInput): stri
       : definedOnly({ matte: input.comparison.matte }),
     textAaBudget: input.textAaBudget ?? undefined,
     expectedGeometry: input.expectedGeometry ?? undefined,
+    // Проекция, а не всё поле: объявление одного лишь `root` обязано оставить сравнение нетронутым.
+    // Пустая проекция канонизуется отсутствием ключа — доволновой случай байт-в-байт прежний.
+    expectedSurfaces: comparisonSurfaceProjection(input.expectedSurfaces),
+    comparisonSurface: input.comparisonSurface ?? undefined,
     maxDimensionDeltaPx: input.maxDimensionDeltaPx,
     paintMarginPx: input.paintMarginPx,
     deviceScaleFactor: input.deviceScaleFactor,
@@ -366,6 +383,16 @@ export interface VerdictPolicySnapshot {
   textAaBudget?: string;
   /** Ожидаемые габариты: вход допусков геометрии (и, в W5, нормализации эталона — D1). */
   expectedGeometry: { width: number; height: number } | null;
+  /**
+   * Вердиктная проекция поверхностей (`root`/`layoutUnion`/`paint`) и ожидание клипа — оба
+   * **условным спредом** при явной декларации (§1.1, N3): ключ со значением `null` у каждого случая
+   * сдвинул бы `verdict_policy_hash` всего накопленного прод-кэша, то есть прогнал бы вердиктный
+   * каскад по корпусу ради поля, которого ни один доволновой манифест не объявлял.
+   *
+   * `comparisonSurface` сюда **не** входит: он вход сравнения, а не вердикта (триаж C-m1).
+   */
+  expectedSurfaces?: ExpectedSurfaces;
+  clipExpectation?: ClipExpectation;
   /** `policy.profile` манифеста: декларация набора, влияющая на смысл вердикта. */
   declaredPolicyProfile: string | null;
 }
@@ -390,6 +417,13 @@ export interface CaseFingerprintCase {
   comparison?: { matte?: string } | null;
   textAaBudget?: string | null;
   /**
+   * Поверхности геометрии (волна 2026-08-07). Двухслойное поле, но **не** двумя копиями значения:
+   * в сравнение уезжает проекция `referenceExport`, в вердикт — `root|layoutUnion|paint`.
+   */
+  expectedSurfaces?: ExpectedSurfaces | null;
+  comparisonSurface?: GeometrySurface | null;
+  clipExpectation?: ClipExpectation | null;
+  /**
    * Дети слотов (план 2026-08-05 §A4). Поле обязано быть **и здесь, и в `caseFingerprintsOf`**:
    * тотальность `FIELD_LAYERS` доказывает только то, что слой у поля объявлен, но не то, что поле
    * доехало до хэша, — молчаливый пропуск здесь дал бы «классифицировано как frame, а кадр не
@@ -400,6 +434,7 @@ export interface CaseFingerprintCase {
 }
 
 export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFingerprintCase): VerdictPolicySnapshot {
+  const surfaces = verdictSurfaceProjection(item.expectedSurfaces);
   return {
     policyProfileId: policy.id,
     gates: { ...policy.gates },
@@ -409,6 +444,8 @@ export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFing
     geometry: { ...policy.geometry },
     perCase: item.casePolicy ? { ...item.casePolicy } : null,
     ...(item.textAaBudget === undefined || item.textAaBudget === null ? {} : { textAaBudget: item.textAaBudget }),
+    ...(surfaces === undefined ? {} : { expectedSurfaces: surfaces }),
+    ...(item.clipExpectation === undefined || item.clipExpectation === null ? {} : { clipExpectation: item.clipExpectation }),
     expectedGeometry: item.expectedGeometry ?? null,
     declaredPolicyProfile: item.declaredPolicyProfile ?? null,
   };
@@ -476,6 +513,9 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     // хэша — иначе каждый уже снятый случай сменил бы `comparisonFingerprint` без единой причины.
     ...(input.case.comparison === undefined ? {} : { comparison: input.case.comparison }),
     ...(input.case.textAaBudget === undefined ? {} : { textAaBudget: input.case.textAaBudget }),
+    // Тот же условный спред: поле, которого нет, обязано отсутствовать вплоть до пре-образа хэша.
+    ...(input.case.expectedSurfaces === undefined ? {} : { expectedSurfaces: input.case.expectedSurfaces }),
+    ...(input.case.comparisonSurface === undefined ? {} : { comparisonSurface: input.case.comparisonSurface }),
     expectedGeometry: input.case.expectedGeometry ?? null,
     maxDimensionDeltaPx: input.policy.visual.maxDimensionDeltaPx,
     paintMarginPx: COMPARISON_PAINT_MARGIN_PX,
@@ -560,6 +600,15 @@ export const FIELD_LAYERS = {
   // D1: `expectedGeometry` — двухслойное поле. Оно и допуск вердикта геометрии, и (с W5) `padTo`
   // нормализации content-hug эталона, поэтому его смена обязана давать re-diff, а не recompute.
   expectedGeometry: ["comparison", "verdict"],
+  // Волна 2026-08-07: объединение двух проекций (N15). Слой объявлен как union, а хэшируется поле
+  // **по проекциям**: `referenceExport` → comparison (re-diff), `root|layoutUnion|paint` → verdict
+  // (дешёвый recompute). Одна общая декларация со сплитом в реализации честнее, чем два поля-
+  // близнеца в манифесте.
+  expectedSurfaces: ["comparison", "verdict"],
+  // Поверхность сравнения меняет **канву**, то есть вход диффа: чистый comparison.
+  comparisonSurface: ["comparison"],
+  // Ожидание клипа — утверждение о фактах, уже снятых кадром: пересчитывается без единого пикселя.
+  clipExpectation: ["verdict"],
   casePolicy: ["verdict"],
   // Хэш per-case политики манифеста — производная `casePolicy`/`requireVisual`, уже учтённых по
   // значениям; с ALGO 6 он в отпечатки не входит (см. `CASE_POLICY_HASH_V0`).

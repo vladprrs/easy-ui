@@ -30,8 +30,9 @@ import {
   type GeometryPolicyClipLink, type GeometryPolicyEffectSource, type GeometryPolicyRect, type GeometryTolerancesInput,
 } from "../../src/capture/geometryPolicy";
 import type { TextAaBudget } from "../../src/acceptance/caseSetSchema";
+import { GEOMETRY_SURFACES, type GeometrySurface } from "../../src/acceptance/surfaces";
 import { putArtifact, readArtifact } from "./evidence";
-import { geometryCodes } from "./gates/geometry2";
+import { geometryCodes, geometrySurfacesEnabled, geometryVerdictIsNamed, surfaceFacts } from "./gates/geometry2";
 import { textAaBudgetApplies, textAaPresetOf } from "./gates/visual";
 import type { GateArtifactRef, GateResult } from "./gates/types";
 import type { VerdictPolicySnapshot } from "./ids";
@@ -56,7 +57,7 @@ export type VerdictPolicyField =
   | "perCase.maxRawDiffPct" | "perCase.allowPaintOverflow" | "perCase.expectedClip"
   | "perCase.sizeDeltaPx" | "perCase.overflowBudgetPx"
   | "textAaBudget"
-  | "expectedGeometry" | "declaredPolicyProfile";
+  | "expectedGeometry" | "expectedSurfaces" | "clipExpectation" | "declaredPolicyProfile";
 
 /**
  * Карта «поле политики → гейты, чей вердикт оно может изменить» (C26).
@@ -88,6 +89,11 @@ export const GATES_BY_POLICY_FIELD: Record<VerdictPolicyField, readonly GateName
   // честно отказывается (см. ниже), и каскад уходит на re-diff.
   textAaBudget: ["visual"],
   expectedGeometry: ["geometry"],
+  // W1a (план 2026-08-07): поверхности читает вердикт геометрии, а `comparisonSurface` (слой
+  // сравнения, сюда не входит) — канву визуального гейта. Вердиктная проекция снимка тем не менее
+  // затрагивает и `visual`: канва строится по объявленной поверхности, и её габариты живут здесь же.
+  expectedSurfaces: ["geometry", "visual"],
+  clipExpectation: ["geometry"],
   declaredPolicyProfile: [],
 };
 
@@ -117,6 +123,11 @@ export function verdictPolicyDelta(oldPolicy: VerdictPolicySnapshot, newPolicy: 
   check("perCase.overflowBudgetPx", oldPolicy.perCase?.overflowBudgetPx, newPolicy.perCase?.overflowBudgetPx);
   check("textAaBudget", oldPolicy.textAaBudget, newPolicy.textAaBudget);
   check("expectedGeometry", oldPolicy.expectedGeometry, newPolicy.expectedGeometry);
+  // Снимок несёт **только** вердиктную проекцию поверхностей (`root|layoutUnion|paint`), поэтому
+  // сравнение снимков и есть сравнение верной проекции: правка `referenceExport` живёт в слое
+  // сравнения и доезжает промахом `comparisonFingerprint`, а не вердиктной дельтой.
+  check("expectedSurfaces", oldPolicy.expectedSurfaces, newPolicy.expectedSurfaces);
+  check("clipExpectation", oldPolicy.clipExpectation, newPolicy.clipExpectation);
   check("declaredPolicyProfile", oldPolicy.declaredPolicyProfile, newPolicy.declaredPolicyProfile);
   return delta;
 }
@@ -161,6 +172,26 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 const isRect = (value: unknown): value is GeometryPolicyRect =>
   isObject(value) && ["x", "y", "width", "height"].every((key) => typeof value[key] === "number");
+
+const isDims = (value: unknown): value is { width: number; height: number } =>
+  isObject(value) && typeof value.width === "number" && typeof value.height === "number";
+
+/**
+ * Коды, которые эмитит сам гейт геометрии, — ровно они и обязаны быть выброшены перед пересчётом
+ * (всё остальное в `metrics.codes` приехало из капчура и к политике отношения не имеет).
+ */
+const GEOMETRY_GATE_CODES: ReadonlySet<string> = new Set(["surface_overflow", "surface_mismatch"]);
+
+/**
+ * Есть ли в сохранённых метриках факт названной поверхности. Отдельная функция, а не выражение:
+ * список фактов обязан читаться рядом с их именами, иначе W1b добавит замер и забудет про пересчёт.
+ */
+function surfaceFactPresent(metrics: Record<string, unknown>, name: GeometrySurface): boolean {
+  if (name === "root") return isRect(metrics.rootBounds);
+  if (name === "layoutUnion") return isRect(metrics.layoutBounds);
+  if (name === "paint") return isRect(metrics.paintBounds);
+  return isDims(metrics.referenceExportDims);
+}
 
 /** Эффективный порог визуала: per-case перекрывает профильный (тот же порядок, что в гейте). */
 const maxRawDiffPctOf = (policy: VerdictPolicySnapshot): number =>
@@ -257,6 +288,18 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
   // невозможен, и притворяться, что возможен, нельзя.
   if (layoutBounds === null && metrics.policyVerdict === undefined) return null;
 
+  // W1a (план 2026-08-07 §1.1, N2): **явный отказ** «поверхность объявлена, факта в metrics нет».
+  // Существующий guard `layoutBounds === null` доволновой кадр пропускает насквозь, и без этой
+  // проверки вердикт был бы выдан по несуществующим фактам: `root`/`referenceExport` доволновые
+  // кадры не несут вовсе. `null` здесь — это всегда «сравни/сними заново», а не «перенеси».
+  const declaredSurfaces = geometrySurfacesEnabled() ? newPolicy.expectedSurfaces : undefined;
+  if (declaredSurfaces !== undefined) {
+    for (const name of GEOMETRY_SURFACES) {
+      if (declaredSurfaces[name] === undefined) continue;
+      if (!surfaceFactPresent(metrics, name)) return null;
+    }
+  }
+
   const clippedBy = isObject(metrics.clippedBy) ? metrics.clippedBy : null;
   const clipChain: GeometryPolicyClipLink[] = clippedBy
     ? [{
@@ -271,6 +314,11 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
     // Per-case `sizeDeltaPx` побеждает профильный — тот же порядок, что в `geometryTolerancesOf`.
     sizeTolerancePx: newPolicy.perCase?.sizeDeltaPx ?? newPolicy.geometry.sizeDeltaPx,
     expectedGeometry: newPolicy.expectedGeometry,
+    // Дискриминатор нового пути — тот же, что у гейта: явная декларация (и не отключённая
+    // kill-switch'ем). Вычислять его двумя способами значило бы допустить, что свежий вердикт и
+    // пересчитанный расходятся.
+    ...(declaredSurfaces === undefined ? {} : { expectedSurfaces: declaredSurfaces }),
+    ...(newPolicy.clipExpectation === undefined ? {} : { clipExpectation: newPolicy.clipExpectation }),
     ...(newPolicy.perCase?.allowPaintOverflow === undefined ? {} : { allowPaintOverflow: newPolicy.perCase.allowPaintOverflow }),
     ...(newPolicy.perCase?.expectedClip === undefined ? {} : { expectedClip: newPolicy.perCase.expectedClip }),
     ...(newPolicy.perCase?.overflowBudgetPx === undefined ? {} : { overflowBudgetPx: newPolicy.perCase.overflowBudgetPx }),
@@ -282,10 +330,13 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
     paintClamped: isObject(metrics.paintClamped) ? metrics.paintClamped as never : null,
     effectSources: Array.isArray(metrics.effectSources) ? metrics.effectSources as GeometryPolicyEffectSource[] : [],
     clipChain,
+    // Факты поверхностей — из тех же сохранённых метрик, что и всё остальное (W1b кладёт их туда).
+    ...(isRect(metrics.rootBounds) ? { rootBounds: metrics.rootBounds } : {}),
+    ...(isDims(metrics.referenceExportDims) ? { referenceExportDims: metrics.referenceExportDims } : {}),
     tolerances,
   });
 
-  const named = policy.overflow.sources.length > 0 || policy.expectedGeometryDelta !== null;
+  const named = geometryVerdictIsNamed(policy);
   const blocks = geometryVerdictBlocks(policy.policyVerdict, policy.overflow, tolerances);
   // Тот же порядок решений, что в `gates/geometry2.ts`: провал обязан назвать виновника.
   const status = policy.policyVerdict === "indeterminate" ? "indeterminate" as const
@@ -297,8 +348,11 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
       ? policy.reasons.join("; ")
       : `paint overflow (${policy.policyVerdict}) without an attributable descendant effect`;
   // Коды readiness кадра приезжали из капчура и к политике не относятся — они сохраняются.
+  // Фильтр переносимых кодов — по **множеству** кодов, которые эмитит сам гейт геометрии, а не по
+  // одной строке `surface_overflow` (триаж C-M3б): с появлением `surface_mismatch` строковый фильтр
+  // оставлял бы протухший код рядом с новым вердиктом.
   const carriedCodes = Array.isArray(metrics.codes)
-    ? (metrics.codes as { code?: unknown }[]).filter((code) => code?.code !== "surface_overflow")
+    ? (metrics.codes as { code?: unknown }[]).filter((code) => !GEOMETRY_GATE_CODES.has(code?.code as string))
     : [];
   const next: GateResult = {
     ...gate,
@@ -306,10 +360,14 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
     metrics: {
       ...metrics,
       policyVerdict: policy.policyVerdict,
-      codes: [...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons), ...carriedCodes],
+      codes: [
+        ...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons, policy.divergingSurfaces ?? []),
+        ...carriedCodes,
+      ],
       overflow: policy.overflow,
       expectedGeometryDelta: policy.expectedGeometryDelta,
       clippedBy: policy.clippedBy,
+      ...surfaceFacts(policy),
       allowPaintOverflow: tolerances.allowPaintOverflow ?? false,
       expectedClip: tolerances.expectedClip ?? false,
       overflowBudgetPx: tolerances.overflowBudgetPx ?? null,
@@ -321,7 +379,8 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
   return {
     gate: next,
     changed: next.status !== gate.status || !same(metrics.policyVerdict, policy.policyVerdict)
-      || !same(metrics.overflow, policy.overflow) || !same(metrics.expectedGeometryDelta, policy.expectedGeometryDelta),
+      || !same(metrics.overflow, policy.overflow) || !same(metrics.expectedGeometryDelta, policy.expectedGeometryDelta)
+      || !same(metrics.surfaces, policy.surfaces),
   };
 }
 
@@ -370,7 +429,9 @@ export function reevaluateGates(
     }
     const result = recomputeGeometry(gate, newPolicy);
     if (result === null) {
-      return refuse(gates, delta, "geometry metrics predate the raw-bounds contract; the verdict cannot be recomputed");
+      return refuse(gates, delta,
+        "geometry metrics predate the raw-bounds contract, or a declared expectedSurfaces surface has no measured fact"
+        + " in them; the verdict cannot be recomputed without re-measuring");
     }
     next.push(result.gate);
     recomputedGates.push("geometry");

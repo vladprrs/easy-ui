@@ -27,6 +27,8 @@ const REACHABILITY: Record<CaptureFailureCode, { kind: "unit"; codes: () => stri
   renderer_mismatch: { kind: "fixture", where: "server/screenshot/service.ts → server/capture/renderer.test.ts" },
   // R4 посажен: эмитент — `settleFonts` в required-faces (`check()===false`).
   font_face_missing: { kind: "fixture", where: "src/capture/readiness.ts#settleFonts → src/capture/readiness.test.ts + e2e/preview/capture-strictness.spec.ts" },
+  // W1a (план 2026-08-07): эмитент — `geometryCodes` по расходящимся поверхностям вердикта.
+  surface_mismatch: { kind: "fixture", where: "server/acceptance/gates/geometry2.ts#geometryCodes → server/acceptance/gates/geometry2.test.ts" },
 };
 
 describe("capture failure codes", () => {
@@ -45,7 +47,7 @@ describe("capture failure codes", () => {
       } else if (plan.kind === "fixture") {
         expect(plan.where.length, `${code} обязан называть файл с фикстурой`).toBeGreaterThan(0);
         // Волна происхождения — R3 (typed codes) либо R4 (строгая readiness посадила эмитент).
-        expect(["R3", "R4"]).toContain(origin.wave);
+        expect(["R3", "R4", "W1a"]).toContain(origin.wave);
       } else {
         // Отложенный код обязан согласовываться с реестром: волна в одном месте, а не в двух.
         expect(origin.wave).toBe(plan.wave);
