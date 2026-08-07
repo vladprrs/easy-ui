@@ -49,3 +49,4 @@ playwright-report/
 
 # Брендовый кит шрифтов (лицензия Commercial Type) — в репозиторий не кладём
 Шрифты.zip
+.draft-preview-test-*/
