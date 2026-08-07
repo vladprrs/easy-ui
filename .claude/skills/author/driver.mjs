@@ -20,7 +20,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... [--no-barrier] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> [--overlay <json|file>] | case-set validate <manifest.json> [--overlay <json|file>] | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap asks the server for the deterministic resource barrier (readiness: \"barrier\") by default because driver captures are SERVICE captures — --no-barrier is the rollback to the pre-wave v1 readiness; with --receipt snap/preview also print the barrier block (decoded/expected, fonts, stable frames, late resources, ms) and one summary line of suppressed console noise; case-set put/validate --overlay <json|file> merges the candidateOverlay map {\"<componentId>\": \"cand_...\"} into the manifest (accept has no --overlay: the graph belongs to the manifest); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -142,6 +142,20 @@ const receiptFlag = { "--receipt": { value: true, key: "receipt" } };
  * Кадр такой джобы **не** попадает в реестр ассетов: он качается из `/screenshot-jobs/:id/bytes`.
  */
 const overlayCandidateFlag = { "--candidate": { value: true, key: "candidate", repeat: true } };
+/**
+ * `--no-barrier` у `snap`/`shoot` (план 2026-08-07 §W2, §1.5).
+ *
+ * Драйверная съёмка — **сервисная** (галереи, регрессия, приёмочные стенды), а именно на ней
+ * воспроизводилась потеря registry-листов: кадр уезжал раньше, чем декодировался ресурс, и
+ * пропажа была неотличима от «так нарисовано». Поэтому дефолт `snap` — `readiness: "barrier"`
+ * (v3 для этой джобы), а не молчаливый v1. Интерактивный путь (редактор, превью человека) остаётся
+ * на v1 и живёт вне драйвера — здесь его переключать нечем и незачем.
+ *
+ * Флаг — **откат**, а не тюнинг: барьер стоит до 8 с на кадр, и когда съёмка нужна быстро (или
+ * сервер до волны W2 и параметр ему незнаком), `--no-barrier` возвращает доволновое поведение
+ * ровно одним способом — поле в запрос не кладётся вовсе.
+ */
+const noBarrierFlag = { "--no-barrier": { value: false, key: "noBarrier" } };
 const catalogLimitFlag = {
   value: true,
   key: "limit",
@@ -264,9 +278,14 @@ export const flagSpecs = Object.freeze({
   },
   // План 2026-08-03 §5 W1c: матричная приёмка семейства одной командой (кандидат → ран → poll).
   // План 2026-08-03 §5 W2: публикация и чтение case-set-манифеста семейства.
-  "case-set": { ...jsonFlag },
+  // `--overlay` (план 2026-08-07 §W3) — карта неопубликованных зависимостей манифеста
+  // (`put`/`validate`); у `get`/`coverage` она бессмысленна и отвергается арностью ниже.
+  "case-set": { ...jsonFlag, "--overlay": { value: true, key: "overlay" } },
   accept: {
     ...jsonFlag,
+    // §W3: у рана карты overlay нет — она живёт в манифесте набора. Флаг объявлен только затем,
+    // чтобы отказ назвал верный путь вместо «unknown flag» (см. parseArgs).
+    "--overlay": { value: true, key: "overlay" },
     "--case-set": { value: true, key: "caseSet" },
     "--policy": { value: true, key: "policy" },
     "--refresh": { value: true, key: "refresh", parse: parseRefreshFlag },
@@ -311,8 +330,8 @@ export const flagSpecs = Object.freeze({
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   // R8a: `shoot` — алиас `snap --all-screens`, поэтому и контракт флагов у него снаповский.
-  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag },
-  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag },
+  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag, ...noBarrierFlag },
+  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag, ...noBarrierFlag },
   preview: {
     ...jsonFlag,
     ...surfaceFlags,
@@ -478,6 +497,17 @@ export function parseArgs(argv) {
     // ровно один: дублировать id руками — способ разъехаться с манифестом.
     if (subcommand === "validate" && positionals.length !== 2) invalid("usage: case-set validate <manifest.json>");
     if (subcommand !== "put" && subcommand !== "validate" && positionals.length !== 2) invalid(`usage: case-set ${subcommand} <caseSetId>`);
+    // §W3: карта overlay — часть **манифеста**; читающим подкомандам её вносить некуда.
+    if (flags.overlay !== undefined && subcommand !== "put" && subcommand !== "validate") {
+      invalid("case-set --overlay applies to put and validate only: candidateOverlay is a field of the manifest being published");
+    }
+  }
+  // §W3: `accept --overlay` не существует по построению — `POST /acceptance-runs` карты не
+  // принимает, граф приезжает в ран из опубликованного набора. Отказ называет верный путь:
+  // молчаливое игнорирование флага стоило бы рана, снятого не против тех зависимостей.
+  if (command === "accept" && flags.overlay !== undefined) {
+    invalid("accept has no --overlay: the dependency graph belongs to the case-set manifest, not to the run —"
+      + " publish it with 'case-set put <componentId> <manifest.json> --overlay <json|file>' and accept that caseSetId");
   }
   // `impact` — dry-run отчёт (W6): обе стороны сравнения обязаны быть названы явно, иначе
   // «импакт компонента» ничего не значит.
@@ -1262,6 +1292,41 @@ async function readJsonArgument(path, label) {
   }
 }
 
+/**
+ * `--overlay '<json>' | --overlay <file.json>` (план 2026-08-07 §W3): карта неопубликованных
+ * зависимостей `{"<componentId>": "cand_…"}`. Инлайн-JSON — потому что карта на один-два узла
+ * короче имени файла, который под неё пришлось бы завести; файл — потому что граф из восьми узлов
+ * в командной строке нечитаем. Различаются по первому символу: `{` — тело, иначе путь.
+ */
+async function readOverlayArgument(value) {
+  const document = value.trimStart().startsWith("{")
+    ? (() => {
+      try { return JSON.parse(value); }
+      catch (error) { invalid(`--overlay is not valid JSON: ${error.message}`); }
+    })()
+    : await readJsonArgument(value, "--overlay map");
+  if (!isPlainObject(document)) invalid("--overlay must be a JSON object of componentId → candidate id (cand_<sha256>)");
+  return document;
+}
+
+/**
+ * Внесение карты overlay в манифест перед проверкой и отправкой (§W3).
+ *
+ * Карта — **часть манифеста**, а не параметр вызова: `caseSetId` контентно адресован, и набор,
+ * снятый против неопубликованных зависимостей, обязан отличаться от набора без них. Поэтому
+ * `--overlay` именно правит документ, а расхождение с уже объявленной в файле картой — отказ:
+ * две декларации одного графа означают, что одна из них забыта.
+ */
+function withCandidateOverlay(manifest, overlay) {
+  if (overlay === undefined) return manifest;
+  const declared = manifest?.candidateOverlay;
+  if (declared !== undefined && canonicalJson(declared) !== canonicalJson(overlay)) {
+    throw new CliError("--overlay contradicts the candidateOverlay already declared in the manifest;"
+      + " keep one declaration — the map is part of the content-addressed manifest, not a call parameter");
+  }
+  return { ...manifest, candidateOverlay: overlay };
+}
+
 /** `expect <expected.json> <actual.json>` — оффлайновый верб, сети не касается. */
 async function runExpect(args, flags) {
   const [expectedPath, actualPath] = args;
@@ -1307,6 +1372,9 @@ export function summarizeCapture(result) {
     productErrors,
     infraNoise,
     runtimeWarnings: result?.runtimeWarnings ?? [],
+    // §W10: сколько сообщений консоли классификация подавила. Сервер до волны W10 числа не
+    // присылает — тогда его несёт сам список `infraNoise`, и врать нулём здесь нельзя.
+    suppressedCount: Number.isInteger(result?.suppressedCount) ? result.suppressedCount : infraNoise.length,
   };
 }
 
@@ -1392,6 +1460,46 @@ async function writeReceiptFile(path, payload) {
   await writeFile(path, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
+/**
+ * Единственное значение opt-in'а readiness прототипной джобы (`POST …/screenshot`, §W2): сервер
+ * принимает ровно `"barrier"`, всё остальное — `400 invalid_request`. Держим константой, чтобы
+ * «строка в двух местах» не разъехалась с контрактом.
+ */
+export const SNAP_READINESS = "barrier";
+
+/**
+ * Строка блока барьера ресурсов из receipt'а (§W2): что кадр ждал и сколько это стоило.
+ * `null` — политика барьера кадру не требовалась (v1/v2) или доказательство не приехало;
+ * выдумывать «барьер прошёл» по отсутствию блока нельзя, поэтому строки просто нет.
+ *
+ * `lateAfterBarrier` печатается целиком: ресурс, приехавший **после** барьера, — это и есть
+ * причина, по которой кадр нельзя считать детерминированным, и усечение списка спрятало бы её.
+ */
+export function resourceBarrierLine(where, receipt) {
+  const barrier = receipt?.resources?.resourceBarrier ?? null;
+  if (!barrier) return null;
+  const late = barrier.lateAfterBarrier ?? [];
+  const barrierMs = receipt?.timings?.barrierMs ?? barrier.durationMs;
+  return `${where} barrier: decoded ${barrier.decoded}/${barrier.expected} resources, fonts ${barrier.fontsReady ? "ready" : "not-ready"},`
+    + ` stableFrames ${barrier.stableFrames}, late ${late.length ? late.join(", ") : "-"}, ${barrierMs ?? "-"}ms`;
+}
+
+/**
+ * Сводная строка подавленного шума (§W10, P2.2).
+ *
+ * До волны подавленное было невидимым: классификация капчура уносила `infraNoise` из вердикта, и
+ * «сто раз не загрузился шрифт» читалось как чистый кадр. Строка ровно одна — это гигиена, а не
+ * отказ: количество берётся из `quality.suppressedCount` результата джобы (он есть всегда), а
+ * топ-сигнатура — из `console.suppressed` receipt'а (он читается только под `--receipt`/`--json`).
+ */
+export function suppressedNoiseLine(where, result, receipt) {
+  const count = Number.isInteger(result?.suppressedCount) ? result.suppressedCount : (result?.infraNoise?.length ?? 0);
+  if (!count) return null;
+  // Порядок `console.suppressed` детерминирован сервером (частота убыв., затем сигнатура возр.).
+  const top = receipt?.console?.suppressed?.[0] ?? null;
+  return `${where} suppressed ${count}${top ? ` (top: ${top.signature} ×${top.count})` : ""}`;
+}
+
 /** snap contract: 1 when any screen produced no PNG, 2 when PNGs carry product errors, else 0. */
 export function snapExitCode(rows) {
   if (rows.some((row) => !row.imageProduced)) return EXIT.failed;
@@ -1410,6 +1518,9 @@ async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false)
     ...(surface.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: surface.deviceScaleFactor }),
     ...(surface.theme === undefined ? {} : { theme: surface.theme }),
     ...(surface.candidateOverrides === undefined ? {} : { candidateOverrides: surface.candidateOverrides }),
+    // §W2: opt-in барьера ресурсов этой джобы. Поле аддитивно и **не** отправляется под
+    // `--no-barrier` — сервер до волны W2 его просто не читает, а не отказывает.
+    ...(surface.readiness === undefined ? {} : { readiness: surface.readiness }),
   };
   for (let attempt = 1; attempt <= SNAP_ATTEMPTS; attempt++) {
     const queued = await call("POST", `/prototypes/${encoded}/screens/${encodeURIComponent(screenId)}/screenshot`, body, { retries: 1 });
@@ -1435,10 +1546,15 @@ async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false)
     // Документ receipt тянем только под --receipt: в --json коды readiness и отпечаток берутся
     // из результата джобы, а лишний HTTP-раунд на каждый экран делал горячий путь флаки (R8b).
     const evidence = await captureEvidence(jobId, state, wantReceipt);
+    // §W2: блок барьера — часть свидетельства кадра, поэтому едет строкой отчёта и полем items.
+    // Условным спредом: у кадра без барьера (v1/v2, `--no-barrier`, сервер до волны) записи нет
+    // вовсе — `resourceBarrier: null` читался бы как «барьер был и ничего не нашёл».
+    const barrier = evidence.document?.receipt?.resources?.resourceBarrier ?? null;
     return {
       screenId, attempts: attempt, viewport: surface.viewport,
       failure: summary.imageProduced ? null : "job reported no image",
       path: summary.imageProduced ? path : null, ...summary,
+      ...(barrier ? { resourceBarrier: barrier, barrierMs: evidence.document?.receipt?.timings?.barrierMs ?? barrier.durationMs } : {}),
       jobId, receiptSha256: evidence.receiptSha256, renderer: evidence.renderer, codes: evidence.codes,
       receiptDocument: evidence.document,
       candidateOverlay: overlayPins.map((pin) => ({ componentId: pin.id, candidateId: pin.candidate.candidateId, rev: pin.candidate.rev, bundleHash: pin.bundleHash })),
@@ -1446,7 +1562,7 @@ async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false)
   }
   return {
     screenId, attempts: SNAP_ATTEMPTS, viewport: surface.viewport, failure, path: null,
-    imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [],
+    imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [], suppressedCount: 0,
     jobId: null, receiptSha256: null, renderer: null, codes: [], receiptDocument: null, candidateOverlay: [],
   };
 }
@@ -1467,7 +1583,11 @@ export function buildSnapPlan(draft, flags = {}) {
     } catch (error) {
       throw new Error(`${screen.id}: ${error.message}`);
     }
-    return { screenId: screen.id, viewport, deviceScaleFactor: flags.dsf, theme: flags.theme, candidateOverrides };
+    return {
+      screenId: screen.id, viewport, deviceScaleFactor: flags.dsf, theme: flags.theme, candidateOverrides,
+      // §W2: сервисная съёмка просит барьер ресурсов по умолчанию; `--no-barrier` — откат на v1.
+      ...(flags.noBarrier ? {} : { readiness: SNAP_READINESS }),
+    };
   });
 }
 
@@ -1513,6 +1633,12 @@ async function runSnap(args, flags, command = "snap") {
     rows.push(row);
     receipts.push({ screenId: surface.screenId, jobId: row.jobId, receiptSha256: row.receiptSha256, receipt: receiptDocument?.receipt ?? null });
     if (row.path) out(row.path);
+    // §W2/§W10: доказательство барьера и сводка подавленного — добавочные строки; порядок и
+    // текст прежних строк не трогаются (`out` молчит в `--json`, отчёт печатает их полями).
+    const barrierLine = resourceBarrierLine(surface.screenId, receiptDocument?.receipt);
+    if (barrierLine) out(barrierLine);
+    const suppressed = suppressedNoiseLine(surface.screenId, row, receiptDocument?.receipt);
+    if (suppressed && !jsonMode) console.error(suppressed);
     if (row.failure) console.error(`${surface.screenId}: ${row.failure}`);
     if (row.productErrors.length) console.error(`${surface.screenId} product errors:`, JSON.stringify(row.productErrors));
     if (row.codes.length) console.error(`${surface.screenId} capture codes:`, JSON.stringify(row.codes));
@@ -1724,6 +1850,13 @@ async function runPreview(args, flags) {
   if (summary.imageProduced) out(outputPath);
   if (summary.productErrors.length) console.error(`preview ${id} product errors:`, JSON.stringify(summary.productErrors));
   if (summary.infraNoise.length && !jsonMode) console.error(`preview ${id} infra noise (ignored):`, JSON.stringify(summary.infraNoise));
+  // §W2/§W10: добавочные строки — блок барьера (когда джоба шла под политикой с барьером) и одна
+  // сводка подавленного шума. Обе читают уже прочитанный receipt: лишнего раунда здесь нет.
+  const previewBarrier = evidence.document?.receipt?.resources?.resourceBarrier ?? null;
+  const previewBarrierLine = resourceBarrierLine(`preview ${id}`, evidence.document?.receipt);
+  if (previewBarrierLine) out(previewBarrierLine);
+  const previewSuppressed = suppressedNoiseLine(`preview ${id}`, summary, evidence.document?.receipt);
+  if (previewSuppressed && !jsonMode) console.error(previewSuppressed);
   if (jsonMode) {
     report(null, {
       command: "preview", componentId: id, ...existenceReport(),
@@ -1734,6 +1867,7 @@ async function runPreview(args, flags) {
       ...(flags.example === undefined ? {} : { example: flags.example }),
       path: summary.imageProduced ? outputPath : null, queueRetries, exitCode, ...summary,
       receiptSha256: evidence.receiptSha256, renderer: evidence.renderer, codes: evidence.codes,
+      ...(previewBarrier ? { resourceBarrier: previewBarrier, barrierMs: evidence.document?.receipt?.timings?.barrierMs ?? previewBarrier.durationMs } : {}),
       receipt: wantReceipt ? flags.receipt : null,
     }, {
       command: "preview", ok: exitCode === EXIT.ok,
@@ -2829,7 +2963,13 @@ export const CASE_SET_LIMITS = Object.freeze({
   // Per-case допуски (план 2026-08-06 §W3): потолки `sizeDeltaPx` и сторон `overflowBudgetPx`.
   maxCaseSizeDeltaPx: 64,
   maxCaseOverflowBudgetPx: 256,
+  // Candidate dependency overlay (план 2026-08-07 §W3): узлов неопубликованных зависимостей
+  // на манифест. Потолок судит сервер (`422 candidate_overlay_limit`) — здесь его эхо.
+  maxOverlayNodes: 8,
 });
+
+/** Формат id кандидата (`server/acceptance/ids.ts#CANDIDATE_ID_PATTERN`). */
+const CANDIDATE_ID_PATTERN = /^cand_[0-9a-f]{64}$/;
 
 /** Лимиты из ответа `/capabilities` поверх дефолтов: сервер — источник истины, драйвер — эхо. */
 export function caseSetLimits(capabilities) {
@@ -2848,6 +2988,7 @@ export function caseSetLimits(capabilities) {
     maxSlotNodes: number(limits.caseSetMaxSlotNodes, CASE_SET_LIMITS.maxSlotNodes),
     maxCaseSizeDeltaPx: number(limits.caseSetMaxCaseSizeDeltaPx, CASE_SET_LIMITS.maxCaseSizeDeltaPx),
     maxCaseOverflowBudgetPx: number(limits.caseSetMaxCaseOverflowBudgetPx, CASE_SET_LIMITS.maxCaseOverflowBudgetPx),
+    maxOverlayNodes: number(limits.caseSetMaxOverlayNodes, CASE_SET_LIMITS.maxOverlayNodes),
   };
 }
 
@@ -2857,8 +2998,15 @@ export function caseSetLimits(capabilities) {
  * существование пина, его статус, ДС, схема props ребёнка, — остаётся сервером:
  * `slot_component_not_published`, `slot_props_invalid`, `slot_props_dynamic` и прочие `422`
  * драйвер не предсказывает и не имитирует.
+ *
+ * Ребёнок бывает двух форм (план 2026-08-07 §W3): **пин** `{type, version}` — опубликованная
+ * версия, и **overlay** `{overlay: "<componentId>"}` — узел из карты `candidateOverlay` манифеста,
+ * который ещё ни разу не публиковался. Формы различаются по наличию ключа `overlay` (тот же
+ * дискриминатор, что у серверной схемы), и смешивать их в одном объекте нельзя: пара
+ * «версия + кандидат» не отвечает на вопрос, чем именно набит слот. Найденные ссылки копятся в
+ * `overlayRefs` — на них замыкается проверка карты (`candidate_overlay_unused|unknown`).
  */
-function slotBindingIssues(bindings, where, limits) {
+function slotBindingIssues(bindings, where, limits, overlayRefs = new Set()) {
   const issues = [];
   // Тотал узлов считается по дереву случая целиком (серверный `slot_nodes_exceeded`).
   const state = { nodes: 0 };
@@ -2884,12 +3032,25 @@ function slotBindingIssues(bindings, where, limits) {
           issues.push(`${childAt}: the slot tree of a case holds at most ${limits.maxSlotNodes} children`);
           continue;
         }
-        if (!isPlainObject(child)) { issues.push(`${childAt} must be an object {type, version, props?, slotBindings?}`); continue; }
-        for (const key of Object.keys(child)) if (!["type", "version", "props", "slotBindings"].includes(key)) issues.push(`${childAt}: unknown field "${key}"`);
-        if (typeof child.type !== "string" || child.type.length === 0) issues.push(`${childAt}.type must be the published component name`);
-        // Точный пин версии — обязателен: набор контентно адресован, и «последняя активная»
-        // сделала бы его смысл зависимым от момента прогона.
-        if (!Number.isInteger(child.version) || child.version < 1) issues.push(`${childAt}.version must be an exact published version (a positive integer), not "latest"`);
+        if (!isPlainObject(child)) {
+          issues.push(`${childAt} must be an object {type, version, props?, slotBindings?} or {overlay, props?, slotBindings?}`);
+          continue;
+        }
+        // §W3: overlay-форма ребёнка. Дискриминатор — наличие ключа `overlay`; версии у неё нет
+        // вовсе (кандидат не опубликован, и сентинел исказил бы `slotsHash`).
+        const overlayForm = child.overlay !== undefined;
+        const allowed = overlayForm ? ["overlay", "props", "slotBindings"] : ["type", "version", "props", "slotBindings"];
+        for (const key of Object.keys(child)) if (!allowed.includes(key)) issues.push(`${childAt}: unknown field "${key}"`);
+        if (overlayForm) {
+          if (typeof child.overlay !== "string" || child.overlay.length === 0 || child.overlay.length > 64) {
+            issues.push(`${childAt}.overlay must be the componentId of a candidateOverlay node (1..64 chars)`);
+          } else overlayRefs.add(child.overlay);
+        } else {
+          if (typeof child.type !== "string" || child.type.length === 0) issues.push(`${childAt}.type must be the published component name`);
+          // Точный пин версии — обязателен: набор контентно адресован, и «последняя активная»
+          // сделала бы его смысл зависимым от момента прогона.
+          if (!Number.isInteger(child.version) || child.version < 1) issues.push(`${childAt}.version must be an exact published version (a positive integer), not "latest"`);
+        }
         if (child.props !== undefined && !isPlainObject(child.props)) issues.push(`${childAt}.props must be an object`);
         // Поддерево ребёнка (§W6): та же форма, уровнем ниже.
         if (child.slotBindings !== undefined) level(child.slotBindings, `${childAt}.slotBindings`, depth + 1);
@@ -2955,6 +3116,87 @@ export function casePolicyIssues(policy, limits = CASE_SET_LIMITS) {
         issues.push(`${at}: allowPaintOverflow and overflowBudgetPx are mutually exclusive (422 case_policy_conflict):`
           + " keep the blanket allowance or the per-side budget, not both");
       }
+    }
+  }
+  return issues;
+}
+
+/**
+ * Все `componentId`, которые overlay-дети манифеста связывают — по всем случаям и всем уровням
+ * вложенности (зеркало серверного `overlayReferencesOf`). Вход обеих проверок замыкания графа.
+ */
+export function overlayReferencesOf(manifest) {
+  const referenced = new Set();
+  const walk = (bindings) => {
+    if (!isPlainObject(bindings)) return;
+    for (const children of Object.values(bindings)) {
+      if (!Array.isArray(children)) continue;
+      for (const child of children) {
+        if (!isPlainObject(child)) continue;
+        if (typeof child.overlay === "string" && child.overlay.length > 0) referenced.add(child.overlay);
+        walk(child.slotBindings);
+      }
+    }
+  };
+  for (const item of manifest?.cases ?? []) if (isPlainObject(item)) walk(item.slotBindings);
+  return referenced;
+}
+
+/**
+ * Локальная проверка карты `candidateOverlay` (план 2026-08-07 §W3, §1.2) — до сети.
+ *
+ * Драйвер закрывает ровно те отказы, которые видны по одному манифесту, и называет серверный код,
+ * чтобы отказ читался одинаково с обеих сторон:
+ * - `candidate_overlay_limit` — узлов больше потолка;
+ * - `candidate_overlay_duplicate` — один `candidateId` под двумя `componentId` (кандидат
+ *   компонентно-скоупный, и одна сборка не может описывать два компонента);
+ * - `candidate_overlay_unused` — узел, до которого дерево случаев не дотягивается, и объявление
+ *   **субъекта** приёмки (его голова приезжает кандидатом рана, а не overlay'ем);
+ * - `candidate_overlay_unknown` — ребёнок ссылается на необъявленный узел.
+ *
+ * Всё, что требует базы (существование компонента, его дизайн-система, живость кандидата), —
+ * серверное: `candidate_overlay_component_not_found`, `..._design_system_mismatch`,
+ * `..._component_mismatch`, `409 ..._expired|evicted` драйвер не предсказывает.
+ */
+export function candidateOverlayIssues(manifest, limits = CASE_SET_LIMITS, overlayRefs = new Set()) {
+  const issues = [];
+  const overlay = manifest?.candidateOverlay;
+  if (overlay === undefined) {
+    for (const node of overlayRefs) {
+      issues.push(`a slot child binds overlay "${node}", but the manifest declares no candidateOverlay map`
+        + " (422 candidate_overlay_unknown)");
+    }
+    return issues;
+  }
+  if (!isPlainObject(overlay)) return ["candidateOverlay must be an object of componentId → candidate id (cand_<sha256>)"];
+  const entries = Object.entries(overlay);
+  if (entries.length > limits.maxOverlayNodes) {
+    issues.push(`candidateOverlay declares ${entries.length} nodes, above the ceiling of ${limits.maxOverlayNodes}`
+      + " (422 candidate_overlay_limit): a graph that large is a migration, not a case set");
+  }
+  const byCandidate = new Map();
+  for (const [node, candidateId] of entries) {
+    if (node.length === 0 || node.length > 64) issues.push(`candidateOverlay."${node}": a node key is a componentId of 1..64 chars`);
+    if (typeof candidateId !== "string" || !CANDIDATE_ID_PATTERN.test(candidateId)) {
+      issues.push(`candidateOverlay."${node}" must be a candidate id (cand_<sha256>), got ${JSON.stringify(candidateId)}`);
+      continue;
+    }
+    const first = byCandidate.get(candidateId);
+    if (first !== undefined) {
+      issues.push(`candidateOverlay maps "${first}" and "${node}" to the same candidate ${candidateId}`
+        + " (422 candidate_overlay_duplicate): a candidate describes exactly one component");
+    } else byCandidate.set(candidateId, node);
+    if (node === manifest.componentId) {
+      issues.push(`candidateOverlay declares the subject component "${node}" (422 candidate_overlay_unused):`
+        + " the head of the run is its own acceptance candidate");
+    } else if (!overlayRefs.has(node)) {
+      issues.push(`candidateOverlay declares "${node}", which no slot child of this set binds`
+        + " (422 candidate_overlay_unused): an unused node would shift every frame fingerprint without changing a pixel");
+    }
+  }
+  for (const node of overlayRefs) {
+    if (!Object.prototype.hasOwnProperty.call(overlay, node)) {
+      issues.push(`a slot child binds overlay "${node}", which candidateOverlay does not declare (422 candidate_overlay_unknown)`);
     }
   }
   return issues;
@@ -3083,7 +3325,12 @@ export function caseSurfaceIssues(item, where) {
 }
 
 const CASE_SET_ID_CHARSET = /^[A-Za-z0-9._-]{1,64}$/;
-const CASE_SET_TOP_LEVEL_KEYS = new Set(["manifestVersion", "componentId", "source", "capture", "dimensions", "requireVisual", "policy", "cases"]);
+const CASE_SET_TOP_LEVEL_KEYS = new Set([
+  "manifestVersion", "componentId", "source", "capture", "dimensions", "requireVisual", "policy", "cases",
+  // План 2026-08-07 §W3: карта неопубликованных зависимостей графа (`componentId → cand_…`).
+  // Без ключа в allowlist легальный overlay-манифест отвергался бы локально и до сети.
+  "candidateOverlay",
+]);
 /** Блок `capture` строгий на сервере: опечатка в нём — отказ, а не умолчание (W5 добавил `surface`). */
 const CASE_SET_CAPTURE_KEYS = new Set(["viewport", "deviceScaleFactor", "theme", "surface"]);
 const CASE_SET_SURFACES = ["hug", "viewport"];
@@ -3185,6 +3432,8 @@ export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
     issues.push(`cases: ${cases.length} exceeds the per-run ceiling of ${limits.maxCasesPerRun} (422 case_set_too_large)`);
   }
   const byId = new Map();
+  // §W3: ссылки overlay-детей копятся по всему дереву случаев — на них замыкается карта.
+  const overlayRefs = new Set();
   for (const [index, item] of cases.entries()) {
     if (!isPlainObject(item)) { issues.push(`cases[${index}] must be an object`); continue; }
     for (const key of Object.keys(item)) {
@@ -3198,10 +3447,13 @@ export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
     if (item.referenceAssetId !== undefined && !/^asset_[0-9a-f]{64}$/.test(String(item.referenceAssetId))) {
       issues.push(`cases[${index}].referenceAssetId must be an asset registry id (asset_<sha256>), not bytes or a path`);
     }
-    if (item.slotBindings !== undefined) issues.push(...slotBindingIssues(item.slotBindings, `cases[${index}]`, limits));
+    if (item.slotBindings !== undefined) issues.push(...slotBindingIssues(item.slotBindings, `cases[${index}]`, limits, overlayRefs));
     issues.push(...comparisonIssues(item, `cases[${index}]`));
     issues.push(...caseSurfaceIssues(item, `cases[${index}]`));
   }
+  // Карта overlay судится после обхода случаев: её отказы (`unused`/`unknown`) — про замыкание
+  // графа, а замыкание известно только когда собраны все ссылки детей.
+  issues.push(...candidateOverlayIssues(manifest, limits, overlayRefs));
   for (const item of cases) {
     if (!isPlainObject(item) || item.aliasOf === undefined) continue;
     const target = byId.get(item.aliasOf);
@@ -3243,9 +3495,12 @@ function coverageLines(coverage, { caseSetId, componentId }) {
  * подключается вторым шагом и только если он умеет dry-run (`features.caseSetValidate`):
  * молчаливый фолбэк на мутирующий PUT — ровно то, чего эта команда и должна избегать.
  */
-async function runCaseSetValidate(args) {
+async function runCaseSetValidate(args, flags = {}) {
   const [, manifestPath] = args;
-  const manifest = await readJsonArgument(manifestPath, "case-set manifest");
+  const manifest = withCandidateOverlay(
+    await readJsonArgument(manifestPath, "case-set manifest"),
+    flags.overlay === undefined ? undefined : await readOverlayArgument(flags.overlay),
+  );
   const local = caseSetManifestIssues(manifest, CASE_SET_LIMITS);
   if (local.length > 0) {
     throw new CliError([`case-set validate failed locally (${local.length} issue(s)); nothing was sent to the server:`,
@@ -3309,11 +3564,25 @@ async function runCaseSet(args, flags) {
   const [subcommand] = args;
   // `validate` — единственная подкоманда, которая начинает работу локально: гейт матрицы
   // проверяется внутри неё, после структурного разбора манифеста.
-  if (subcommand === "validate") return runCaseSetValidate(args);
+  if (subcommand === "validate") return runCaseSetValidate(args, flags);
   await requireAcceptanceMatrix();
   if (subcommand === "put") {
     const [, componentId, manifestPath] = args;
-    const manifest = await readJsonArgument(manifestPath, "case-set manifest");
+    const manifest = withCandidateOverlay(
+      await readJsonArgument(manifestPath, "case-set manifest"),
+      flags.overlay === undefined ? undefined : await readOverlayArgument(flags.overlay),
+    );
+    // §W3: overlay-манифест обязан отвергаться **до** мутации — round-trip за
+    // `candidate_overlay_unused` стоит дороже, чем локальная проверка замыкания графа. Скоуп
+    // проверки ровно overlay'ный: полный структурный разбор у `put` и раньше был за сервером
+    // (`case-set validate` — отдельная команда), и менять это здесь не за чем.
+    if (manifest.candidateOverlay !== undefined) {
+      const local = candidateOverlayIssues(manifest, CASE_SET_LIMITS, overlayReferencesOf(manifest));
+      if (local.length > 0) {
+        throw new CliError([`case-set put refused locally (${local.length} overlay issue(s)); nothing was sent to the server:`,
+          ...local.map((issue) => `  ${issue}`)].join("\n"));
+      }
+    }
     // Мутация требует прямой проверки существования (§W4): иначе первым свидетельством
     // «компонента нет» становится 404 самой мутации, а его легко списать на манифест.
     if (await getMeta("components", componentId, { mutating: true }) === null) {

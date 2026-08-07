@@ -93,8 +93,13 @@ declare module "*/author/driver.mjs" {
   export function screenDesignSystem(doc: DriverDocLike, screen: Record<string, unknown> | undefined): string | undefined;
   export function buildSnapPlan(
     draft: { doc: DriverDocLike & { screens: readonly Record<string, unknown>[] } },
-    flags?: { viewport?: DriverViewport | null; dsf?: number; theme?: string },
-  ): { screenId: string; viewport: DriverViewport; deviceScaleFactor?: number; theme?: string }[];
+    flags?: { viewport?: DriverViewport | null; dsf?: number; theme?: string; noBarrier?: boolean; candidate?: readonly string[] },
+  ): {
+    screenId: string; viewport: DriverViewport; deviceScaleFactor?: number; theme?: string;
+    candidateOverrides?: { candidateId: string }[];
+    /** §W2: opt-in барьера ресурсов джобы; отсутствует под `--no-barrier`. */
+    readiness?: "barrier";
+  }[];
   export function buildBaselinePlan(
     draft: Record<string, unknown> & { rev: number; prototypeInstanceId: string },
     options?: { viewport?: DriverViewport | null; dsf?: number; theme?: string },
@@ -159,8 +164,36 @@ declare module "*/author/driver.mjs" {
     productErrors: string[];
     infraNoise: string[];
     runtimeWarnings: string[];
+    /**
+     * Сколько сообщений консоли классификация капчура подавила (план 2026-08-07 §W10). Источник —
+     * `quality.suppressedCount` результата джобы; сервер до волны числа не присылает, и тогда его
+     * несёт длина `infraNoise`.
+     */
+    suppressedCount: number;
   }
   export function summarizeCapture(result: Record<string, unknown> | null | undefined): DriverCaptureSummary;
+  /**
+   * Значение opt-in'а readiness прототипной джобы (§W2). Сервер принимает ровно `"barrier"`;
+   * драйверный `snap` шлёт его по умолчанию, `--no-barrier` не шлёт поле вовсе.
+   */
+  export const SNAP_READINESS: "barrier";
+  /** Эхо фазы барьера ресурсов из receipt'а (`resources.resourceBarrier`, §W2). */
+  export interface DriverResourceBarrier {
+    expected: number;
+    decoded: number;
+    fontsReady: boolean;
+    stableFrames: number;
+    lateAfterBarrier: string[];
+    durationMs: number;
+  }
+  /** Строка блока барьера; `null` — политика барьера кадру не требовалась или блок не приехал. */
+  export function resourceBarrierLine(where: string, receipt: unknown): string | null;
+  /** Одна сводная строка подавленного шума (§W10); `null` — подавлять было нечего. */
+  export function suppressedNoiseLine(
+    where: string,
+    result: { suppressedCount?: number; infraNoise?: readonly string[] } | null | undefined,
+    receipt: unknown,
+  ): string | null;
   /** Типизированный код капчура (R3) в форме, которую печатает CLI. */
   export interface DriverCaptureCode { code: string; severity: string; detail: string }
   export interface DriverCaptureRenderer {
@@ -304,6 +337,8 @@ declare module "*/author/driver.mjs" {
     /** Per-case допуски (план 2026-08-06 §W3): потолки `sizeDeltaPx` и сторон `overflowBudgetPx`. */
     maxCaseSizeDeltaPx: number;
     maxCaseOverflowBudgetPx: number;
+    /** Узлов `candidateOverlay` на манифест (план 2026-08-07 §W3, `limits.caseSetMaxOverlayNodes`). */
+    maxOverlayNodes: number;
   }
   export const CASE_SET_LIMITS: Readonly<DriverCaseSetLimits>;
   export function caseSetLimits(capabilities: unknown): DriverCaseSetLimits;
@@ -331,5 +366,21 @@ declare module "*/author/driver.mjs" {
    * `case_clip_expectation_requires_root`) — до сети и с теми же кодами в тексте.
    */
   export function caseSurfaceIssues(item: unknown, where: string): string[];
+  /**
+   * Candidate dependency overlay (план 2026-08-07 §W3): карта `componentId → cand_<sha256>` и
+   * overlay-форма slot-ребёнка `{overlay, props?, slotBindings?}`.
+   */
+  export type DriverCandidateOverlay = Record<string, string>;
+  /** Все `componentId`, связанные overlay-детьми дерева случаев (вход проверок замыкания). */
+  export function overlayReferencesOf(manifest: unknown): Set<string>;
+  /**
+   * Локальные отказы карты overlay с серверными кодами в тексте (`candidate_overlay_limit`,
+   * `..._duplicate`, `..._unused`, `..._unknown`). Пустой список — «локально претензий нет».
+   */
+  export function candidateOverlayIssues(
+    manifest: unknown,
+    limits?: DriverCaseSetLimits,
+    overlayRefs?: ReadonlySet<string>,
+  ): string[];
   export function caseSetIdOfManifest(manifest: unknown): string;
 }

@@ -34,6 +34,9 @@ import {
   caseSetIdOfManifest,
   caseSetLimits,
   caseSetManifestIssues,
+  candidateOverlayIssues,
+  resourceBarrierLine,
+  suppressedNoiseLine,
   previewDraftOutputPath,
   previewOutputPath,
   DEFAULT_EXPECT_TOLERANCE,
@@ -2247,7 +2250,8 @@ describe("author driver audit --versions (KPI, RFC §9)", () => {
 describe("author driver planners", () => {
   test("capture summaries classify results and map onto exit codes", () => {
     expect(summarizeCapture({ imageProduced: true, captureClean: true, productErrors: [], infraNoise: ["favicon"], runtimeWarnings: ["w"] }))
-      .toEqual({ imageProduced: true, captureClean: true, productErrors: [], infraNoise: ["favicon"], runtimeWarnings: ["w"] });
+      // §W10: рядом со списком подавленного едет его счётчик — доволновой сервер выводит его из длины.
+      .toEqual({ imageProduced: true, captureClean: true, productErrors: [], infraNoise: ["favicon"], runtimeWarnings: ["w"], suppressedCount: 1 });
     // Pre-7.1 servers do not classify: raw browser errors stay product errors.
     expect(summarizeCapture({ imageUrl: "/api/assets/x", consoleErrors: ["boom"], pageErrors: [] }))
       .toMatchObject({ imageProduced: true, captureClean: false, productErrors: ["boom"], infraNoise: [] });
@@ -2907,4 +2911,272 @@ describe("author driver receipt envelope (W6a)", () => {
     expect(human.stdout).not.toContain("envelope");
     expect(human.stdout).not.toContain("schemaVersion");
   });
+});
+
+/**
+ * Драйверные кусочки волн W2 / W10 / W3 (план `docs/plans/2026-08-07-migration-feedback-wave.md`).
+ *
+ * Серверные половины уже в коде, поэтому проверяется ровно контракт **клиента**: какое поле
+ * уезжает в тело съёмки и как его выключить, что печатается из receipt'а и какие overlay-отказы
+ * ловятся до сети. Тесты неймспейсно разделены по волнам — это три независимых механизма,
+ * встретившихся в одном файле.
+ */
+describe("author driver resource barrier (W2)", () => {
+  /** Кадр с доказательством барьера: воркер публикует evidence так же, как настоящий шелл. */
+  const barrierRunJob = (): { runJob: RunJob; jobs: () => WorkerJob[] } => {
+    const jobs: WorkerJob[] = [];
+    const runJob: RunJob = async (job) => {
+      jobs.push(job);
+      return {
+        ok: true, pngBase64: Buffer.from(png()).toString("base64"), width: 2, height: 3,
+        consoleErrors: [], pageErrors: [], browserVersion: "test/1",
+        readiness: {
+          met: true, policyHash: "f".repeat(64), elapsedMs: 140,
+          evidence: {
+            resourceBarrier: {
+              expected: 7, decoded: 7, fontsReady: true, stableFrames: 2,
+              lateAfterBarrier: [], durationMs: 120,
+            },
+            phaseTimings: { barrierMs: 120 },
+          },
+        },
+      } as never;
+    };
+    return { runJob, jobs: () => jobs };
+  };
+
+  test("snap просит барьер по умолчанию, а --no-barrier возвращает доволновую политику", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await fixture("snap-barrier"));
+
+    const withBarrier = await run(api, ["snap", "snap-barrier", `${directory}/shots`, "--json"]);
+    expect(withBarrier.exitCode).toBe(0);
+    // Сервисная съёмка: политика джобы — v3 с блоком барьера, а не интерактивная v1.
+    expect(stub.jobs()[0]!.bootstrap.readiness).toMatchObject({ version: 3 });
+    expect(stub.jobs()[0]!.bootstrap.readiness!.resourceBarrier).toBeDefined();
+
+    const rolledBack = await run(api, ["snap", "snap-barrier", `${directory}/shots`, "--no-barrier", "--json"]);
+    expect(rolledBack.exitCode).toBe(0);
+    // Откат — это отсутствие поля в запросе: интерактивный дефолт сервера политику в bootstrap
+    // не кладёт вовсе (страница берёт доволновую v1 сама), и подменять её драйверу нечем.
+    expect(stub.jobs()[1]!.bootstrap.readiness).toBeUndefined();
+  }, 30_000);
+
+  test("план съёмки несёт opt-in барьера, и только он", async () => {
+    const doc = { screens: [{ id: "welcome" }, { id: "second" }] };
+    expect(buildSnapPlan({ doc }).map((surface) => surface.readiness)).toEqual(["barrier", "barrier"]);
+    expect(buildSnapPlan({ doc }, { noBarrier: true }).map((surface) => surface.readiness)).toEqual([undefined, undefined]);
+  });
+
+  test("строка барьера читается из receipt'а и молчит, когда доказательства нет", () => {
+    const receipt = {
+      resources: { resourceBarrier: { expected: 9, decoded: 8, fontsReady: true, stableFrames: 2, lateAfterBarrier: ["/api/assets/late.png"], durationMs: 812 } },
+      timings: { barrierMs: 812 },
+    };
+    expect(resourceBarrierLine("welcome", receipt))
+      .toBe("welcome barrier: decoded 8/9 resources, fonts ready, stableFrames 2, late /api/assets/late.png, 812ms");
+    // Ни receipt'а, ни блока — строки нет: «барьер прошёл» по отсутствию доказательства не выводится.
+    expect(resourceBarrierLine("welcome", null)).toBeNull();
+    expect(resourceBarrierLine("welcome", { resources: { resourceBarrier: null } })).toBeNull();
+  });
+
+  test("snap --receipt печатает блок барьера и кладёт его в отчёт", async () => {
+    const stub = barrierRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await fixture("snap-barrier-receipt"));
+    const receiptPath = resolve(directory, "receipts/barrier.json");
+
+    const human = await run(api, ["snap", "snap-barrier-receipt", `${directory}/shots`, "--receipt", receiptPath]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("welcome barrier: decoded 7/7 resources, fonts ready, stableFrames 2, late -, 120ms");
+
+    const json = await run(api, ["snap", "snap-barrier-receipt", `${directory}/shots`, "--receipt", receiptPath, "--json"]);
+    const payload = JSON.parse(json.stdout) as { screens: { resourceBarrier?: { decoded: number }; barrierMs?: number }[] };
+    expect(payload.screens[0]).toMatchObject({ resourceBarrier: { expected: 7, decoded: 7, fontsReady: true }, barrierMs: 120 });
+  }, 30_000);
+
+  test("кадр без барьера не получает ни строки, ни поля: отсутствие блока не выдумывается", async () => {
+    const { api, directory } = await setup(undefined, pngRunJob().runJob);
+    await saveDoc(api, await fixture("snap-no-barrier-evidence"));
+    const receiptPath = resolve(directory, "receipts/plain.json");
+    const result = await run(api, ["snap", "snap-no-barrier-evidence", `${directory}/shots`, "--receipt", receiptPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { screens: Record<string, unknown>[] };
+    expect(payload.screens[0]).not.toHaveProperty("resourceBarrier");
+    expect(payload.screens[0]).not.toHaveProperty("barrierMs");
+  }, 30_000);
+});
+
+describe("author driver suppressed console noise (W10)", () => {
+  const NOISE = [
+    "Failed to load resource: 404 (http://127.0.0.1:8787/favicon.ico?v=1)",
+    "Failed to load resource: 404 (http://127.0.0.1:8787/favicon.ico?v=2)",
+    "ResizeObserver loop completed with undelivered notifications.",
+  ];
+
+  test("сводная строка считает по результату джобы и уточняется топ-сигнатурой receipt'а", () => {
+    // Счётчик есть всегда (сервер волны W10), топ — только когда receipt прочитан.
+    expect(suppressedNoiseLine("welcome", { suppressedCount: 4, infraNoise: [] }, null)).toBe("welcome suppressed 4");
+    expect(suppressedNoiseLine("welcome", { suppressedCount: 4 }, {
+      console: { suppressed: [{ signature: "Failed to load resource: 404 (/favicon.ico)", count: 2 }] },
+    })).toBe("welcome suppressed 4 (top: Failed to load resource: 404 (/favicon.ico) ×2)");
+    // Сервер до волны числа не присылает — счётчик берётся из длины списка.
+    expect(suppressedNoiseLine("welcome", { infraNoise: ["a", "b"] }, null)).toBe("welcome suppressed 2");
+    // Подавлять было нечего — строки нет вовсе.
+    expect(suppressedNoiseLine("welcome", { suppressedCount: 0, infraNoise: [] }, null)).toBeNull();
+    expect(suppressedNoiseLine("welcome", null, null)).toBeNull();
+  });
+
+  test("summarizeCapture несёт счётчик подавленного рядом с самим списком", () => {
+    expect(summarizeCapture({ imageProduced: true, captureClean: true, productErrors: [], infraNoise: ["favicon"], runtimeWarnings: [], suppressedCount: 3 }))
+      .toMatchObject({ infraNoise: ["favicon"], suppressedCount: 3 });
+    // Доволновой сервер: число выводится из списка, а не обнуляется.
+    expect(summarizeCapture({ imageProduced: true, productErrors: [], infraNoise: ["favicon", "resize"] }).suppressedCount).toBe(2);
+  });
+
+  test("snap печатает ровно одну сводную строку шума, не трогая прежние строки", async () => {
+    const { api, directory } = await setup(undefined, pngRunJob(NOISE).runJob);
+    await saveDoc(api, await fixture("snap-noise"));
+    const receiptPath = resolve(directory, "receipts/noise.json");
+    const result = await run(api, ["snap", "snap-noise", `${directory}/shots`, "--receipt", receiptPath]);
+    expect(result.exitCode).toBe(0);
+    const suppressed = result.stderr.split("\n").filter((line) => line.includes("suppressed"));
+    expect(suppressed).toHaveLength(1);
+    expect(suppressed[0]).toContain("welcome suppressed 3 (top: Failed to load resource: 404 (http://127.0.0.1:8787/favicon.ico) ×2)");
+    // Прежняя строка про infra noise осталась на месте: волна только добавляет.
+    expect(result.stderr).toContain("infra noise (ignored)");
+  }, 30_000);
+});
+
+describe("author driver candidate dependency overlay (W3)", () => {
+  const CAND_ROW = `cand_${"1".repeat(64)}`;
+  const CAND_BUTTON = `cand_${"2".repeat(64)}`;
+  const overlayManifest = (overrides: Record<string, unknown> = {}) => ({
+    manifestVersion: 1,
+    componentId: "pay-payment-card",
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+    candidateOverlay: { "pay-row": CAND_ROW },
+    cases: [{
+      id: "default",
+      props: { state: "default" },
+      slotBindings: { items: [{ overlay: "pay-row", props: { title: "Total" } }] },
+    }],
+    ...overrides,
+  });
+
+  test("манифест с overlay-графом принимается локально: ключ, форма ребёнка и карта", () => {
+    expect(caseSetManifestIssues(overlayManifest())).toEqual([]);
+    // Overlay-ребёнок живёт и на вложенном уровне, рядом с обычным пином.
+    expect(caseSetManifestIssues(overlayManifest({
+      candidateOverlay: { "pay-row": CAND_ROW, "pay-button": CAND_BUTTON },
+      cases: [{
+        id: "nested", props: { state: "default" },
+        slotBindings: {
+          items: [{ overlay: "pay-row", slotBindings: { action: [{ overlay: "pay-button" }] } }, { type: "PayIcon", version: 2 }],
+        },
+      }],
+    }))).toEqual([]);
+  });
+
+  test("overlay-форма ребёнка не смешивается с пином и не выдумывает версию", () => {
+    const issues = caseSetManifestIssues(overlayManifest({
+      cases: [{ id: "default", props: {}, slotBindings: { items: [{ overlay: "pay-row", version: 1 }] } }],
+    })).join("\n");
+    expect(issues).toContain('unknown field "version"');
+    // Пиновая форма по-прежнему требует точную версию.
+    expect(caseSetManifestIssues(overlayManifest({
+      candidateOverlay: undefined,
+      cases: [{ id: "default", props: {}, slotBindings: { items: [{ type: "PayRow" }] } }],
+    })).join("\n")).toContain("must be an exact published version");
+  });
+
+  test("замыкание графа и потолки судятся до сети, серверными кодами", () => {
+    const text = (manifest: unknown) => caseSetManifestIssues(manifest).join("\n");
+    // Узел, до которого дерево не дотягивается.
+    expect(text(overlayManifest({ candidateOverlay: { "pay-row": CAND_ROW, "pay-chip": CAND_BUTTON } })))
+      .toContain("candidate_overlay_unused");
+    // Субъект приёмки в карте — та же претензия: его голова приезжает кандидатом рана.
+    expect(text(overlayManifest({ candidateOverlay: { "pay-payment-card": CAND_ROW, "pay-row": CAND_BUTTON } })))
+      .toContain("candidate_overlay_unused");
+    // Ребёнок ссылается на необъявленный узел — и отдельно случай «карты нет вовсе».
+    expect(text(overlayManifest({ candidateOverlay: { "pay-chip": CAND_ROW } }))).toContain("candidate_overlay_unknown");
+    expect(text(overlayManifest({ candidateOverlay: undefined }))).toContain("candidate_overlay_unknown");
+    // Один кандидат под двумя компонентами невозможен: кандидат компонентно-скоупный.
+    expect(text(overlayManifest({
+      candidateOverlay: { "pay-row": CAND_ROW, "pay-button": CAND_ROW },
+      cases: [{ id: "default", props: {}, slotBindings: { items: [{ overlay: "pay-row" }, { overlay: "pay-button" }] } }],
+    }))).toContain("candidate_overlay_duplicate");
+    // Формат id кандидата — тот же, что у сервера.
+    expect(text(overlayManifest({ candidateOverlay: { "pay-row": "cand_short" } }))).toContain("must be a candidate id (cand_<sha256>)");
+    // Потолок узлов: девятый узел ловится локально, и лимит сервера перекрывает дефолт драйвера.
+    const nodes = Array.from({ length: 9 }, (_, index) => `node-${index}`);
+    const wide = overlayManifest({
+      candidateOverlay: Object.fromEntries(nodes.map((node, index) => [node, `cand_${String(index).repeat(64).slice(0, 64)}`])),
+      cases: [{ id: "default", props: {}, slotBindings: { items: nodes.map((node) => ({ overlay: node })) } }],
+    });
+    expect(text(wide)).toContain("candidate_overlay_limit");
+    expect(candidateOverlayIssues(overlayManifest(), caseSetLimits({ limits: { caseSetMaxOverlayNodes: 0 } }), new Set(["pay-row"])).join("\n"))
+      .toContain("above the ceiling of 0");
+  });
+
+  test("--overlay вносит карту в манифест и уезжает в PUT/validate, а конфликт отвергается до сети", async () => {
+    const directory = await testDirectory();
+    const manifestPath = resolve(directory, "overlay.json");
+    // В файле карты нет — её приносит флаг: ровно тот сценарий, ради которого он и заведён.
+    await writeFile(manifestPath, JSON.stringify(overlayManifest({ candidateOverlay: undefined })));
+    const { api, calls } = await stubApi({
+      "GET /api/capabilities": () => ({
+        json: { features: { acceptanceMatrix: true, caseSetValidate: true }, limits: { caseSetMaxOverlayNodes: 8 } },
+      }),
+      "POST /api/components/pay-payment-card/case-sets/validate": () => ({
+        json: { caseSetId: `cset_${"c".repeat(64)}`, componentId: "pay-payment-card", cases: { count: 1, ids: ["default"] }, wouldBeCached: false },
+      }),
+    });
+    const inline = await run(api, ["case-set", "validate", manifestPath, "--overlay", JSON.stringify({ "pay-row": CAND_ROW }), "--json"]);
+    expect(inline.exitCode).toBe(0);
+    const sent = calls.find((call) => call.method === "POST")!.body as { manifest: { candidateOverlay: Record<string, string> } };
+    expect(sent.manifest.candidateOverlay).toEqual({ "pay-row": CAND_ROW });
+
+    // Файл вместо инлайна — та же карта.
+    const overlayPath = resolve(directory, "map.json");
+    await writeFile(overlayPath, JSON.stringify({ "pay-row": CAND_ROW }));
+    const fromFile = await run(api, ["case-set", "validate", manifestPath, "--overlay", overlayPath, "--json"]);
+    expect(fromFile.exitCode).toBe(0);
+
+    // Две декларации одного графа — отказ: одна из них забыта.
+    const declared = resolve(directory, "declared.json");
+    await writeFile(declared, JSON.stringify(overlayManifest()));
+    const conflict = await run(api, ["case-set", "validate", declared, "--overlay", JSON.stringify({ "pay-row": CAND_BUTTON })]);
+    expect(conflict.exitCode).toBe(1);
+    expect(conflict.stderr).toContain("contradicts the candidateOverlay already declared");
+  }, 30_000);
+
+  test("битый overlay-манифест не доживает до сети ни в validate, ни в put", async () => {
+    const directory = await testDirectory();
+    const broken = resolve(directory, "broken-overlay.json");
+    await writeFile(broken, JSON.stringify(overlayManifest({ candidateOverlay: { "pay-row": CAND_ROW, "pay-chip": CAND_BUTTON } })));
+    const { api, calls } = await stubApi({
+      "GET /api/capabilities": () => ({ json: { features: { acceptanceMatrix: true, caseSetValidate: true }, limits: {} } }),
+    });
+    const validate = await run(api, ["case-set", "validate", broken]);
+    expect(validate.exitCode).toBe(1);
+    expect(validate.stderr).toContain("candidate_overlay_unused");
+    expect(calls).toEqual([]);
+
+    const put = await run(api, ["case-set", "put", "pay-payment-card", broken]);
+    expect(put.exitCode).toBe(1);
+    expect(put.stderr).toContain("candidate_overlay_unused");
+    // Мутации нет: PUT не отправлялся (capabilities-гейт матрицы читать при этом законно).
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
+  }, 30_000);
+
+  test("accept --overlay отказывает до сети и называет верный путь", async () => {
+    const { api, calls } = await stubApi({});
+    const result = await run(api, ["accept", "pay-payment-card", "--overlay", JSON.stringify({ "pay-row": CAND_ROW })]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("accept has no --overlay");
+    expect(result.stderr).toContain("case-set put");
+    expect(calls).toEqual([]);
+  }, 30_000);
 });
