@@ -48,6 +48,7 @@ function v14():Database {
   // снимаем по той же причине, что и остальные post-v14 колонки.
   for(const column of ["renderer_fingerprint","renderer_json","font_manifest_hash","receipt_sha256","renderer_recorded_at"] as const) db.run(`ALTER TABLE visual_references DROP COLUMN ${column}`);
   for(const column of ["renderer_guard","outcome_code","candidate_receipt_sha256","reference_receipt_sha256"] as const) db.run(`ALTER TABLE visual_runs DROP COLUMN ${column}`);
+  db.run("DROP TABLE figma_source_packages");
   db.run("PRAGMA user_version=14");
   return db;
 }

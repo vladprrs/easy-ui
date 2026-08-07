@@ -27,6 +27,19 @@ export interface CandidateMeta {
   slots?: readonly string[];
 }
 
+/**
+ * Сигнатура источника артефакта в Figma (§W8): ключи компонентов и семантические роли его узлов.
+ *
+ * Тип объявлен **здесь**, а не импортируется из `server/figma/sourcePackage.ts`, ровно по той же
+ * причине, по которой ядро матчера не ходит в БД: его файл держит закрытый список импортов
+ * (гейт-тест в `matcher.test.ts`), и вход сигнала обязан быть его собственным типом, а не ссылкой
+ * на подсистему хранения. Проекцию пакета в эту форму делает `sourceSignatureOf`.
+ */
+export interface SourceSignature {
+  componentKeys: readonly string[];
+  roles: readonly string[];
+}
+
 /** Тип артефакта каталога. Композиции въехали в корпус в W9 (план 2026-08-03, R1-M9). */
 export type ArtifactKind = "component" | "composition";
 
@@ -69,6 +82,11 @@ export interface CorpusCandidate {
   shingles: ReadonlySet<string>;
   /** Только у `kind: "composition"`: структура тела вместо шинглов TSX. */
   structure?: CandidateStructure;
+  /**
+   * Источник артефакта в Figma (§W8): ключи компонентов и семантические роли узлов из пакета
+   * исходников, на который ссылается его provenance. Отсутствует — сигнал неприменим.
+   */
+  sourceSignature?: SourceSignature;
 }
 
 /** Предложение: то, что вызывающий собирается создать. */
@@ -87,6 +105,8 @@ export interface ProposedArtifact {
   source?: string;
   /** Только у `kind: "composition"`: структура тела предложенного документа. */
   structure?: CandidateStructure;
+  /** Источник предложения (§W8): что пакет знает про узлы, из которых его собираются собрать. */
+  sourceSignature?: SourceSignature;
 }
 
 export interface PropsDelta { added: string[]; removed: string[]; typeChanged: string[] }
@@ -99,12 +119,21 @@ export interface SignalBreakdown {
   name?: number;
   description?: number;
   levelScope?: number;
+  /** Общий источник Figma (§W8): ранжирующий сигнал, в `gateScore` не входит. */
+  sourcePackage?: number;
   /** Сумма весов применимых сигналов (знаменатель перенормировки). */
   appliedWeight: number;
 }
 
 export interface ScoreBreakdown {
   score: number;
+  /**
+   * Score **без** ранжирующих сигналов (сегодня это один `sourcePackage`, §W8). Именно он решает
+   * `blocking`: сигнал источника показывает кандидата выше, но не имеет права запрещать создание.
+   * Без источника у обеих сторон `gateScore === score` байт-в-байт, поэтому доволновые вердикты
+   * не двигаются.
+   */
+  gateScore: number;
   signals: SignalBreakdown;
   /** Пересекающиеся канонические роли — blocking независимо от score. */
   canonicalOverlap: string[];
@@ -211,6 +240,19 @@ function propsDeltaOf(candidate: PropsSignature | undefined, proposed: PropsSign
   return { added: added.sort(), removed: removed.sort(), typeChanged: typeChanged.sort() };
 }
 
+/**
+ * Сходство источников (§W8). Совпавший `componentKey` — **тождество мастера** Figma, сильнейшее из
+ * возможных утверждений о родстве, поэтому 1 без дальнейшей арифметики. Иначе остаётся Jaccard
+ * семантических ролей: «оба — платёжная кнопка» стоит ровно столько, сколько стоит роль.
+ */
+export function sourcePackageSimilarity(left: SourceSignature, right: SourceSignature): number {
+  const leftKeys = new Set(left.componentKeys);
+  if (right.componentKeys.some((key) => leftKeys.has(key))) return 1;
+  const leftRoles = new Set(left.roles), rightRoles = new Set(right.roles);
+  if (leftRoles.size === 0 || rightRoles.size === 0) return 0;
+  return jaccard(leftRoles, rightRoles);
+}
+
 const ioTokens = (signature: { events: string[]; slots: string[] }): Set<string> =>
   new Set([...signature.events.map((event) => `e:${event}`), ...signature.slots.map((slot) => `s:${slot}`)]);
 
@@ -222,6 +264,7 @@ interface ProposedView {
   shingles: Set<string>;
   name: Set<string>;
   text: string;
+  sourceSignature?: SourceSignature;
   fingerprint?: string;
   canonicalFor: Set<string>;
   structure?: CandidateStructure;
@@ -241,6 +284,7 @@ export function prepareProposed(proposed: ProposedArtifact): ProposedView {
     fingerprint: meta === undefined ? undefined : structuralFingerprint({ propsJsonSchema: meta.propsJsonSchema, events: meta.events, slots: meta.slots, atomicLevel: proposed.atomicLevel, scope: proposed.scope }),
     canonicalFor: new Set(proposed.canonicalFor ?? []),
     ...(proposed.structure === undefined ? {} : { structure: proposed.structure }),
+    ...(proposed.sourceSignature === undefined ? {} : { sourceSignature: proposed.sourceSignature }),
   };
 }
 
@@ -248,9 +292,17 @@ export function prepareProposed(proposed: ProposedArtifact): ProposedView {
  * Перенормировка: сумма только по применимым сигналам, делённая на сумму их весов.
  * Ни одного применимого сигнала — score 0 (а не деление на ноль и не «единица по умолчанию»).
  */
-function weighted(signals: Omit<SignalBreakdown, "appliedWeight">, weights: MatchWeights): { score: number; appliedWeight: number } {
+const SCORE_KEYS = ["props", "io", "source", "name", "description", "levelScope", "sourcePackage"] as const;
+/** Сигналы гейта: ранжирующий `sourcePackage` в решение `blocking` не входит (§W8, триаж S-M6). */
+const GATE_KEYS = ["props", "io", "source", "name", "description", "levelScope"] as const;
+
+function weighted(
+  signals: Omit<SignalBreakdown, "appliedWeight">,
+  weights: MatchWeights,
+  keys: readonly (keyof MatchWeights)[] = SCORE_KEYS,
+): { score: number; appliedWeight: number } {
   let sum = 0, appliedWeight = 0;
-  for (const key of ["props", "io", "source", "name", "description", "levelScope"] as const) {
+  for (const key of keys) {
     const value = signals[key];
     if (value === undefined) continue;
     sum += weights[key] * value;
@@ -291,8 +343,16 @@ function scoreWith(candidate: CorpusCandidate, view: ProposedView, policy: Match
   if (candidate.scope !== undefined && view.artifact.scope !== undefined) dimensions.push(candidate.scope === view.artifact.scope ? 1 : 0);
   const levelScope = dimensions.length === 0 ? undefined : dimensions.reduce((total, value) => total + value, 0) / dimensions.length;
 
-  const parts = { props, io, source, name, description, levelScope };
+  // §W8: общий источник Figma. Совпавший `componentKey` — тождество мастера, поэтому 1; иначе
+  // сигнал вырождается в пересечение семантических ролей. Неприменим, когда источника нет хотя бы
+  // у одной стороны: молчание пакета не должно штрафовать кандидата, у которого пакета не бывает.
+  const sourcePackage = candidate.sourceSignature === undefined || view.sourceSignature === undefined
+    ? undefined
+    : sourcePackageSimilarity(candidate.sourceSignature, view.sourceSignature);
+
+  const parts = { props, io, source, name, description, levelScope, sourcePackage };
   const { score, appliedWeight } = weighted(parts, policy.weights);
+  const gateScore = sourcePackage === undefined ? score : weighted(parts, policy.weights, GATE_KEYS).score;
 
   const candidateFingerprint = meta === undefined ? undefined : structuralFingerprint({ propsJsonSchema: meta.propsJsonSchema, events: meta.events, slots: meta.slots, atomicLevel: candidate.atomicLevel, scope: candidate.scope });
 
@@ -307,6 +367,7 @@ function scoreWith(candidate: CorpusCandidate, view: ProposedView, policy: Match
 
   return {
     score,
+    gateScore,
     signals: { ...parts, appliedWeight },
     canonicalOverlap: [...new Set(candidate.canonicalFor ?? [])].filter((role) => view.canonicalFor.has(role)).sort(),
     structuralMatch,
@@ -336,6 +397,10 @@ function reasonsFor(candidate: CorpusCandidate, breakdown: ScoreBreakdown, repla
   if (source !== undefined && source >= REASON_FLOOR) reasons.push(`${percent(source)}% ${composition ? "composition body structure" : "normalized source structure"}`);
   if (props !== undefined && props >= REASON_FLOOR && !breakdown.structuralMatch) reasons.push(`${percent(props)}% props signature similarity`);
   if (name !== undefined && name >= REASON_FLOOR) reasons.push(`${percent(name)}% name-token similarity`);
+  const sourcePackage = breakdown.signals.sourcePackage;
+  if (sourcePackage !== undefined && sourcePackage >= REASON_FLOOR) {
+    reasons.push(sourcePackage === 1 ? "same Figma component key in the source package" : `${percent(sourcePackage)}% semantic role overlap in the source package`);
+  }
   if (levelScope === 1 && description !== undefined && description >= REASON_FLOOR) {
     reasons.push(`same ${candidate.scope ?? candidate.atomicLevel} scope with matching product-job description`);
   }
@@ -385,7 +450,9 @@ export function matchCandidates(corpus: readonly CorpusCandidate[], proposed: Pr
     const structuralEvidence = breakdown.signals.props !== undefined || breakdown.signals.io !== undefined || breakdown.signals.source !== undefined;
     // Deprecated/replaced возвращается ради объяснения, но не как цель: blocking снимается
     // только когда активная замена реально есть в корпусе — иначе агенту некуда идти.
-    const blocking = (breakdown.canonicalOverlap.length > 0 || breakdown.structuralMatch || (rounded >= effective.blockingThreshold && structuralEvidence)) && !(candidate.deprecated && replacementActive);
+    // Порог применяется к **гейтовому** score (§W8): ранжирующий сигнал источника поднимает
+    // кандидата в выдаче, но запрещать создание он права не имеет.
+    const blocking = (breakdown.canonicalOverlap.length > 0 || breakdown.structuralMatch || (round4(breakdown.gateScore) >= effective.blockingThreshold && structuralEvidence)) && !(candidate.deprecated && replacementActive);
     const row: MatchCandidate = {
       kind: candidate.kind,
       id: candidate.id,

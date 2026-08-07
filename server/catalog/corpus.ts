@@ -30,6 +30,8 @@ import type { DefinitionMeta } from "../components/types";
 import { ComponentFingerprintRepo, sourceSha256 } from "../repos/componentFingerprints";
 import { activeCatalogRows } from "../routes/components";
 import { headUsageCounts } from "../usageGraph";
+import { resolveHeadProvenanceByComponent } from "../figma";
+import { manifestOfRow, sourceSignatureOf, SourcePackageRepo, type SourceSignature } from "../figma/sourcePackage";
 import { sourceShingles } from "./fingerprint";
 import type { CorpusCandidate } from "./matcher";
 import { activeCompositionRevisionSources } from "./compositionRevisionSources";
@@ -177,6 +179,42 @@ export function collectCompositionCandidates(db: Database, designSystem: string)
   return candidates;
 }
 
+/**
+ * Сигнатуры источника компонентов системы (§W8, триаж S-M6): `componentId → {componentKeys, roles}`.
+ *
+ * Собирается за два запроса, а не по компоненту: пакеты системы читаются один раз, provenance —
+ * тем же set-based резолвером, что и горячий путь библиотеки (`resolveHeadProvenanceByComponent` —
+ * единственный легальный читатель хранимой provenance, гейт `npm run verify:provenance`).
+ * Компоненты без `sourcePackageId` в карту не попадают вовсе — сигнал обязан быть
+ * **неприменимым**, а не пустым.
+ *
+ * Любая поломка (нет таблицы, битый манифест) деградирует до «сигнала нет»: ранжирование не имеет
+ * права ронять поиск кандидатов.
+ */
+export function collectSourceSignatures(db: Database, designSystem: string): Map<string, SourceSignature> {
+  const signatures = new Map<string, SourceSignature>();
+  let provenance: ReturnType<typeof resolveHeadProvenanceByComponent>;
+  try { provenance = resolveHeadProvenanceByComponent(db); } catch { return signatures; }
+  const repo = new SourcePackageRepo(db);
+  const manifests = new Map<string, ReturnType<typeof manifestOfRow> | null>();
+  for (const [componentId, figma] of provenance) {
+    const packageId = figma.sourcePackageId;
+    if (packageId === undefined) continue;
+    if (!manifests.has(packageId)) {
+      const row = repo.get(packageId);
+      let parsed: ReturnType<typeof manifestOfRow> | null = null;
+      if (row !== null && row.design_system === designSystem) { try { parsed = manifestOfRow(row); } catch { parsed = null; } }
+      manifests.set(packageId, parsed);
+    }
+    const manifest = manifests.get(packageId);
+    if (manifest === null || manifest === undefined) continue;
+    const nodeIds = [...figma.nodeIds, ...(figma.sources ?? []).flatMap((source) => source.nodeIds)];
+    const signature = sourceSignatureOf(manifest, nodeIds);
+    if (signature !== undefined) signatures.set(componentId, signature);
+  }
+  return signatures;
+}
+
 export interface CollectCorpusOptions {
   /**
    * Включать ли композиции системы (W9). **Дефолт `false` осознанно**: тот же корпус потребляет
@@ -192,6 +230,7 @@ export function collectCorpus(db: Database, designSystem: string, options: Colle
   const usage = headUsageCounts(db);
   const deprecated = deprecatedKeys(db);
   const sources = activeSources(db, designSystem);
+  const sourceSignatures = collectSourceSignatures(db, designSystem);
   const cache = new ComponentFingerprintRepo(db);
 
   const revisionSources: CatalogRevisionSource[] = [];
@@ -228,6 +267,7 @@ export function collectCorpus(db: Database, designSystem: string, options: Colle
       // component_revisions), но пустое множество здесь честнее исключения: сигнал исходника
       // просто станет неприменимым.
       shingles: revision === undefined ? new Set<string>() : shinglesOf(cache, row.id, revision.rev, revision.source),
+      ...(sourceSignatures.has(row.id) ? { sourceSignature: sourceSignatures.get(row.id)! } : {}),
     });
   }
 
@@ -242,6 +282,7 @@ export function collectCorpus(db: Database, designSystem: string, options: Colle
       deprecated: false,
       headUsageCount: usage.get(row.id) ?? 0,
       shingles: shinglesOf(cache, row.id, row.rev, row.source),
+      ...(sourceSignatures.has(row.id) ? { sourceSignature: sourceSignatures.get(row.id)! } : {}),
     });
   }
 

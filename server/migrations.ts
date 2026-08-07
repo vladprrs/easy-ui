@@ -1117,10 +1117,49 @@ export const migrations = [
       WHERE phase IN ('preflight','promote','gallery-save','verify','impacted-regression','audit')`);
     db.run("CREATE INDEX migration_commits_component ON migration_commits (component_id, created_at)");
   },
+  (db: Database) => {
+    // v36: пакет исходников Figma — `figma_source_packages` (план
+    // `docs/plans/2026-08-07-migration-feedback-wave.md` §W8, ретроспектива P1.4).
+    //
+    // Строка хранит **манифест**, а не байты: экспорты ссылаются на реестр ассетов
+    // (`asset_<sha256>`), где дедупликация уже решена контентным адресом. Решения формы:
+    //
+    // 1. **`package_id` — контентный адрес** (`fsp_<sha256(манифест)>`), а не суррогат: повторная
+    //    загрузка того же пакета обязана быть идемпотентной, а не плодить строки. Смена
+    //    `source_revision` — это **другой** манифест, то есть другой пакет; инвалидация зависимых
+    //    кейсов идёт через новые `referenceAssetId` (слой `comparison`), а не через эту таблицу.
+    // 2. **`design_system REFERENCES design_systems(id)`** (триаж O-m11) + запись в
+    //    `assertRegistryIntegrity`: пакет — источник конкретной ДС, и висячая ссылка здесь так же
+    //    недопустима, как у компонента. FK на `assets` осознанно нет: экспорты живут внутри JSON,
+    //    а DELETE-роута у ассетов не существует (та же граница, что у provenance-ссылок).
+    // 3. **`export_count` отдельной колонкой** — единственная агрегатная величина, которую
+    //    спрашивает список; без неё каждая строка выдачи парсила бы манифест на 256 экспортов.
+    // 4. **Индекс `(design_system, file_key)`** — единственный горячий lookup: «какие пакеты этого
+    //    файла у этой системы».
+    //
+    // Rollback-window (§3.6): пока откат образа возможен без восстановления тома — **пакеты не
+    // загружать и `figma.sourcePackageId` не проставлять**. Старый образ о таблице не знает, и
+    // ссылка на несуществующую строку пережила бы откат немой (kill-switch
+    // `EASYUI_SOURCE_PACKAGE_DISABLED=1` запрещает ровно эти две операции). Уже записанные пакеты
+    // откату не мешают: ссылка metadata-only и ни в один отпечаток не входит.
+    db.run(`CREATE TABLE figma_source_packages (
+      package_id TEXT PRIMARY KEY,
+      design_system TEXT NOT NULL REFERENCES design_systems(id),
+      file_key TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      manifest_json TEXT NOT NULL,
+      export_count INTEGER NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL)`);
+    db.run("CREATE INDEX figma_source_packages_source ON figma_source_packages (design_system, file_key)");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
-  for(const table of ["components","component_revisions","prototypes","compositions","composition_revisions"] as const) {
+  // `figma_source_packages` (v36, триаж O-m11) — в том же списке, что каталожные таблицы: пакет
+  // исходников принадлежит дизайн-системе так же, как компонент, и висячая ссылка означала бы
+  // источник без продукта.
+  for(const table of ["components","component_revisions","prototypes","compositions","composition_revisions","figma_source_packages"] as const) {
     const row=db.query(`SELECT design_system FROM ${table} WHERE design_system NOT IN (SELECT id FROM design_systems) LIMIT 1`).get() as {design_system:string}|null;
     if(row) throw new Error(`Dangling design system reference in ${table}: ${row.design_system}`);
   }

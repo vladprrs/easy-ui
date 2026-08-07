@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { ApiError } from "../http";
 import { figmaSchema, resolveProvenanceRaw } from "../figma";
+import { missingExactReferenceWarnings } from "../figma/sourcePackage";
 import { ComponentRepo } from "../repos/components";
 import { collectAndValidateComponentAssetRefs } from "../validation";
 import { getLatestDesignSystemContent } from "../designSystems";
@@ -246,6 +247,12 @@ export async function validateComponentHead(db: Database, dataDir: string, id: s
   const warnings = [...extracted.warnings, ...(entry.parityWarnings ?? [])];
   if (!extracted.meta!.atomicLevel) warnings.push("Atomic design level is not provided; component will be classified as Other");
   warnings.push(...architectureWarnings(db, id, extracted.meta!, head.source));
+  // Preflight `missing_exact_reference` (план 2026-08-07 §W8): пакет исходников объявил, что для
+  // узла этого компонента точного экспорта нет. **Предупреждение, не блокер**: пакет описывает
+  // состояние Figma, а не корректность компонента, и 422 запретил бы публикацию из-за чужой дыры
+  // в источнике. Ценность — в раннем сроке: агент узнаёт о дыре до сборки case set'а, а не по
+  // необъяснимо расходящемуся сравнению.
+  warnings.push(...missingExactReferenceWarnings(db, id, head.rev));
   const theme = getLatestDesignSystemContent(db, head.designSystem);
   // Тот же снапшот-контракт, что у `GET /api/catalog/library`: ревизия описывает каталог
   // на момент ответа, поэтому считается свежо, а не читается из кэша кандидата.

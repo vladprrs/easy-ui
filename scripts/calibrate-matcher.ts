@@ -398,7 +398,9 @@ function weightGrid(): MatchWeights[] {
         for (let d = 1; a + b + c + d <= 18; d += 1)
           for (let e = 1; a + b + c + d + e <= 19; e += 1) {
             const f = 20 - a - b - c - d - e;
-            grid.push({ props: a * step, io: b * step, source: c * step, name: d * step, description: e * step, levelScope: f * step });
+            // `sourcePackage` (волна 2026-08-07 §W8) в переборе не участвует: сигнал ранжирующий,
+            // в гейтовый score не входит вовсе, и на прод-дампе калибровки его данных нет.
+            grid.push({ props: a * step, io: b * step, source: c * step, name: d * step, description: e * step, levelScope: f * step, sourcePackage: CALIBRATED_POLICY.weights.sourcePackage });
           }
   return grid;
 }

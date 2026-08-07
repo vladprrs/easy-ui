@@ -50,6 +50,8 @@ import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
 import { routeMigrationCommits } from "./routes/migrationCommits";
+import { routeFigmaSourcePackages } from "./routes/figmaSourcePackages";
+import { sourcePackageEnabled } from "./figma/sourcePackage";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -219,6 +221,10 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         // (`EASYUI_ACCEPTANCE_MATRIX=1`), плюс собственный kill-switch волны; watchdog зависших
         // фаз исполняется внутри роута, на каждом запросе к набору.
         const migrationCommits=await routeMigrationCommits(request,db,segments.slice(1),principal,{dataDir:options.dataDir??process.env.DATA_DIR??"data",mode:options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,...(options.acceptance?{acceptance:options.acceptance}:{}),...(options.serveDist===undefined?{}:{serveDist:options.serveDist})}); if(migrationCommits) return finish(migrationCommits);
+        // Пакет исходников Figma (план 2026-08-07 §W8, миграция v36). Отдельный top-level
+        // namespace: пакет не принадлежит ни компоненту, ни прототипу — это источник дизайн-системы,
+        // на который они оба ссылаются. Гейт набора — собственный kill-switch волны (404).
+        const sourcePackages=await routeFigmaSourcePackages(request,db,segments.slice(1),principal); if(sourcePackages) return finish(sourcePackages);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
         if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true,matrix:options.acceptance!==undefined,...(options.acceptance?{repo:options.acceptance.repo}:{})}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
@@ -286,6 +292,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // W7 (план 2026-08-07 §W7): kill-switch suggested policy. Слой report-only — вердикты, гейты и
     // отпечатки от него не зависят ни в каком положении тумблера; гасятся ровно две производные
     // отчёта: предложение бюджета у случая/группы и advisory-предупреждения `policy_exception_stale`.
+    // W8 (план 2026-08-07 §W8): kill-switch пакета исходников. Гасит **обе** половины фичи — набор
+    // `/api/figma-source-packages*` (404) и новые ссылки `figma.sourcePackageId`
+    // (`422 source_package_disabled`). Это же положение тумблера — режим rollback-window миграции
+    // v36: старый образ о таблице не знает, и ссылка на несуществующую строку пережила бы откат
+    // немой. Уже записанные пакеты и ссылки не трогаются: они metadata-only.
+    if(!sourcePackageEnabled()) console.warn("[figma] EASYUI_SOURCE_PACKAGE_DISABLED=1: source packages off, /api/figma-source-packages* answers 404 and figma.sourcePackageId is refused");
     if(!suggestedPolicyEnabled()) console.warn("[acceptance] EASYUI_SUGGESTED_POLICY_DISABLED=1: suggested policy off, acceptance reports carry no suggestedPolicy and no policy_exception_stale warnings");
     // Watchdog фаз саги (триаж O-M7, R7): периодических таймеров в сервере нет, поэтому зависшая
     // фаза подметается на старте процесса — рядом с `failStagingPublishes` — и на каждом запросе

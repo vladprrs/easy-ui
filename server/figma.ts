@@ -8,6 +8,7 @@ import { ApiError } from "./http";
 // JSON string in prototype_revisions.figma_json / component_revisions.figma_json.
 
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
+const SOURCE_PACKAGE_ID = /^fsp_[0-9a-f]{64}$/;
 
 const fileKeySchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, "fileKey must be url-safe");
 const nodeIdsSchema = z.array(z.string().min(1).max(64).regex(/^[A-Za-z0-9:._-]+$/, "nodeId must be safe")).min(1).max(50);
@@ -30,6 +31,17 @@ export const figmaSchema = z.strictObject({
   // ради обратной совместимости: существующие записи figma_json парсятся без изменений, а
   // потребители, знающие только про primary, продолжают работать.
   sources: z.array(figmaSourceSchema).min(1).max(8).optional(),
+  /**
+   * Пакет исходников Figma, из которого собран артефакт (план 2026-08-07 §W8, миграция v36).
+   *
+   * **Metadata-only** (триаж S-M11): поле не входит **ни в один** отпечаток — ни кадровый, ни
+   * сравнения, ни вердикта, ни в candidate id. Оно отвечает на вопрос «откуда это взято» и
+   * питает preflight `missing_exact_reference` и сигналы reuse-search; на пиксели влияет эталон,
+   * у которого есть собственный слой (`referenceAssetId` → `comparison`). Подмена эталона из
+   * нового пакета двигает сравнение сама, через смену `referenceAssetId`, — новых слоёв волна не
+   * строит.
+   */
+  sourcePackageId: z.string().regex(SOURCE_PACKAGE_ID, "must be a source package id").optional(),
   referenceScreenshots: z.array(z.string().regex(ASSET_ID, "must be an asset id")).max(50).optional(),
   lastSyncedAt: z.string().min(1).max(40).refine((value) => !Number.isNaN(Date.parse(value)), "must be an ISO date").optional(),
 }).superRefine((value, ctx) => {
@@ -55,10 +67,35 @@ export type FigmaProvenance = z.infer<typeof figmaSchema>;
 
 // Validate an optional `figma` request field into a persist-ready JSON string (or null when the
 // field is absent/null). referenceScreenshots must exist in the asset registry (422 asset_not_found).
-export function parseFigmaInput(db: Database, value: unknown, pathRoot: string): string | null {
+export function parseFigmaInput(db: Database, value: unknown, pathRoot: string, options: { designSystem?: string } = {}): string | null {
   if (value === undefined || value === null) return null;
   const parsed = figmaSchema.safeParse(value);
   if (!parsed.success) throw new ApiError(422, "validation_failed", "Figma provenance is invalid", { issues: parsed.error.issues });
+  // Пакет исходников (§W8). Проверка живёт здесь, а не в `figma/sourcePackage.ts`, ради
+  // направления импорта: пакет читает provenance, а не наоборот.
+  const sourcePackageId = parsed.data.sourcePackageId;
+  if (sourcePackageId !== undefined) {
+    // Kill-switch волны: ссылаться на пакет нельзя, пока фича выключена (в т.ч. в rollback-window
+    // миграции v36) — иначе ссылка пережила бы откат образа немой.
+    if (process.env.EASYUI_SOURCE_PACKAGE_DISABLED === "1") {
+      throw new ApiError(422, "source_package_disabled", "Figma source packages are disabled (EASYUI_SOURCE_PACKAGE_DISABLED=1)", {
+        issues: [{ path: [pathRoot, "sourcePackageId"], message: "source packages are disabled" }],
+      });
+    }
+    const row = db.query("SELECT design_system FROM figma_source_packages WHERE package_id=?").get(sourcePackageId) as { design_system: string } | null;
+    if (row === null) {
+      throw new ApiError(422, "source_package_not_found", "The referenced Figma source package does not exist", {
+        issues: [{ path: [pathRoot, "sourcePackageId"], message: `unknown source package: ${sourcePackageId}` }],
+      });
+    }
+    // Пакет — источник **этой** дизайн-системы: ссылка на чужой пакет означала бы, что аудит
+    // источника и каталог говорят о разных продуктах.
+    if (options.designSystem !== undefined && row.design_system !== options.designSystem) {
+      throw new ApiError(422, "source_package_design_system_mismatch", "The source package belongs to another design system", {
+        issues: [{ path: [pathRoot, "sourcePackageId"], message: `package design system is ${row.design_system}` }],
+      });
+    }
+  }
   for (const assetId of parsed.data.referenceScreenshots ?? []) {
     if (!db.query("SELECT 1 ok FROM assets WHERE id=?").get(assetId)) {
       throw new ApiError(422, "asset_not_found", "A referenced screenshot asset does not exist", { issues: [{ path: [pathRoot, "referenceScreenshots"], message: `unknown asset: ${assetId}` }] });

@@ -48,6 +48,7 @@ import { TEXT_AA_PRESETS } from "../acceptance/gates/visual";
 import { prototypeCandidateOverlayMax } from "./screenshots";
 import { impactedSnapEnabled, SNAP_PLAN_MAX_SCREENS } from "../prototypes/screenFrames";
 import { MIGRATION_COMMIT_PHASE_TIMEOUT_MS, migrationCommitEnabled } from "../migration/commit";
+import { SOURCE_PACKAGE_MAX_EXPORTS } from "../figma/sourcePackage";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -166,6 +167,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // старте процесса и на каждом запросе к `/api/migration-commits*`. Драйвер-poller обязан
       // знать этот срок, чтобы отличать «фаза ещё идёт» от «сага зависла».
       migrationCommitPhaseTimeoutMs: MIGRATION_COMMIT_PHASE_TIMEOUT_MS,
+      // Экспортов в одном пакете исходников Figma (план 2026-08-07 §W8). Пакет — это манифест, а
+      // не байты (экспорты ссылаются на реестр ассетов), но каждый экспорт стоит сверки dims/SHA
+      // против реестра, поэтому потолок объявлен, а не выведен из размера тела.
+      sourcePackageMaxExports: SOURCE_PACKAGE_MAX_EXPORTS,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,

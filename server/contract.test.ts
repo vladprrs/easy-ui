@@ -173,7 +173,7 @@ type Expectation =
 interface Case { run: () => Promise<Response>; expected: Expectation }
 
 // Shared mutable fixture state threaded through the ordered execution below.
-const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string; loginCookie?:string; operatorId?:string; migrationPlan?: unknown; migrationRunId?: string } = {};
+const state: { assetId?: string; assetSha256?: string; sourcePackageId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string; loginCookie?:string; operatorId?:string; migrationPlan?: unknown; migrationRunId?: string } = {};
 
 function orderedCases(): [string, Case][] {
   const ok = (status?: number, contentType?: string): Expectation => ({ kind: "success", status, contentType });
@@ -203,6 +203,16 @@ function orderedCases(): [string, Case][] {
     ["GET /api/assets", { run: () => call("GET", "/api/assets?limit=50"), expected: ok() }],
     ["GET /api/assets/{id}", { run: () => call("GET", `/api/assets/${state.assetId}`), expected: ok(200, "image/png") }],
     ["GET /api/assets/{id}/usage", { run: () => call("GET", `/api/assets/${state.assetId}/usage`), expected: ok() }],
+    // Figma source packages (план 2026-08-07 §W8) — после ассетов: экспорт ссылается на реестр.
+    ["POST /api/figma-source-packages", { run: () => call("POST", "/api/figma-source-packages", { manifest: {
+      designSystem: "contract-ds", fileKey: "ContractFile", sourceRevision: "rev-1",
+      nodes: [{ nodeId: "1:1", name: "Contract node", componentKey: "key-contract", role: "contract-node", kind: "component" }],
+      exports: [{ nodeId: "1:1", assetId: state.assetId, width: 1, height: 1, sha256: state.assetSha256, scale: 1 }],
+      missing: [{ role: "exact-reference", nodeId: "1:1", note: "contract fixture" }],
+    } }), expected: ok(201) }],
+    ["GET /api/figma-source-packages", { run: () => call("GET", "/api/figma-source-packages?designSystem=contract-ds"), expected: ok() }],
+    ["GET /api/figma-source-packages/{packageId}", { run: () => call("GET", `/api/figma-source-packages/${state.sourcePackageId}`), expected: ok() }],
+    ["POST /api/figma-source-packages/{packageId}/case-set-skeleton", { run: () => call("POST", `/api/figma-source-packages/${state.sourcePackageId}/case-set-skeleton`, { componentId: "contract-stars" }), expected: ok() }],
     // Prototypes: create -> read -> save -> restore -> publish -> versions
     ["POST /api/prototypes", { run: async () => call("POST", "/api/prototypes", { doc: await helloDoc("contract-proto") }), expected: ok(201) }],
     ["GET /api/prototypes", { run: () => call("GET", "/api/prototypes"), expected: ok() }],
@@ -473,7 +483,8 @@ describe("route contracts", () => {
       const body = await response.json();
       const parsed = contract.responseSchema ? contract.responseSchema.safeParse(body) : { success: true as const, error: undefined };
       if (!parsed.success) throw new Error(`${key}: response does not match contract schema: ${parsed.error}`);
-      if (key === "POST /api/assets") state.assetId = (body as { id: string }).id;
+      if (key === "POST /api/assets") { state.assetId = (body as { id: string }).id; state.assetSha256 = (body as { sha256: string }).sha256; }
+      if (key === "POST /api/figma-source-packages") state.sourcePackageId = (body as { packageId: string }).packageId;
       if (key === "GET /api/prototypes/{id}/draft") state.prototypeInstanceId=(body as {prototypeInstanceId:string}).prototypeInstanceId;
       if (key === "PUT /api/visual-references") state.referenceId = (body as { id: string }).id;
       if (key === "POST /api/prototypes/{id}/share") state.shareId = (body as { id: string }).id;

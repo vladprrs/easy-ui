@@ -1294,6 +1294,7 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 | `sources?` | 1..8 дополнительных источников lineage: `{fileKey, nodeIds, role?}` с теми же правилами для `fileKey`/`nodeIds`, `role` — свободная метка 1..64 (`"core"`, `"pay-app"`) |
 | `referenceScreenshots?` | ≤50 asset-id (`asset_<64hex>`); каждый обязан существовать в реестре assets, иначе `422 asset_not_found`. Общие для primary и всех `sources` |
 | `lastSyncedAt?` | ISO-дата (`Date.parse`-валидная), ≤40 символов |
+| `sourcePackageId?` | id пакета исходников (`fsp_<64hex>`); пакет обязан существовать и принадлежать **той же** дизайн-системе (`422 source_package_not_found` / `422 source_package_design_system_mismatch`). **Metadata-only** — см. [Figma Source Package](#figma-source-package-волна-w8-план-2026-08-07) |
 
 **Multi-source lineage** (план 2026-08-06 §W1). Компонент, собранный из нескольких Figma-документов (например Core + Pay App), перечисляет дополнительные документы в `sources`; верхнеуровневые `fileKey`/`nodeIds` остаются primary-документом, поэтому поле строго additive и существующие записи читаются без изменений. **Один документ — одна запись:** дубликат `fileKey` внутри `sources` или совпадение с primary → `422 validation_failed` с адресом в `issues[].path` (`["sources", <индекс>, "fileKey"]`; на publish-префлайте — с префиксом `figma`). Read-model библиотеки (`GET /catalog/library`) отдаёт `figma.sourceCount` — число дополнительных источников; при их отсутствии ключ опускается, и ответ остаётся прежним. Case-set `source` остаётся одиночным.
 
@@ -1319,6 +1320,56 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 Регресс-гард: `npm run verify:provenance` (`scripts/check-provenance-resolver.ts`) держит закрытый allowlist читателей/писателей `figma_json` — новый путь обязан ходить через резолвер `server/figma.ts` либо попасть в allowlist осознанной правкой.
 
 **Семантика (прототипы).** Значение сохраняется на **создаваемой** ревизии; `restore` копирует `figma_json` исходной ревизии вместе с документом. `publish` прототипа переиспользует head-ревизию. Для owner read-back additively отдаёт `figma` (объект или `null`). Для любого не-owner принципала, включая Share/Capture, ключ `figma` в meta/draft/version **полностью отсутствует**, а история ревизий закрыта. Легаси-ревизии без ссылки читаются owner-у как `figma: null`.
+
+### Figma Source Package (волна W8, план 2026-08-07)
+
+Пакет исходников Figma — **единица переноса** между Figma и easy-ui (ретроспектива миграции §10 P1.4, миграция v36). До волны сервер получал собранный вручную манифест и не мог ни проверить полноту provenance, ни назвать недостающий артефакт.
+
+```
+POST /api/figma-source-packages                                — загрузка манифеста (идемпотентна)
+GET  /api/figma-source-packages?designSystem=&fileKey=&limit=  — список пакетов системы (без манифестов)
+GET  /api/figma-source-packages/:packageId                     — пакет + манифест
+POST /api/figma-source-packages/:packageId/case-set-skeleton   — черновик case-set (НЕ сохраняется)
+```
+
+**Байтов в пакете нет.** Экспорт — это `assetId` реестра ассетов (`asset_<sha256>`), загруженный обычным `POST /api/assets`; пакет хранит манифест, а дедупликация байтов уже решена контентным адресом ассета.
+
+**Контентный адрес.** `packageId = fsp_<sha256(канонический манифест)>`: повторная загрузка того же манифеста отвечает `200 {deduplicated: true}` и не пишет ничего, новая — `201` с `Location`. Смена `sourceRevision` — это **другой** пакет, а не правка старого.
+
+Манифест (`z.strictObject`):
+
+| Поле | Правило |
+|---|---|
+| `designSystem` | активная система реестра; она же владелец пакета (запись — владелец системы или админ) |
+| `fileKey` | 1..128, `^[A-Za-z0-9_-]+$` |
+| `sourceRevision` | 1..128 — ревизия документа Figma |
+| `nodes[]` | 1..1024 узлов: `{nodeId, name?, componentKey?, role?, kind?, fileKey?}`; `role` — семантический слаг |
+| `exports[]` | ≤ `limits.sourcePackageMaxExports` (256): `{nodeId, assetId, width, height, sha256, scale?}` |
+| `instanceProperties?` / `textRuns?` / `effects?` / `usageContexts?` | ≤1024 записей каждая, все с `nodeId` |
+| `missing[]?` | ≤256: `{role, nodeId?, componentKey?, note?}`, роли `exact-reference`/`instance-override`/`runtime-leaf`/`raw-reference`/`text-run`/`other` |
+| `anomalies[]?` | ≤256: `{nodeId?, code, note?}` |
+
+**Валидация provenance** — пакет обязан быть согласован сам с собой и с реестром:
+
+| Отказ (422) | Когда |
+|---|---|
+| `asset_not_found` | экспорт ссылается на ассет, которого нет в реестре |
+| `source_package_export_sha_mismatch` | объявленный `sha256` ≠ хэш байтов ассета |
+| `source_package_export_dimension_mismatch` | объявленные `width`/`height` ≠ габариты ассета |
+| `source_package_duplicate_node` | `nodeId` объявлен или экспортирован дважды |
+| `source_package_duplicate_component_key` | один `componentKey` у двух узлов |
+| `source_package_node_not_declared` | экспорт/`missing`/аномалия ссылается на узел вне `nodes[]` |
+| `source_package_component_key_not_declared` | `missing.componentKey` не принадлежит ни одному узлу |
+
+**Связка с артефактом — `figma.sourcePackageId`, metadata-only.** Ссылка не входит **ни в один** отпечаток: ни кадровый, ни сравнения, ни вердикта, ни в candidate id, ни в `catalogRevision` (дифференциальный тест — `server/figma-source-package.test.ts`). Инвалидация зависимых кейсов идёт **через существующий слой**: новый пакет приносит новые `assetId`, у кейса меняется `referenceAssetId` (слой `comparison`), происходит re-diff без пересъёмки. Новых слоёв волна не строит.
+
+**Preflight `missing_exact_reference`** — **предупреждение, не блокер**. Validate-префлайт компонента (`POST /components/:id/validate`) добавляет в `warnings[]` строку `missing_exact_reference: …` за каждую запись `missing[]` с ролью `exact-reference`, чей узел (или `componentKey` узла) перечислен в provenance компонента. Отказом это не является намеренно: пакет описывает состояние Figma, а не корректность компонента, и 422 запрещал бы публикацию из-за чужой дыры в источнике. Ценность — в сроке: дыра называется до сборки case set'а.
+
+**Reuse search.** `POST /api/catalog/candidates` принимает `proposed.sourcePackageId` + `proposed.sourceNodeIds[]`; сервер проецирует их в ключи компонентов и семантические роли и подмешивает сигнал `sourcePackage` (совпавший `componentKey` = 1, иначе пересечение ролей). Сигнал **только ранжирующий**: он поднимает кандидата из того же мастера Figma в выдаче и попадает в `reasons`, но в решение `blocking` не входит вовсе — один мастер законно порождает и атом, и молекулу. Кандидат, у которого источника нет, получает **неприменимый** сигнал, а перенормировка исключает его из знаменателя, поэтому доволновые score байт-в-байт прежние (`policyVersion` не двигается).
+
+**Skeleton.** `POST …/case-set-skeleton` `{componentId, viewport?, deviceScaleFactor?, theme?, nodeIds?}` → `{packageId, componentId, manifest, saved: false}`: по случаю на экспорт с `referenceAssetId` и `expectedSurfaces.referenceExport` (габариты пересчитаны из `scale` в CSS px). `props` не выдумываются, `expectedGeometry` не заполняется. Черновик гарантированно проходит валидатор case-set-манифеста.
+
+**Kill-switch `EASYUI_SOURCE_PACKAGE_DISABLED=1`** гасит обе половины: весь набор роутов отвечает `404`, а новые ссылки `figma.sourcePackageId` — `422 source_package_disabled`. Это же положение — режим **rollback-window миграции v36**: пока откат образа возможен без восстановления тома, пакеты не загружать и `sourcePackageId` не проставлять (старый образ о таблице не знает). Уже записанные пакеты и ссылки откату не мешают.
 
 ## Служебные endpoints
 
@@ -2502,7 +2553,7 @@ Publish добавляет **только warnings** (никогда не бло
 
 `events` может быть legacy-списком `string[]` (payloadless) **или** `Record<name, ZodSchema>` — типизированный payload на событие. Нормализация всегда сохраняет наружу `events: string[]`; для типизированных событий дополнительно строится additive `eventPayloads: Record<name, JSONSchema>`. На publish сериализация **fail-closed**: если хотя бы одна event-схема не конвертируется `z.toJSONSchema` в детерминированную JSON-safe схему (например, transform/preprocess/custom), publish возвращает `422 event_schema_not_serializable`. Типизированные события доставляются собственным event-адаптером (только custom-компоненты) и потребляются через param sources (`$event`) и `$if` в биндингах действий (см. `docs/prototype-format.md`).
 
-`definition.capabilities?: { typedEvents?: true; namedSlots?: true }` объявляет расширенные возможности; наличие любой capability требует host **ABI v2**.
+`definition.capabilities?: { typedEvents?: true; namedSlots?: true; runtimeSchemaDefaults?: true }` объявляет расширенные возможности; `typedEvents`/`namedSlots` требуют host **ABI v2**. `runtimeSchemaDefaults` (W9, план 2026-08-07) ABI **не** поднимает — модуль не меняет импортов, на старом хосте флаг инертен; при флаге рендер применяет Zod-дефолты схемы к props (`safeParse(...).data`), провал парса — сырые props + warning `runtime_props_parse_failed` в receipt (`verdict.codes`, severity warning); дрейф между `??`-дефолтами кода и `.default()` схемы виден как `runtime_default_drift` в warnings validate/publish; при выключенной фиче (`EASYUI_RUNTIME_DEFAULTS_DISABLED=1`, аварийный render-affecting kill-switch вне отпечатков) приёмка флагнутых семей помечается `runtime_defaults_disabled` в accept-status, интерактивный браузерный просмотр дефолты продолжает применять (осознанный разрыв); штатный откат — републикация без флага.
 
 #### Named slots (`capabilities.namedSlots` + `slots`)
 

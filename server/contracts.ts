@@ -8,6 +8,7 @@ import { importReportSchema } from "../src/bundle/schema";
 import { scenarioInputSchema, scenarioStepsSchema } from "../src/prototype/scenario";
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
+import { sourcePackageManifestSchema } from "./figma/sourcePackage";
 import { tokenize } from "../src/library/text";
 import { reuseOverrideSchema as componentReuseOverrideSchema } from "./catalog/reuseOverride";
 import { GEOMETRY_SURFACES } from "../src/acceptance/surfaces";
@@ -141,7 +142,11 @@ const componentExamplesSchema = z.record(
   z.record(z.string(), z.unknown()),
 );
 
-const componentCapabilitiesSchema = z.object({ typedEvents: z.literal(true).optional(), namedSlots: z.literal(true).optional() });
+const componentCapabilitiesSchema = z.object({
+  typedEvents: z.literal(true).optional(), namedSlots: z.literal(true).optional(),
+  /** W9: runtime-дефолты схемы props (флаг объявляется в исходнике, ABI не поднимает). */
+  runtimeSchemaDefaults: z.literal(true).optional(),
+});
 const serializedDefinitionFields = {
   atomicLevel: z.enum(atomicLevels).optional(),
   layoutNeutral: z.boolean().optional(),
@@ -1319,6 +1324,83 @@ export const cancelMigrationCommitContract = registerContract({
   requestSchema: z.object({ reason: z.string().optional() }),
   responseSchema: migrationCommitReceiptSchema,
   errors: [...migrationCommitErrors, { status: 409, code: "migration_commit_not_cancellable", description: "the saga is complete" }],
+});
+
+// --- Figma Source Package (план 2026-08-07 §W8, миграция v36) ---
+
+const sourcePackageErrors = [
+  errorCatalog.invalidRequest,
+  { status: 403, code: "forbidden" },
+  { status: 404, code: "source_package_not_found", description: "no such package" },
+  { status: 404, code: "not_found", description: "source packages are disabled (EASYUI_SOURCE_PACKAGE_DISABLED=1)" },
+] as const;
+
+const sourcePackageResponseSchema = z.strictObject({
+  packageId: z.string(),
+  designSystem: z.string(),
+  fileKey: z.string(),
+  sourceRevision: z.string(),
+  exportCount: z.number().int().nonnegative(),
+  createdBy: z.string(),
+  createdAt: isoDate,
+  manifest: sourcePackageManifestSchema,
+  /** true — повторная загрузка того же манифеста: строка возвращена как есть, ничего не писалось. */
+  deduplicated: z.boolean().optional(),
+});
+
+export const uploadSourcePackageContract = registerContract({
+  method: "POST", path: "/api/figma-source-packages",
+  summary: "Upload one Figma source package (plan 2026-08-07 §W8, `capabilities.features.figmaSourcePackage`, migration v36): the unit of transfer between Figma and easy-ui. The package carries PROVENANCE, not bytes — `nodes[]` (nodeId, componentKey, semantic role), `exports[]` pointing at ALREADY UPLOADED registry assets (`POST /api/assets`) with their declared `width`/`height`/`sha256`, plus `instanceProperties`/`textRuns`/`effects`/`usageContexts` and the explicit `missing[]`/`anomalies[]` records. The package id is CONTENT-ADDRESSED (`fsp_<sha256(manifest)>`), so re-uploading the same manifest is idempotent: it answers 200 with `deduplicated: true` and writes nothing (a new package answers 201). Declared dimensions and sha256 are verified AGAINST THE ASSET REGISTRY (`422 source_package_export_dimension_mismatch` / `source_package_export_sha_mismatch`) — a package cannot claim a size its bytes do not have. Provenance consistency is enforced too: every nodeId mentioned by an export, a missing record or an anomaly must be declared in `nodes[]` (`422 source_package_node_not_declared`), a nodeId may appear once (`422 source_package_duplicate_node`) and a componentKey may identify one node (`422 source_package_duplicate_component_key`). At most `limits.sourcePackageMaxExports` exports. Changing `sourceRevision` produces a DIFFERENT package with different assets: dependent cases move through their own `referenceAssetId` (the `comparison` fingerprint layer) — no re-capture, and the package itself enters NO fingerprint.",
+  requestSchema: z.strictObject({ manifest: sourcePackageManifestSchema }),
+  responseSchema: sourcePackageResponseSchema,
+  status: 201,
+  errors: [...sourcePackageErrors, errorCatalog.validationFailed,
+    { status: 422, code: "asset_not_found", description: "an export references an asset that is not in the registry" },
+    { status: 422, code: "source_package_export_sha_mismatch" },
+    { status: 422, code: "source_package_export_dimension_mismatch" },
+    { status: 422, code: "source_package_duplicate_node" },
+    { status: 422, code: "source_package_duplicate_component_key" },
+    { status: 422, code: "source_package_node_not_declared" },
+    { status: 422, code: "source_package_component_key_not_declared" },
+  ],
+});
+
+export const listSourcePackagesContract = registerContract({
+  method: "GET", path: "/api/figma-source-packages",
+  summary: "List the source packages of one design system (newest first), optionally narrowed by `fileKey`. Manifests are NOT included — the list answers \"which packages exist\", and 256 exports per row would turn that into megabytes; read one package for its manifest.",
+  query: z.strictObject({ designSystem: z.string(), fileKey: z.string().optional(), limit: z.string().optional() }),
+  responseSchema: z.strictObject({
+    designSystem: z.string(),
+    packages: z.array(sourcePackageResponseSchema.omit({ manifest: true, deduplicated: true })),
+  }),
+  errors: [...sourcePackageErrors],
+});
+
+export const getSourcePackageContract = registerContract({
+  method: "GET", path: "/api/figma-source-packages/{packageId}",
+  summary: "One source package with its full manifest. Reference it from an artifact through `figma.sourcePackageId` — a METADATA-ONLY link that enters no acceptance fingerprint (frame, comparison, verdict or candidate id): it says where the artifact came from, and feeds the `missing_exact_reference` publish-preflight warning plus the component-key/semantic-role ranking signals of the reuse search. Pixels keep moving through `referenceAssetId` alone.",
+  responseSchema: sourcePackageResponseSchema,
+  errors: [...sourcePackageErrors],
+});
+
+export const skeletonRequestSchema = z.strictObject({
+  componentId: z.string().min(1).max(64),
+  viewport: z.strictObject({ width: z.number().int().positive().max(8192), height: z.number().int().positive().max(8192) }).optional(),
+  deviceScaleFactor: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+  theme: z.enum(["light", "dark"]).optional(),
+  nodeIds: z.array(z.string().min(1).max(64)).min(1).max(256).optional(),
+});
+
+export const sourcePackageSkeletonContract = registerContract({
+  method: "POST", path: "/api/figma-source-packages/{packageId}/case-set-skeleton",
+  summary: "Draft a case-set manifest from the package — a DRAFT, nothing is saved (`saved: false`). One case per export: `referenceAssetId` is the exported asset and `expectedSurfaces.referenceExport` its dimensions converted from the declared export scale to CSS px. `props` are left empty and `expectedGeometry` is NOT invented — the package only knows its own exports. The result is guaranteed to parse as a case-set manifest, so the author fills in props and PUTs it to `/api/components/{id}/case-sets`. `nodeIds[]` narrows the skeleton to a subset of the package.",
+  requestSchema: skeletonRequestSchema,
+  responseSchema: z.strictObject({
+    packageId: z.string(), componentId: z.string(), manifest: z.unknown(), saved: z.literal(false),
+  }),
+  errors: [...sourcePackageErrors, errorCatalog.validationFailed,
+    { status: 422, code: "source_package_no_exports", description: "the package carries no export for the requested nodes" },
+  ],
 });
 
 export const getPrototypeReadinessContract = registerContract({
@@ -2812,6 +2894,14 @@ export const catalogCandidateProposedSchema = z.strictObject({
    * структурной сигнатуры тела и без вердикта анализатора.
    */
   compositionDoc: z.unknown().optional(),
+  /**
+   * Источник предложения (план 2026-08-07 §W8, триаж S-M6): пакет исходников Figma и узлы, из
+   * которых артефакт собирают. Сервер сам проецирует их в ключи компонентов и семантические роли
+   * и подмешивает **ранжирующий** сигнал: кандидат из того же мастера Figma поднимается в выдаче,
+   * но `blocking` от него не зависит ни в одном положении.
+   */
+  sourcePackageId: z.string().regex(/^fsp_[0-9a-f]{64}$/, "must be a source package id").optional(),
+  sourceNodeIds: z.array(z.string().min(1).max(64)).min(1).max(50).optional(),
 });
 
 export const catalogCandidatesRequestSchema = z.strictObject({

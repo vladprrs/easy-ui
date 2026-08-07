@@ -14,6 +14,7 @@ import { checkSource } from "./components";
 import { catalogCandidatesQuerySchema, catalogCandidatesRequestSchema, parseQuery, parseWith, type CatalogCandidatesRequest } from "../contracts";
 import { getIncludingRetired } from "../designSystems";
 import { ApiError, json, noStore, readJson } from "../http";
+import { manifestById, sourceSignatureOf } from "../figma/sourcePackage";
 
 /**
  * `POST|GET /api/catalog/candidates` — компактный поиск кандидатов на переиспользование
@@ -223,6 +224,13 @@ export async function routeCatalogCandidates(request: Request, db: Database, pri
   // W9: композиционный кандидат — свой путь. Отказ `422 unsupported_kind` снят.
   if (input.proposed?.kind === "composition") return compositionCandidates(db, input, input.proposed);
 
+  // Сигнатура источника (§W8, триаж S-M6): пакет + узлы предложения проецируются в ключи
+  // компонентов и семантические роли теми же правилами, что и корпус.
+  const proposedPackage = input.proposed?.sourcePackageId === undefined ? null : manifestById(db, input.proposed.sourcePackageId);
+  const proposedSourceSignature = proposedPackage === null || input.proposed?.sourceNodeIds === undefined
+    ? undefined
+    : sourceSignatureOf(proposedPackage, input.proposed.sourceNodeIds);
+
   const source = input.proposed?.source;
   const extracted = source === undefined ? undefined : await stageAndExtract(
     dataDir,
@@ -247,6 +255,9 @@ export async function routeCatalogCandidates(request: Request, db: Database, pri
     ...(input.proposed !== undefined && (input.proposed.propsJsonSchema !== undefined || input.proposed.events !== undefined || input.proposed.slots !== undefined)
       ? { meta: { propsJsonSchema: input.proposed.propsJsonSchema, events: input.proposed.events, slots: input.proposed.slots } }
       : {}),
+    // §W8: сигнатура источника предложения. Неизвестный пакет **не** отказ: сигнал ранжирующий,
+    // и отвергать поиск кандидатов из-за него значило бы делать из подсказки гейт.
+    ...(proposedSourceSignature === undefined ? {} : { sourceSignature: proposedSourceSignature }),
   };
 
   // Корпус и матчинг — одной транзакцией: иначе `catalogRevision` мог бы описывать не тот

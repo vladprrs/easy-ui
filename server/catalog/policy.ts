@@ -23,6 +23,20 @@ export interface MatchWeights {
   description: number;
   /** Совпадение `atomicLevel` и `scope`. */
   levelScope: number;
+  /**
+   * Общий источник в Figma: ключ компонента и семантическая роль узла из пакета исходников
+   * (план 2026-08-07 §W8, триаж S-M6).
+   *
+   * **Только ранжирование.** Сигнал не участвует в решении `blocking` вовсе (матчер считает
+   * гейтовый score без него — см. `ScoreBreakdown.gateScore`): совпавший `componentKey` говорит
+   * «эти двое родом из одного мастера Figma», а это повод показать кандидата первым, но не повод
+   * запретить создание — один мастер законно порождает и атом, и молекулу.
+   *
+   * Вес не меняет доволновые числа: сигнал **неприменим** везде, где хотя бы одна сторона не
+   * объявила источник, а перенормировка исключает неприменимые сигналы из знаменателя. Поэтому
+   * `policyVersion` волной не двигается — ни один существующий score не сдвинулся.
+   */
+  sourcePackage: number;
 }
 
 export interface MatchPolicy {
@@ -44,7 +58,7 @@ export interface MatchPolicy {
  */
 export const SPEC_DEFAULT_POLICY: MatchPolicy = {
   policyVersion: 0,
-  weights: { props: 0.25, io: 0.15, source: 0.2, name: 0.15, description: 0.15, levelScope: 0.1 },
+  weights: { props: 0.25, io: 0.15, source: 0.2, name: 0.15, description: 0.15, levelScope: 0.1, sourcePackage: 0.1 },
   blockingThreshold: 0.82,
   reviewThreshold: 0.65,
 };
@@ -77,7 +91,7 @@ export const SPEC_DEFAULT_POLICY: MatchPolicy = {
  */
 export const CALIBRATED_POLICY: MatchPolicy = {
   policyVersion: 1,
-  weights: { props: 0.05, io: 0.05, source: 0.75, name: 0.05, description: 0.05, levelScope: 0.05 },
+  weights: { props: 0.05, io: 0.05, source: 0.75, name: 0.05, description: 0.05, levelScope: 0.05, sourcePackage: 0.05 },
   blockingThreshold: 0.7,
   reviewThreshold: 0.53,
 };
@@ -105,6 +119,11 @@ export const COMPOSITION_MATCH_POLICY: MatchPolicy = {
   reviewThreshold: 0.6,
 };
 
-/** Сумма весов стартовой политики равна 1.0; перенормировка матчера от этого не зависит. */
+/**
+ * Сумма весов **гейтовых** сигналов; равна 1.0 у обеих политик. `sourcePackage` сюда намеренно не
+ * входит: он живёт вне нормированного бюджета калибровки, потому что в решение `blocking` не
+ * входит вовсе (§W8) и на прод-дампе, которым мерили пороги, его данных не существовало.
+ * Перенормировка матчера от этой суммы не зависит в любом случае.
+ */
 export const totalWeight = (weights: MatchWeights): number =>
   weights.props + weights.io + weights.source + weights.name + weights.description + weights.levelScope;

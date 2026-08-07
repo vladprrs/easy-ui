@@ -228,7 +228,7 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     const intentProvided=b.intent!==undefined;
     if(reuseGateMode==="enforce"&&!intentProvided)throw new ApiError(400,"invalid_request","intent is required: describe the product job this component does (8..500 characters)");
     const intent=intentProvided?parseWith(reuseIntentSchema,b.intent,"intent is invalid"):synthesizeIntent(name);
-    const figma=parseFigmaInput(db,b.figma,"figma");
+    const figma=parseFigmaInput(db,b.figma,"figma",{designSystem});
     // Извлечение — над одноразовым staging-модулем. Durable-модуль на create не пишется вовсе:
     // `publishComponent` материализует его заново из `repo.source(id)` (см. :71), а путь
     // content-addressed и идемпотентен, поэтому предварительная запись ничего не экономила.
@@ -256,7 +256,7 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     }
     return json({...outcome.created,...(outcome.warnings.length?{warnings:outcome.warnings}:{})},201,{...noStore,location:`/api/components/${id}`});}throw new ApiError(405,"method_not_allowed","Method not allowed");}
   const id=segments[1]!,tail=segments.slice(2);
-  if(!tail.length){if(request.method==="GET")return json(repo.meta(id,includeDeleted),200,noStore);if(request.method==="PUT"){const actor=requireResourceOwner(db,"components",id,principal);reserveHostPrimitiveName(repo.meta(id).name);const b=body(await readJson(request)),source=text(b.source,"source",false),designSystem=text(b.designSystem,"designSystem",false),baseRev=base(b);const figmaProvided=Object.hasOwn(b,"figma");const figma=figmaProvided?parseFigmaInput(db,b.figma,"figma"):null;if(source===undefined&&designSystem===undefined&&!figmaProvided)throw new ApiError(400,"invalid_request","source, designSystem or figma is required");if(designSystem!==undefined){requireActiveDesignSystem(db,designSystem,["designSystem"]);requireResourceOwner(db,"design_systems",designSystem,principal);}const current=repo.cas(id,baseRev),head=repo.source(id,current.head_rev),nextSource=source??head.source,nextSystem=designSystem??current.design_system;const coreUnchanged=nextSource===head.source&&nextSystem===current.design_system;if(coreUnchanged&&!figmaProvided)throw new ApiError(400,"invalid_request","Component source and design system are unchanged");
+  if(!tail.length){if(request.method==="GET")return json(repo.meta(id,includeDeleted),200,noStore);if(request.method==="PUT"){const actor=requireResourceOwner(db,"components",id,principal);reserveHostPrimitiveName(repo.meta(id).name);const b=body(await readJson(request)),source=text(b.source,"source",false),designSystem=text(b.designSystem,"designSystem",false),baseRev=base(b);const figmaProvided=Object.hasOwn(b,"figma");const figma=figmaProvided?parseFigmaInput(db,b.figma,"figma",{designSystem:designSystem??repo.row(id).design_system}):null;if(source===undefined&&designSystem===undefined&&!figmaProvided)throw new ApiError(400,"invalid_request","source, designSystem or figma is required");if(designSystem!==undefined){requireActiveDesignSystem(db,designSystem,["designSystem"]);requireResourceOwner(db,"design_systems",designSystem,principal);}const current=repo.cas(id,baseRev),head=repo.source(id,current.head_rev),nextSource=source??head.source,nextSystem=designSystem??current.design_system;const coreUnchanged=nextSource===head.source&&nextSystem===current.design_system;if(coreUnchanged&&!figmaProvided)throw new ApiError(400,"invalid_request","Component source and design system are unchanged");
       // P5.1 (план 2026-08-02): no-op PUT с figma-only изменением — и source, и figma
       // byte-идентичны head. Предмет сравнения — **резолвнутое сырое** provenance
       // (RFC candidate-acceptance §6, триаж R3-B2): сырая колонка ревизии после посадки
@@ -324,7 +324,7 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     const head=repo.row(id).head_rev;
     const rev=b.rev===undefined?head:int(b.rev,"rev");
     if(!db.query("SELECT 1 ok FROM component_revisions WHERE component_id=? AND rev=?").get(id,rev))throw new ApiError(404,"not_found","Component revision not found");
-    const figma=parseFigmaInput(db,b.figma,"figma");
+    const figma=parseFigmaInput(db,b.figma,"figma",{designSystem:repo.row(id).design_system});
     const seq=db.transaction(()=>recordProvenance(db,{componentId:id,rev,figmaJson:figma,author:actor.userId}))();
     if(seq!==null)writeAuditEvent(db,{actorId:actor.userId,action:"component.provenance.updated",subjectType:"component",subjectId:id,detail:{rev,seq}});
     return json({rev,seq,unchanged:seq===null,figma:resolveProvenance(db,id,rev)},200,noStore);
