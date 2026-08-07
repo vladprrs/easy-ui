@@ -25,6 +25,8 @@ declare module "*/author/driver.mjs" {
       theme?: "light" | "dark";
       dsf?: number;
       figma?: string;
+      /** §W5: `snap --impacted` — снимать только запланированное сервером; `--full` — всё. */
+      impacted?: boolean;
       [key: string]: unknown;
     };
   }
@@ -100,6 +102,35 @@ declare module "*/author/driver.mjs" {
     /** §W2: opt-in барьера ресурсов джобы; отсутствует под `--no-barrier`. */
     readiness?: "barrier";
   }[];
+  /** Решение импакт-плана съёмки по одному экрану (§W5, `POST /api/prototypes/:id/snap-plan`). */
+  export interface DriverSnapPlanScreen {
+    screenId: string;
+    action: "capture" | "reuse";
+    reason: "proven-reuse" | "new" | "unprovable" | "renderer" | "theme" | "impacted";
+    screenFrameFingerprint: string;
+    unprovable?: string;
+    reuseReceipt?: {
+      screenId: string; screenFrameFingerprint: string;
+      previousRev: number; previousPngSha256: string; provenAt: string;
+    };
+  }
+  /**
+   * §W5: запросы импакт-плана по плану съёмки — по одному на каждый различный вьюпорт
+   * (вьюпорт входит в отпечаток кадра, поэтому одним запросом группу не спланировать).
+   */
+  export function snapPlanRequests(
+    plan: readonly { screenId: string; viewport: DriverViewport }[],
+    flags?: { dsf?: number; theme?: string; noBarrier?: boolean },
+  ): {
+    viewport: DriverViewport;
+    screens: string[];
+    body: {
+      viewport: DriverViewport; deviceScaleFactor?: number; theme?: string;
+      readiness?: "barrier"; screens: string[];
+    };
+  }[];
+  /** §W5: строка решения плана по экрану — причина названа и у съёмки, и у переиспользования. */
+  export function snapPlanLine(decision: DriverSnapPlanScreen): string;
   export function buildBaselinePlan(
     draft: Record<string, unknown> & { rev: number; prototypeInstanceId: string },
     options?: { viewport?: DriverViewport | null; dsf?: number; theme?: string },

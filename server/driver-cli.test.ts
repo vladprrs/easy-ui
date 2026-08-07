@@ -49,6 +49,8 @@ import {
   readGeometryRects,
   resolveViewport,
   buildSnapPlan,
+  snapPlanRequests,
+  snapPlanLine,
   screenDesignSystem,
   screenDevice,
   type DriverReadinessGate,
@@ -3180,4 +3182,154 @@ describe("author driver candidate dependency overlay (W3)", () => {
     expect(result.stderr).toContain("case-set put");
     expect(calls).toEqual([]);
   }, 30_000);
+});
+
+/**
+ * §W5 (план `docs/plans/2026-08-07-migration-feedback-wave.md`) — `snap --impacted`.
+ *
+ * Проверяется контракт **клиента**: план урезает список съёмки (и печатает причину по каждому
+ * экрану), а несовместимый сервер не ломает команду — она честно откатывается на полную
+ * пересъёмку. Первый тест идёт против настоящего сервера: доказательство reuse — это записанные
+ * им кадры, и подделывать их стабом значило бы проверять собственную выдумку.
+ */
+describe("author driver impacted snap (W5)", () => {
+  type SnapRow = {
+    screenId: string; action?: "reuse"; reason?: string; path: string | null;
+    screenFrameFingerprint?: string; reuseReceipt?: { previousRev: number; previousPngSha256: string } | null;
+  };
+  type SnapPayload = {
+    exitCode: number;
+    screens: SnapRow[];
+    snapPlan: { mode: string; requested: boolean; fallback: string | null; rev: number | null; summary: { total: number; capture: number; reuse: number } | null };
+    envelope: { warnings: unknown[]; items: SnapRow[] };
+  };
+
+  test("план урезает съёмку: снимается только новое, доказанное переиспользуется с квитанцией", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    const twoScreens = await twoScreenDoc("impacted-plan");
+    await saveDoc(api, twoScreens);
+
+    const first = JSON.parse((await run(api, ["snap", "impacted-plan", `${directory}/shots`, "--impacted", "--json"])).stdout) as SnapPayload;
+    expect(first.exitCode).toBe(0);
+    expect(first.snapPlan).toMatchObject({ mode: "impacted", requested: true, fallback: null, rev: 1, summary: { total: 2, capture: 2, reuse: 0 } });
+    // Первый прогон доказательств не имеет: оба экрана новые и оба сняты.
+    expect(first.screens.map((screen) => screen.reason)).toEqual(["new", "new"]);
+    expect(first.screens.every((screen) => screen.action === undefined && screen.path !== null)).toBe(true);
+    expect(stub.calls()).toBe(2);
+
+    // Тот же документ, та же поверхность — снимать нечего.
+    const second = JSON.parse((await run(api, ["snap", "impacted-plan", `${directory}/shots`, "--impacted", "--json"])).stdout) as SnapPayload;
+    expect(second.exitCode).toBe(0);
+    expect(stub.calls()).toBe(2);
+    expect(second.snapPlan!.summary).toEqual({ total: 2, capture: 0, reuse: 2 });
+    expect(second.screens.map((screen) => [screen.action, screen.reason])).toEqual([["reuse", "proven-reuse"], ["reuse", "proven-reuse"]]);
+    // Отпечаток и квитанция — в строке отчёта: reuse без доказательства не отличим от потери кадра.
+    expect(second.screens[0]!.screenFrameFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.screens[0]!.reuseReceipt).toMatchObject({ previousRev: 1 });
+    expect(second.envelope.items).toHaveLength(2);
+
+    // Добавленный экран стоит ровно одной съёмки — KPI волны («recaptured ≤ new + impacted»).
+    const third = { ...twoScreens, screens: [...twoScreens.screens, { ...twoScreens.screens[0]!, id: "third" }] };
+    const saved = await fetch(`${api}/prototypes/impacted-plan`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRev: 1, doc: third, message: "one more screen" }),
+    });
+    expect(saved.status).toBe(200);
+    const grown = JSON.parse((await run(api, ["snap", "impacted-plan", `${directory}/shots`, "--impacted", "--json"])).stdout) as SnapPayload;
+    expect(grown.exitCode).toBe(0);
+    expect(grown.snapPlan).toMatchObject({ rev: 2, summary: { total: 3, capture: 1, reuse: 2 } });
+    expect(grown.screens.map((screen) => screen.action ?? "capture")).toEqual(["reuse", "reuse", "capture"]);
+    expect(stub.calls()).toBe(3);
+
+    // Человекочитаемый вывод называет причину по каждому экрану и печатает сводку плана.
+    const human = await run(api, ["snap", "impacted-plan", `${directory}/shots`, "--impacted"]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("snap plan: rev 2 — 0 capture, 3 reuse of 3");
+    expect(human.stdout).toContain("third: reuse (proven-reuse) fingerprint=");
+    expect(human.stdout).toContain("previousRev=2");
+  }, 120_000);
+
+  test("выключенная фича — не отказ: план не запрашивается, снимается всё", async () => {
+    process.env.EASYUI_IMPACTED_SNAP_DISABLED = "1";
+    try {
+      const stub = pngRunJob();
+      const { api, directory } = await setup(undefined, stub.runJob);
+      await saveDoc(api, await twoScreenDoc("impacted-off"));
+      const result = await run(api, ["snap", "impacted-off", `${directory}/shots`, "--impacted", "--json"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("impacted: server does not plan impacted snaps");
+      const payload = JSON.parse(result.stdout) as SnapPayload;
+      expect(payload.snapPlan).toMatchObject({ mode: "full", requested: true, rev: null, summary: null });
+      expect(payload.snapPlan.fallback).toContain("features.impactedSnap");
+      expect(payload.envelope.warnings).toContain(payload.snapPlan.fallback);
+      // Полная пересъёмка — та же, что и без флага: два экрана, обе строки на месте.
+      expect(stub.calls()).toBe(2);
+      expect(payload.screens.every((screen) => screen.path !== null)).toBe(true);
+    } finally {
+      delete process.env.EASYUI_IMPACTED_SNAP_DISABLED;
+    }
+  }, 60_000);
+
+  test("сервер без ручки плана (404) откатывает на полную пересъёмку, а не валит команду", async () => {
+    // Сборка, объявившая фичу, но не имеющая роута, — ровно окно «драйвер новее сервера».
+    const { api, calls } = await stubApi({
+      "GET /api/capabilities": () => ({ json: { features: { impactedSnap: true }, renderer: { source: "manifest", browserVersion: "test/1" } } }),
+      "GET /api/prototypes/impacted-404/draft": () => ({
+        json: { rev: 3, doc: { id: "impacted-404", name: "Fallback", screens: [{ id: "welcome" }, { id: "second" }] } },
+      }),
+    });
+    const directory = await testDirectory();
+    const result = await run(api, ["snap", "impacted-404", `${directory}/shots`, "--impacted", "--json"]);
+    // Кадров стаб не выдаёт (screenshot-роута нет) — важно, что съёмка вообще была предпринята.
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("impacted: server has no POST /api/prototypes/:id/snap-plan");
+    const payload = JSON.parse(result.stdout) as SnapPayload;
+    expect(payload.snapPlan).toMatchObject({ mode: "full", requested: true, rev: null });
+    expect(calls.filter((call) => call.path.endsWith("/snap-plan"))).toHaveLength(1);
+    expect(calls.filter((call) => call.path.includes("/screens/")).map((call) => call.path))
+      .toEqual(["/api/prototypes/impacted-404/screens/welcome/screenshot", "/api/prototypes/impacted-404/screens/second/screenshot"]);
+  }, 60_000);
+
+  test("--impacted и --full вместе — отказ до сети, как и связка с --candidate", async () => {
+    const { api, requests } = await setup();
+    const both = await run(api, ["snap", "any", "--impacted", "--full"]);
+    expect(both.exitCode).toBe(1);
+    expect(both.stderr).toContain("--impacted and --full are mutually exclusive");
+    const overlay = await run(api, ["snap", "any", "--impacted", "--candidate", CANDIDATE]);
+    expect(overlay.exitCode).toBe(1);
+    expect(overlay.stderr).toContain("--impacted cannot be combined with --candidate");
+    expect(requests()).toBe(0);
+    // `--full` в одиночку — сегодняшний дефолт: плана нет, флага в запросе тоже.
+    const full = parseArgs(["snap", "any", "--full"]);
+    expect(full.flags.full).toBe(true);
+    expect(full.flags.impacted).toBeUndefined();
+  }, 30_000);
+
+  test("план группируется по вьюпорту: одна поверхность — один запрос", () => {
+    const requests = snapPlanRequests(
+      [
+        { screenId: "a", viewport: { width: 390, height: 844 } },
+        { screenId: "b", viewport: { width: 1200, height: 900 } },
+        { screenId: "c", viewport: { width: 390, height: 844 } },
+      ],
+      { dsf: 2, theme: "dark" },
+    );
+    expect(requests.map((request) => request.screens)).toEqual([["a", "c"], ["b"]]);
+    expect(requests[0]!.body).toEqual({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "dark", readiness: "barrier", screens: ["a", "c"] });
+    // `--no-barrier` планирует против той же политики готовности, с которой пойдёт съёмка.
+    expect(snapPlanRequests([{ screenId: "a", viewport: { width: 390, height: 844 } }], { noBarrier: true })[0]!.body)
+      .toEqual({ viewport: { width: 390, height: 844 }, screens: ["a"] });
+  });
+
+  test("строка решения называет причину и у съёмки, и у переиспользования", () => {
+    expect(snapPlanLine({ screenId: "a", action: "capture", reason: "theme", screenFrameFingerprint: "f".repeat(64) }))
+      .toBe(`a: capture (theme)`);
+    expect(snapPlanLine({ screenId: "b", action: "capture", reason: "unprovable", screenFrameFingerprint: "f".repeat(64), unprovable: "element card: composition body unresolvable" }))
+      .toContain("unprovable=element card: composition body unresolvable");
+    expect(snapPlanLine({
+      screenId: "c", action: "reuse", reason: "proven-reuse", screenFrameFingerprint: "a".repeat(64),
+      reuseReceipt: { screenId: "c", screenFrameFingerprint: "a".repeat(64), previousRev: 7, previousPngSha256: "b".repeat(64), provenAt: "2026-08-07T00:00:00.000Z" },
+    })).toBe(`c: reuse (proven-reuse) fingerprint=${"a".repeat(64)} previousRev=7 previousPngSha256=${"b".repeat(64)}`);
+  });
 });

@@ -156,6 +156,23 @@ const overlayCandidateFlag = { "--candidate": { value: true, key: "candidate", r
  * ровно одним способом — поле в запрос не кладётся вовсе.
  */
 const noBarrierFlag = { "--no-barrier": { value: false, key: "noBarrier" } };
+/**
+ * `--impacted` / `--full` у `snap`/`shoot` (план 2026-08-07 §W5, P1.1).
+ *
+ * `--impacted` спрашивает сервер (`POST /api/prototypes/:id/snap-plan`), какие экраны обязаны
+ * быть сняты и почему, и снимает **только** их; остальные уезжают в отчёт строкой `reuse` с
+ * отпечатком кадра и квитанцией переиспользования. `--full` — сегодняшнее поведение, съёмка
+ * всех экранов без плана; он же дефолт, потому что сервер волны деплоится раньше драйвера, а
+ * дефолт «снять меньше» на старом сервере читался бы как тихая потеря кадров.
+ *
+ * Фича opt-in ещё и потому, что план — **доказательство**, а не догадка: недоказуемый экран
+ * сервер сам помечает `capture`, но снятые мимо галерейного пути кадры (probe, candidate
+ * overlay) в реестр кадров не попадают, и планировать по ним нечего.
+ */
+const impactedFlags = {
+  "--impacted": { value: false, key: "impacted" },
+  "--full": { value: false, key: "full" },
+};
 const catalogLimitFlag = {
   value: true,
   key: "limit",
@@ -330,8 +347,8 @@ export const flagSpecs = Object.freeze({
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   // R8a: `shoot` — алиас `snap --all-screens`, поэтому и контракт флагов у него снаповский.
-  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag, ...noBarrierFlag },
-  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag, ...noBarrierFlag },
+  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag, ...noBarrierFlag, ...impactedFlags },
+  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag, ...noBarrierFlag, ...impactedFlags },
   preview: {
     ...jsonFlag,
     ...surfaceFlags,
@@ -518,6 +535,20 @@ export function parseArgs(argv) {
   // («ничего не обновлять») он противоречив: два решения об одном ране не должны конфликтовать молча.
   if (command === "accept" && flags.recapture && flags.refresh === "none") {
     invalid("--recapture contradicts --refresh none: --refresh picks which cases to update, --recapture only deepens their scope to a re-capture");
+  }
+  // §W5: два решения об одной съёмке. `--impacted` снимает только запланированное сервером,
+  // `--full` — всё; вместе они не значат ничего, и молчаливый выбор одного из них стоил бы либо
+  // непонятого кадра, либо непонятого его отсутствия. Отказ — до сети.
+  if ((command === "snap" || command === "shoot") && flags.impacted && flags.full) {
+    invalid("--impacted and --full are mutually exclusive: --impacted captures only the screens the server plans to re-capture,"
+      + " --full captures every screen (the default)");
+  }
+  // §W5 × §B: план доказывает reuse по кадрам **галерейного** пути, а кадр с candidate-overlay
+  // в реестр кадров не пишется вовсе. Переиспользовать published-кадр под именем кандидатского —
+  // ровно та подмена, которую §B2.3 ловит на другой стороне, поэтому связка отвергается заранее.
+  if ((command === "snap" || command === "shoot") && flags.impacted && flags.candidate !== undefined) {
+    invalid("--impacted cannot be combined with --candidate: the snap plan proves reuse from gallery frames,"
+      + " and candidate-overlay frames are never recorded as such — drop --impacted to capture the overlay frames");
   }
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   if (command === "preview" && positionals.length === 2 && flags.example !== undefined) invalid("preview accepts either props.json or --example, not both");
@@ -1592,6 +1623,56 @@ export function buildSnapPlan(draft, flags = {}) {
 }
 
 /**
+ * Запросы импакт-плана по плану съёмки (§W5).
+ *
+ * Серверная ручка планирует **одну** поверхность на вызов (вьюпорт входит в отпечаток кадра),
+ * а драйверный план canvas-aware: стикершит и телефон в одном прототипе дают разные вьюпорты.
+ * Поэтому экраны группируются по фактическому вьюпорту, и на каждую группу уходит свой запрос
+ * с `screens[]` — иначе план считался бы не по той поверхности, что съёмка, и «доказанный
+ * reuse» доказывал бы чужой кадр.
+ *
+ * Порядок групп и экранов внутри группы — порядок плана съёмки: отчёт обязан читаться сверху вниз
+ * так же, как читается прототип.
+ */
+export function snapPlanRequests(plan, flags = {}) {
+  const groups = new Map();
+  for (const surface of plan) {
+    const key = `${surface.viewport.width}x${surface.viewport.height}`;
+    const group = groups.get(key) ?? { viewport: surface.viewport, screens: [] };
+    group.screens.push(surface.screenId);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map(({ viewport, screens }) => ({
+    viewport,
+    screens,
+    // Тело — те же значения поверхности, что уедут в саму джобу: dsf и тему сервер дефолтит
+    // одинаково в обоих местах (1 / light), а `readiness` — тот же opt-in барьера, что у snap.
+    body: {
+      viewport,
+      ...(flags.dsf === undefined ? {} : { deviceScaleFactor: flags.dsf }),
+      ...(flags.theme === undefined ? {} : { theme: flags.theme }),
+      ...(flags.noBarrier ? {} : { readiness: SNAP_READINESS }),
+      screens,
+    },
+  }));
+}
+
+/**
+ * Строка решения плана по одному экрану (§W5). Причина печатается **всегда**: «сняли» и «не
+ * сняли» без названной причины одинаково нечитаемы, а `unprovable` дополнительно называет
+ * элемент, из-за которого экран недоказуем.
+ */
+export function snapPlanLine(decision) {
+  if (decision.action === "reuse") {
+    const receipt = decision.reuseReceipt ?? null;
+    return `${decision.screenId}: reuse (${decision.reason}) fingerprint=${decision.screenFrameFingerprint}`
+      + (receipt ? ` previousRev=${receipt.previousRev} previousPngSha256=${receipt.previousPngSha256}` : "");
+  }
+  return `${decision.screenId}: capture (${decision.reason})`
+    + (decision.unprovable ? ` unprovable=${decision.unprovable}` : "");
+}
+
+/**
  * Предполётная сверка рендерера (R8a). Съёмка идёт только на сервере, поэтому агент обязан
  * знать, **чем** сняли: сборка без манифеста (`source: "fallback"`) рисует локально
  * установленным браузером, и её кадры несопоставимы с эталонами прода. Проверка мягкая —
@@ -1606,30 +1687,91 @@ export function rendererPreflightWarning(capabilities) {
   return null;
 }
 
+/**
+ * Возвращает прочитанные capabilities (или `null`) — тем же запросом, которым печатает
+ * предупреждение о рендерере: §W5 спрашивает у них `features.impactedSnap`, и второй GET за
+ * тем же документом был бы лишним раундом на горячем пути съёмки.
+ */
 async function warnOnRenderer() {
   let capabilities;
   try {
     const response = await call("GET", "/capabilities");
-    if (response.status !== 200) return;
+    if (response.status !== 200) return null;
     capabilities = response.json;
-  } catch { return; }
+  } catch { return null; }
   const warning = rendererPreflightWarning(capabilities);
   if (warning) console.error(`renderer: ${warning}`);
+  return capabilities ?? null;
+}
+
+/**
+ * Импакт-план съёмки (§W5): что сервер обязывает снять и что доказал как переиспользуемое.
+ *
+ * Совместимость честная в обе стороны. Сервер волны деплоится **раньше** драйвера, но обратное
+ * тоже случается (откат образа, kill-switch `EASYUI_IMPACTED_SNAP_DISABLED`): если фича не
+ * объявлена в capabilities или ручки нет вовсе (404 без предметного кода), команда не падает —
+ * она возвращает `plan: null` с причиной, и `snap` снимает всё, как снимал до волны. Предметные
+ * 404 (`prototype_not_found`, `screen_not_found`, …) — настоящие ошибки и уходят наверх как есть.
+ */
+async function fetchSnapPlan(id, plan, flags, capabilities) {
+  if (capabilities !== null && capabilities.features?.impactedSnap !== true) {
+    return { plan: null, fallback: "server does not plan impacted snaps (capabilities.features.impactedSnap is off or the build predates plan W5); capturing every screen" };
+  }
+  const screens = [];
+  let rev = null;
+  for (const request of snapPlanRequests(plan, flags)) {
+    const response = await call("POST", `/prototypes/${encodeURIComponent(id)}/snap-plan`, request.body);
+    if (response.status === 404 && (errorCode(response) === undefined || errorCode(response) === "not_found")) {
+      return { plan: null, fallback: `server has no POST /api/prototypes/:id/snap-plan (HTTP 404 ${errorCode(response) ?? "no code"}); capturing every screen` };
+    }
+    const body = await requireOk("snap-plan", response);
+    screens.push(...body.screens);
+    rev = body.rev;
+  }
+  const reuse = screens.filter((screen) => screen.action === "reuse").length;
+  return { plan: { rev, screens, summary: { total: screens.length, capture: screens.length - reuse, reuse } }, fallback: null };
 }
 
 async function runSnap(args, flags, command = "snap") {
   const [id, outputDir = `author-shots/${id}`] = args;
-  await warnOnRenderer();
+  const capabilities = await warnOnRenderer();
   const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));
   let plan;
   try { plan = buildSnapPlan(draft, flags); }
   catch (error) { throw new CliError(error.message); }
+  // §W5: импакт-план — строго opt-in (`--impacted`); `--full` и его отсутствие снимают всё.
+  const impacted = flags.impacted === true ? await fetchSnapPlan(id, plan, flags, capabilities) : { plan: null, fallback: null };
+  if (impacted.fallback) console.error(`impacted: ${impacted.fallback}`);
+  const decisions = impacted.plan === null ? null : new Map(impacted.plan.screens.map((screen) => [screen.screenId, screen]));
+  if (impacted.plan) {
+    out(`snap plan: rev ${impacted.plan.rev} — ${impacted.plan.summary.capture} capture, ${impacted.plan.summary.reuse} reuse of ${impacted.plan.summary.total}`);
+  }
   await mkdir(outputDir, { recursive: true });
   const rows = [];
   const receipts = [];
   const wantReceipt = flags.receipt !== undefined;
   for (const surface of plan) {
-    const { receiptDocument, ...row } = await snapScreen(id, surface.screenId, outputDir, surface, wantReceipt);
+    // Решение плана печатается перед кадром — и для съёмки (причина пересъёмки), и для reuse
+    // (отпечаток с квитанцией). Экран, которого сервер в плане не назвал, снимается: молчание
+    // плана не доказательство.
+    const decision = decisions?.get(surface.screenId) ?? null;
+    if (decision) out(snapPlanLine(decision));
+    if (decision?.action === "reuse") {
+      // Строка отчёта, а не кадр: `action: "reuse"` — единственный дискриминатор, у снятых
+      // экранов поля нет вовсе (форма их строк не меняется волной).
+      rows.push({
+        screenId: surface.screenId, action: "reuse", reason: decision.reason, viewport: surface.viewport,
+        screenFrameFingerprint: decision.screenFrameFingerprint, reuseReceipt: decision.reuseReceipt ?? null, path: null,
+      });
+      continue;
+    }
+    const { receiptDocument, ...captureRow } = await snapScreen(id, surface.screenId, outputDir, surface, wantReceipt);
+    // §W5: причина пересъёмки — часть строки отчёта, а не только текста: агент, планирующий
+    // бюджет съёмки, читает `items`. Без плана полей нет вовсе — форма строки не меняется.
+    const row = decision === null ? captureRow : {
+      ...captureRow, reason: decision.reason, screenFrameFingerprint: decision.screenFrameFingerprint,
+      ...(decision.unprovable === undefined ? {} : { unprovable: decision.unprovable }),
+    };
     rows.push(row);
     receipts.push({ screenId: surface.screenId, jobId: row.jobId, receiptSha256: row.receiptSha256, receipt: receiptDocument?.receipt ?? null });
     if (row.path) out(row.path);
@@ -1648,14 +1790,28 @@ async function runSnap(args, flags, command = "snap") {
     // Один файл на команду: `snap` снимает все экраны прототипа, и receipt у каждого свой.
     await writeReceiptFile(flags.receipt, { command, prototypeId: id, rev: draft.rev, receipts });
     out(flags.receipt);
-    if (receipts.every((entry) => entry.receipt === null)) {
+    // §W5: переиспользованные экраны в файл квитанций не попадают (у них нет джобы), поэтому
+    // «все квитанции пусты» проверяется только когда хоть один кадр снимался.
+    if (receipts.length > 0 && receipts.every((entry) => entry.receipt === null)) {
       console.error(`receipt: server returned no capture receipt (${lastReceiptFailure ?? "receipts disabled, evicted, or a build older than the receipt contract"}); ${flags.receipt} carries nulls`);
     }
   }
-  const exitCode = snapExitCode(rows);
+  // §W5: код возврата считается по **снятым** экранам. Переиспользованный экран кадра не
+  // производил, и трактовать его как «PNG не получен» значило бы уронить успешную съёмку.
+  const captured = rows.filter((row) => row.action !== "reuse");
+  const exitCode = snapExitCode(captured);
   if (jsonMode) {
     report(null, {
       command, prototypeId: id, outputDir, rev: draft.rev, exitCode,
+      // §W5: чем была съёмка — планом или полной пересъёмкой, и почему (`fallback` называет
+      // причину отката на полную, `null` — плана не просили или он отработал).
+      snapPlan: {
+        mode: impacted.plan === null ? "full" : "impacted",
+        requested: flags.impacted === true,
+        fallback: impacted.fallback,
+        rev: impacted.plan?.rev ?? null,
+        summary: impacted.plan?.summary ?? null,
+      },
       // Применённые значения: сервер по умолчанию снимает dsf 1 в светлой теме.
       dsf: flags.dsf ?? 1, theme: flags.theme ?? "light",
       // §B: подмены кадра — часть provenance отчёта, а не деталь вызова; `null` = обычная съёмка.
@@ -1664,7 +1820,9 @@ async function runSnap(args, flags, command = "snap") {
     }, {
       command, ok: exitCode === EXIT.ok, items: rows,
       artifacts: [...rows.map((row) => row.path).filter(Boolean), ...(wantReceipt ? [flags.receipt] : [])],
-      warnings: rows.flatMap((row) => row.productErrors),
+      // §W5: откат на полную пересъёмку — предупреждение конверта, а не деталь лога: агент,
+      // просивший план, обязан увидеть в квитанции, что плана не было.
+      warnings: [...captured.flatMap((row) => row.productErrors), ...(impacted.fallback ? [impacted.fallback] : [])],
     });
   }
   if (exitCode === EXIT.productErrors) throw new CliError("screenshots produced with product errors", { exitCode: EXIT.productErrors });
