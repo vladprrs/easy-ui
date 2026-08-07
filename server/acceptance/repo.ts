@@ -489,6 +489,26 @@ export class AcceptanceRepo {
     return this.db.query("SELECT * FROM acceptance_runs WHERE candidate_id=? ORDER BY created_at, run_id").all(candidateId) as AcceptanceRunRow[];
   }
 
+  /**
+   * История прошедших случаев того же компонента и **того же набора** — вход advisory-expiry
+   * (W7, AC §9.3): по ней ищется самый ранний ран, в котором случай с объявленным бюджетом
+   * впервые прошёл.
+   *
+   * Тождество случая — пара `(case_set_id, case_id)`: идентификаторы случаев локальны для
+   * манифеста, а правка манифеста даёт **новый** контентно-адресованный набор, и baseline тогда
+   * законно начинается заново (бюджет мог измениться вместе с ним). Раны без рендерера (до v30)
+   * отсекаются здесь же: «неизвестно» — не «другой».
+   */
+  passedCaseHistory(run: AcceptanceRunRow, limit = 500): (AcceptanceRunRow & { case_id: string; gates_json: string | null })[] {
+    return this.db.query(`SELECT r.run_id,r.created_at,r.renderer_fingerprint,r.policy_profile_id,r.policy_profile_hash,
+             c.case_id,c.gates_json
+        FROM acceptance_cases c JOIN acceptance_runs r ON r.run_id=c.run_id
+       WHERE r.component_id=? AND r.case_set_id IS ? AND r.run_id<>? AND c.verdict='pass'
+         AND r.renderer_fingerprint IS NOT NULL AND r.created_at<=?
+       ORDER BY r.created_at, r.run_id LIMIT ?`)
+      .all(run.component_id, run.case_set_id, run.run_id, run.created_at, limit) as (AcceptanceRunRow & { case_id: string; gates_json: string | null })[];
+  }
+
   /** `queued → running`. Возвращает `false`, если ран уже ушёл из очереди (гонка с cancel/watchdog). */
   startRun(id: string, at = now()): boolean {
     return this.db.query("UPDATE acceptance_runs SET status='running', started_at=? WHERE run_id=? AND status='queued'")

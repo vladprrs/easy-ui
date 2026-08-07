@@ -837,7 +837,8 @@ test("view: default остаётся полным ответом, неизвес
   expect(Object.keys(full).sort()).toEqual([
     "candidateId", "caseSetId", "componentId", "createdAt", "eta", "evidenceManifestHash", "failedCases",
     "finishedAt", "gates", "idempotencyKey", "impact", "policy", "progress", "refresh", "remediationGroups",
-    "runId", "startedAt", "status", "statusReason",
+    // W7 (2026-08-07): аддитивный раздел `warnings` — advisory-предупреждения рана.
+    "runId", "startedAt", "status", "statusReason", "warnings",
   ]);
   expect(full).not.toHaveProperty("view");
   const failedCases = full.failedCases as { caseId: string; failedGates: { gate: string; metrics: Record<string, unknown> }[] }[];

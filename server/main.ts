@@ -46,6 +46,7 @@ import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
 import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
+import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
 import { routeMigrationCommits } from "./routes/migrationCommits";
@@ -282,6 +283,10 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // `/api/migration-commits*` (404) и `features.migrationCommit`. Уже существующие строки саги
     // не трогаются: включение обратно продолжает их с той же фазы через `advance`.
     if(!migrationCommitEnabled()) console.warn("[migration] EASYUI_MIGRATION_COMMIT_DISABLED=1: migration commit saga off, /api/migration-commits* answers 404");
+    // W7 (план 2026-08-07 §W7): kill-switch suggested policy. Слой report-only — вердикты, гейты и
+    // отпечатки от него не зависят ни в каком положении тумблера; гасятся ровно две производные
+    // отчёта: предложение бюджета у случая/группы и advisory-предупреждения `policy_exception_stale`.
+    if(!suggestedPolicyEnabled()) console.warn("[acceptance] EASYUI_SUGGESTED_POLICY_DISABLED=1: suggested policy off, acceptance reports carry no suggestedPolicy and no policy_exception_stale warnings");
     // Watchdog фаз саги (триаж O-M7, R7): периодических таймеров в сервере нет, поэтому зависшая
     // фаза подметается на старте процесса — рядом с `failStagingPublishes` — и на каждом запросе
     // к набору. Сага, чей процесс умер в активной фазе, встаёт в `needs-<фаза>` и resumable.

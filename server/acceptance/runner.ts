@@ -28,6 +28,7 @@ import {
   type CaseFingerprints, type CaseSurface, type VerdictPolicySnapshot,
 } from "./ids";
 import { reevaluateGates, rewriteDerivedArtifacts, verdictRecomputeEnabled } from "./recompute";
+import { suggestPolicy, suggestedPolicyEnabled } from "./suggest";
 import { CaptureInfraError } from "./gates/capture";
 import { GATE_ORDER, IMPLEMENTED_GATES } from "./gates";
 import { readinessBlocksVisual } from "./gates/readiness";
@@ -332,12 +333,29 @@ export function causeInputOf(gates: GateResult[], deviceScaleFactor: number): Ca
  * их больше не пересматривает — классификация не может ни уронить, ни спасти случай. Вызывается
  * только для `fail`/`indeterminate` визуального исхода: у прошедшего случая объяснять нечего.
  */
-export function annotateCauses(gates: GateResult[], deviceScaleFactor: number): GateResult[] {
+export function annotateCauses(
+  gates: GateResult[],
+  deviceScaleFactor: number,
+  context?: { caseId: string; rendererFingerprint?: string | null },
+): GateResult[] {
   const visual = gateOf(gates, "visual");
   if (!isDiagnosable(visual)) return gates;
   visual!.causes = classifyVisualCauses(causeInputOf(gates, deviceScaleFactor));
+  // W7: предложение считается **после** причин и из них же — тот же слой диагностики поверх уже
+  // вынесенного вердикта. Отсутствие предложения выражается отсутствием поля, а не `null`:
+  // «предложения нет» и «предложение пустое» не должны различаться в сериализации.
+  delete visual!.suggestedPolicy;
+  if (context === undefined || !suggestedPolicyEnabled()) return gates;
+  const suggestion = suggestPolicy(gates, context);
+  if (suggestion !== null) visual!.suggestedPolicy = suggestion;
   return gates;
 }
+
+/** Контекст предложения (W7): случай и объявленный рендерер рана — оба входят в его evidence. */
+const suggestContextOf = (deps: CaseRunnerDeps, caseId: string): { caseId: string; rendererFingerprint: string } => ({
+  caseId,
+  rendererFingerprint: rendererFingerprint(readinessPolicyHashOf(deps.policy.readiness)),
+});
 
 /** Причины случая для отчётов (run-репорт, `GET /cases`): их несёт визуальный гейт. */
 export const causesOfGates = (gates: GateResult[]): VisualCause[] => gateOf(gates, "visual")?.causes ?? [];
@@ -599,9 +617,11 @@ function finishReused(
 ): ReusedExecution {
   // Классификация причин относится к вердикту, а не к строке кэша: старые причины снимаются, новые
   // считаются от новых метрик (иначе прошедший после пересчёта случай унёс бы объяснение провала).
-  for (const gate of gates) delete gate.causes;
+  // W7: предложение — производная причин, поэтому снимается ровно там же и пересчитывается тем же
+  // вызовом: reused-строка обязана нести предложение, согласованное с **пересчитанными** причинами.
+  for (const gate of gates) { delete gate.causes; delete gate.suggestedPolicy; }
   const verdict = caseVerdictOf(gates, deps.policy);
-  annotateCauses(gates, deps.surface.dsf);
+  annotateCauses(gates, deps.surface.dsf, suggestContextOf(deps, item.caseId));
   const stored: StoredResult = { gates, captureQuality };
   deps.repo.putCaseResult({
     caseFingerprint: fps.case,
@@ -738,7 +758,7 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
   const verdict = caseVerdictOf(gates, deps.policy);
   // W5b: причины считаются **после** вердикта — и по построению, и по порядку вызова, чтобы
   // «классификация не влияет на pass/fail» держалось кодом, а не обещанием (§2/§10 плана).
-  annotateCauses(gates, deps.surface.dsf);
+  annotateCauses(gates, deps.surface.dsf, suggestContextOf(deps, item.caseId));
   const captureQuality =(deps.shared.get(renderQualityKey(item.caseId)) as CaptureQualityRecord | undefined) ?? null;
   const stored: StoredResult = { gates, captureQuality };
   deps.repo.putCaseResult({

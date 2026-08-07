@@ -635,9 +635,191 @@
                       "type": "object"
                     },
                     "__schema4": {
-                      "type": "string"
+                      "additionalProperties": {},
+                      "properties": {
+                        "basis": {
+                          "type": "string"
+                        },
+                        "caseIds": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "evidence": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "affectedElementKeys": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "bestOffset": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": {},
+                                  "properties": {
+                                    "dx": {
+                                      "type": "number"
+                                    },
+                                    "dy": {
+                                      "type": "number"
+                                    },
+                                    "residualPct": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "dx",
+                                    "dy",
+                                    "residualPct"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "confidence": {
+                              "type": "number"
+                            },
+                            "currentMaxRawDiffPct": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "edgeResidualInsidePct": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "geometryClean": {
+                              "type": "boolean"
+                            },
+                            "rawDiffPct": {
+                              "type": "number"
+                            },
+                            "rendererFingerprint": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "topCause": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "topCause",
+                            "confidence",
+                            "rawDiffPct",
+                            "currentMaxRawDiffPct",
+                            "edgeResidualInsidePct",
+                            "bestOffset",
+                            "geometryClean",
+                            "affectedElementKeys",
+                            "rendererFingerprint"
+                          ],
+                          "type": "object"
+                        },
+                        "expiry": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "referenceAssetId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rendererFingerprint": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "trigger": {
+                              "const": "renderer-or-source-fingerprint-change",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "trigger",
+                            "rendererFingerprint",
+                            "referenceAssetId"
+                          ],
+                          "type": "object"
+                        },
+                        "kind": {
+                          "enum": [
+                            "textAaBudget",
+                            "maxRawDiffPct"
+                          ],
+                          "type": "string"
+                        },
+                        "maxRawDiffPct": {
+                          "type": "number"
+                        },
+                        "remediationKey": {
+                          "type": "string"
+                        },
+                        "requiresHumanJudgement": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "scope": {
+                          "enum": [
+                            "case-id",
+                            "remediation-group"
+                          ],
+                          "type": "string"
+                        },
+                        "target": {
+                          "type": "string"
+                        },
+                        "textAaBudget": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target",
+                        "basis",
+                        "scope",
+                        "caseIds",
+                        "evidence",
+                        "expiry",
+                        "requiresHumanJudgement"
+                      ],
+                      "type": "object"
                     },
                     "__schema5": {
+                      "type": "string"
+                    },
+                    "__schema6": {
                       "additionalProperties": {},
                       "properties": {
                         "code": {
@@ -759,7 +941,7 @@
                           "type": "string"
                         },
                         "createdAt": {
-                          "$ref": "#/$defs/__schema4"
+                          "$ref": "#/$defs/__schema5"
                         },
                         "eta": {
                           "anyOf": [
@@ -795,7 +977,7 @@
                               },
                               "causes": {
                                 "items": {
-                                  "$ref": "#/$defs/__schema5"
+                                  "$ref": "#/$defs/__schema6"
                                 },
                                 "type": "array"
                               },
@@ -805,7 +987,7 @@
                                   "properties": {
                                     "causes": {
                                       "items": {
-                                        "$ref": "#/$defs/__schema5"
+                                        "$ref": "#/$defs/__schema6"
                                       },
                                       "type": "array"
                                     },
@@ -824,6 +1006,9 @@
                                     },
                                     "status": {
                                       "type": "string"
+                                    },
+                                    "suggestedPolicy": {
+                                      "$ref": "#/$defs/__schema4"
                                     }
                                   },
                                   "required": [
@@ -864,6 +1049,16 @@
                               "status": {
                                 "type": "string"
                               },
+                              "suggestedPolicy": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/__schema4"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "verdict": {
                                 "anyOf": [
                                   {
@@ -882,6 +1077,7 @@
                               "verdict",
                               "severity",
                               "causes",
+                              "suggestedPolicy",
                               "failedGates"
                             ],
                             "type": "object"
@@ -891,7 +1087,7 @@
                         "finishedAt": {
                           "anyOf": [
                             {
-                              "$ref": "#/$defs/__schema4"
+                              "$ref": "#/$defs/__schema5"
                             },
                             {
                               "type": "null"
@@ -1108,6 +1304,9 @@
                                   }
                                 ]
                               },
+                              "suggestedPolicy": {
+                                "$ref": "#/$defs/__schema4"
+                              },
                               "suggestion": {
                                 "type": "string"
                               },
@@ -1148,7 +1347,7 @@
                         "startedAt": {
                           "anyOf": [
                             {
-                              "$ref": "#/$defs/__schema4"
+                              "$ref": "#/$defs/__schema5"
                             },
                             {
                               "type": "null"
@@ -1167,6 +1366,49 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "warnings": {
+                          "items": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "baselineRendererFingerprint": {
+                                "type": "string"
+                              },
+                              "baselineRunId": {
+                                "type": "string"
+                              },
+                              "caseId": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "const": "policy_exception_stale",
+                                "type": "string"
+                              },
+                              "detail": {
+                                "type": "string"
+                              },
+                              "exceptions": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "rendererFingerprint": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "caseId",
+                              "exceptions",
+                              "baselineRunId",
+                              "baselineRendererFingerprint",
+                              "rendererFingerprint",
+                              "detail"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -1185,6 +1427,7 @@
                         "refresh",
                         "statusReason",
                         "remediationGroups",
+                        "warnings",
                         "createdAt",
                         "startedAt",
                         "finishedAt",
@@ -1230,6 +1473,9 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "suggest": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -1310,6 +1556,12 @@
                         "view": {
                           "const": "summary",
                           "type": "string"
+                        },
+                        "warnings": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -1322,6 +1574,7 @@
                         "refresh",
                         "failedCases",
                         "remediationGroups",
+                        "warnings",
                         "evidenceUrl"
                       ],
                       "type": "object"
@@ -1363,7 +1616,7 @@
             "description": "method_not_allowed"
           }
         },
-        "summary": "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. `?view=summary` (wave W8, `capabilities.features.acceptanceSummaryView`) answers with a COMPACT report instead: `{view:\"summary\", runId, status, statusReason, progress, gates {gate: \"pass:17 fail:8\"}, refresh {requested, impact, effective} as strings, failedCases [{caseId, gate, raw, aa, cause}], remediationGroups {key: \"<cause> ×N: caseIds\"}, evidenceUrl}` — a failed 25-case run prints under 100 lines instead of ~1800. The `view` marker in the BODY is the compatibility test: servers older than W8 ignore the query and return the full view, so a client must check both the capability flag and the marker. `view=full` is the default and is unchanged; any other value is 400 invalid_request. Drill down into a single case with GET /api/acceptance-runs/{runId}/cases?case=<id>. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "summary": "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. SUGGESTED POLICY (wave 2026-08-07 W7, `capabilities.features.suggestedPolicy`): a failed case whose TOP cause is a proven rasterisation residual (`text-raster-residual` with `edgeResidual.insidePct` at or above the classifier threshold) and whose geometry gate is clean carries `suggestedPolicy` — the MINIMAL budget covering the measured fact: either the named server-owned preset `textAaBudget` (preferred: the numbers stay the server's) or, when no preset covers it, a per-case `policy.perCase.<caseId>.maxRawDiffPct` rounded up to the nearest hundredth. It is REPORT-ONLY: it never enters a verdict, a gate or a fingerprint, always carries `requiresHumanJudgement: true`, and is REFUSED (null) for structural top causes (geometry-shift, descendant-outside-mask, effect-overflow, missing-late-asset), for non-budgetable ones (surface-tint, edge-radius-stroke, alpha-compositing), for an unmeasured residual and for any value softer than the loosest profile budget. A remediation group whose members all suggest the same KIND carries one group-level suggestion (`scope: \"remediation-group\"`, the widest member value). `warnings` carries the advisory expiry of accepted exceptions: `policy_exception_stale` says a case still passes under a declared budget that was first accepted by an earlier run under a DIFFERENT `renderer_fingerprint`; the baseline is taken only from runs whose `policy_profile_hash` equals today's hash of their profile, so runs recorded under a pre-wave readiness policy never raise a false stale. With EASYUI_SUGGESTED_POLICY_DISABLED=1 both `suggestedPolicy` and the warnings are absent. `?view=summary` (wave W8, `capabilities.features.acceptanceSummaryView`) answers with a COMPACT report instead: `{view:\"summary\", runId, status, statusReason, progress, gates {gate: \"pass:17 fail:8\"}, refresh {requested, impact, effective} as strings, failedCases [{caseId, gate, raw, aa, cause}], remediationGroups {key: \"<cause> ×N: caseIds\"}, evidenceUrl}` — a failed 25-case run prints under 100 lines instead of ~1800. The `view` marker in the BODY is the compatibility test: servers older than W8 ignore the query and return the full view, so a client must check both the capability flag and the marker. `view=full` is the default and is unchanged; any other value is 400 invalid_request. Drill down into a single case with GET /api/acceptance-runs/{runId}/cases?case=<id>. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
         "x-easyui-validated": false
       }
     },
@@ -1426,9 +1679,191 @@
                       "type": "object"
                     },
                     "__schema2": {
-                      "type": "string"
+                      "additionalProperties": {},
+                      "properties": {
+                        "basis": {
+                          "type": "string"
+                        },
+                        "caseIds": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "evidence": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "affectedElementKeys": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "bestOffset": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": {},
+                                  "properties": {
+                                    "dx": {
+                                      "type": "number"
+                                    },
+                                    "dy": {
+                                      "type": "number"
+                                    },
+                                    "residualPct": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "dx",
+                                    "dy",
+                                    "residualPct"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "confidence": {
+                              "type": "number"
+                            },
+                            "currentMaxRawDiffPct": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "edgeResidualInsidePct": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "geometryClean": {
+                              "type": "boolean"
+                            },
+                            "rawDiffPct": {
+                              "type": "number"
+                            },
+                            "rendererFingerprint": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "topCause": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "topCause",
+                            "confidence",
+                            "rawDiffPct",
+                            "currentMaxRawDiffPct",
+                            "edgeResidualInsidePct",
+                            "bestOffset",
+                            "geometryClean",
+                            "affectedElementKeys",
+                            "rendererFingerprint"
+                          ],
+                          "type": "object"
+                        },
+                        "expiry": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "referenceAssetId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rendererFingerprint": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "trigger": {
+                              "const": "renderer-or-source-fingerprint-change",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "trigger",
+                            "rendererFingerprint",
+                            "referenceAssetId"
+                          ],
+                          "type": "object"
+                        },
+                        "kind": {
+                          "enum": [
+                            "textAaBudget",
+                            "maxRawDiffPct"
+                          ],
+                          "type": "string"
+                        },
+                        "maxRawDiffPct": {
+                          "type": "number"
+                        },
+                        "remediationKey": {
+                          "type": "string"
+                        },
+                        "requiresHumanJudgement": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "scope": {
+                          "enum": [
+                            "case-id",
+                            "remediation-group"
+                          ],
+                          "type": "string"
+                        },
+                        "target": {
+                          "type": "string"
+                        },
+                        "textAaBudget": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target",
+                        "basis",
+                        "scope",
+                        "caseIds",
+                        "evidence",
+                        "expiry",
+                        "requiresHumanJudgement"
+                      ],
+                      "type": "object"
                     },
                     "__schema3": {
+                      "type": "string"
+                    },
+                    "__schema4": {
                       "additionalProperties": {},
                       "properties": {
                         "code": {
@@ -1548,7 +1983,7 @@
                       "type": "string"
                     },
                     "createdAt": {
-                      "$ref": "#/$defs/__schema2"
+                      "$ref": "#/$defs/__schema3"
                     },
                     "eta": {
                       "anyOf": [
@@ -1584,7 +2019,7 @@
                           },
                           "causes": {
                             "items": {
-                              "$ref": "#/$defs/__schema3"
+                              "$ref": "#/$defs/__schema4"
                             },
                             "type": "array"
                           },
@@ -1594,7 +2029,7 @@
                               "properties": {
                                 "causes": {
                                   "items": {
-                                    "$ref": "#/$defs/__schema3"
+                                    "$ref": "#/$defs/__schema4"
                                   },
                                   "type": "array"
                                 },
@@ -1613,6 +2048,9 @@
                                 },
                                 "status": {
                                   "type": "string"
+                                },
+                                "suggestedPolicy": {
+                                  "$ref": "#/$defs/__schema2"
                                 }
                               },
                               "required": [
@@ -1653,6 +2091,16 @@
                           "status": {
                             "type": "string"
                           },
+                          "suggestedPolicy": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema2"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "verdict": {
                             "anyOf": [
                               {
@@ -1671,6 +2119,7 @@
                           "verdict",
                           "severity",
                           "causes",
+                          "suggestedPolicy",
                           "failedGates"
                         ],
                         "type": "object"
@@ -1680,7 +2129,7 @@
                     "finishedAt": {
                       "anyOf": [
                         {
-                          "$ref": "#/$defs/__schema2"
+                          "$ref": "#/$defs/__schema3"
                         },
                         {
                           "type": "null"
@@ -1951,6 +2400,9 @@
                               }
                             ]
                           },
+                          "suggestedPolicy": {
+                            "$ref": "#/$defs/__schema2"
+                          },
                           "suggestion": {
                             "type": "string"
                           },
@@ -1991,7 +2443,7 @@
                     "startedAt": {
                       "anyOf": [
                         {
-                          "$ref": "#/$defs/__schema2"
+                          "$ref": "#/$defs/__schema3"
                         },
                         {
                           "type": "null"
@@ -2019,6 +2471,49 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "warnings": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "baselineRendererFingerprint": {
+                            "type": "string"
+                          },
+                          "baselineRunId": {
+                            "type": "string"
+                          },
+                          "caseId": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "const": "policy_exception_stale",
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "exceptions": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "rendererFingerprint": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "caseId",
+                          "exceptions",
+                          "baselineRunId",
+                          "baselineRendererFingerprint",
+                          "rendererFingerprint",
+                          "detail"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -2037,6 +2532,7 @@
                     "refresh",
                     "statusReason",
                     "remediationGroups",
+                    "warnings",
                     "createdAt",
                     "startedAt",
                     "finishedAt",
@@ -2222,6 +2718,188 @@
                         "detail"
                       ],
                       "type": "object"
+                    },
+                    "__schema2": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "basis": {
+                          "type": "string"
+                        },
+                        "caseIds": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "evidence": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "affectedElementKeys": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "bestOffset": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": {},
+                                  "properties": {
+                                    "dx": {
+                                      "type": "number"
+                                    },
+                                    "dy": {
+                                      "type": "number"
+                                    },
+                                    "residualPct": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "dx",
+                                    "dy",
+                                    "residualPct"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "confidence": {
+                              "type": "number"
+                            },
+                            "currentMaxRawDiffPct": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "edgeResidualInsidePct": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "geometryClean": {
+                              "type": "boolean"
+                            },
+                            "rawDiffPct": {
+                              "type": "number"
+                            },
+                            "rendererFingerprint": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "topCause": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "topCause",
+                            "confidence",
+                            "rawDiffPct",
+                            "currentMaxRawDiffPct",
+                            "edgeResidualInsidePct",
+                            "bestOffset",
+                            "geometryClean",
+                            "affectedElementKeys",
+                            "rendererFingerprint"
+                          ],
+                          "type": "object"
+                        },
+                        "expiry": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "referenceAssetId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rendererFingerprint": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "trigger": {
+                              "const": "renderer-or-source-fingerprint-change",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "trigger",
+                            "rendererFingerprint",
+                            "referenceAssetId"
+                          ],
+                          "type": "object"
+                        },
+                        "kind": {
+                          "enum": [
+                            "textAaBudget",
+                            "maxRawDiffPct"
+                          ],
+                          "type": "string"
+                        },
+                        "maxRawDiffPct": {
+                          "type": "number"
+                        },
+                        "remediationKey": {
+                          "type": "string"
+                        },
+                        "requiresHumanJudgement": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "scope": {
+                          "enum": [
+                            "case-id",
+                            "remediation-group"
+                          ],
+                          "type": "string"
+                        },
+                        "target": {
+                          "type": "string"
+                        },
+                        "textAaBudget": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target",
+                        "basis",
+                        "scope",
+                        "caseIds",
+                        "evidence",
+                        "expiry",
+                        "requiresHumanJudgement"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": {},
@@ -2313,6 +2991,9 @@
                                 },
                                 "status": {
                                   "type": "string"
+                                },
+                                "suggestedPolicy": {
+                                  "$ref": "#/$defs/__schema2"
                                 }
                               },
                               "required": [
@@ -2486,6 +3167,16 @@
                           "status": {
                             "type": "string"
                           },
+                          "suggestedPolicy": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema2"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "verdict": {
                             "anyOf": [
                               {
@@ -2514,6 +3205,7 @@
                           "finishedAt",
                           "gates",
                           "causes",
+                          "suggestedPolicy",
                           "artifacts"
                         ],
                         "type": "object"
@@ -2565,7 +3257,7 @@
             "description": "method_not_allowed"
           }
         },
-        "summary": "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason, the per-case REUSE RECEIPT and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). `reuseReceipt` (wave W8, feedback P2-10) reports reuse LEVEL BY LEVEL — `{reuse:{candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints:{frame, comparison, verdictPolicy, case}, reuseReason?}` — because a single `reused` counter cannot tell 'nothing was recomputed' from 'the verdict was recomputed under a new threshold over a reused frame'; it is null for cases recorded before schema v29. `?case=<id>` narrows the answer to one case (the drill-down after `?view=summary` on the run); an id outside this run's case set is 404, never an empty list. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "summary": "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason, the per-case REUSE RECEIPT and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). `reuseReceipt` (wave W8, feedback P2-10) reports reuse LEVEL BY LEVEL — `{reuse:{candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints:{frame, comparison, verdictPolicy, case}, reuseReason?}` — because a single `reused` counter cannot tell 'nothing was recomputed' from 'the verdict was recomputed under a new threshold over a reused frame'; it is null for cases recorded before schema v29. `suggestedPolicy` (wave 2026-08-07 W7) is the report-only minimal-budget proposal for this case, or null when there is none — which never means the case is fine. `?case=<id>` narrows the answer to one case (the drill-down after `?view=summary` on the run); an id outside this run's case set is 404, never an empty list. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
         "x-easyui-validated": false
       }
     },
@@ -3839,6 +4531,11 @@
                         "readinessProfile": {
                           "type": "boolean"
                         },
+                        "receiptEnvelopeVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
                         "renderStatus": {
                           "type": "boolean"
                         },
@@ -3923,7 +4620,8 @@
                         "comparisonMatte",
                         "nestedSlotBindings",
                         "overlayScrollOwnership",
-                        "captureViewportSurface"
+                        "captureViewportSurface",
+                        "receiptEnvelopeVersion"
                       ],
                       "type": "object"
                     },

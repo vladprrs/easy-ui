@@ -1894,10 +1894,45 @@ const acceptanceCauseSchema = z.looseObject({
   }).optional(),
 });
 
+/**
+ * Предложение минимальной правки бюджета (W7, план 2026-08-07 §W7). Report-only: ни в вердикт, ни
+ * в отпечатки не входит, `requiresHumanJudgement` всегда `true`.
+ */
+const acceptanceSuggestedPolicySchema = z.looseObject({
+  kind: z.enum(["textAaBudget", "maxRawDiffPct"]),
+  textAaBudget: z.string().optional(),
+  maxRawDiffPct: z.number().optional(),
+  target: z.string(), basis: z.string(),
+  scope: z.enum(["case-id", "remediation-group"]),
+  caseIds: z.array(z.string()),
+  remediationKey: z.string().optional(),
+  evidence: z.looseObject({
+    topCause: z.string(), confidence: z.number(), rawDiffPct: z.number(),
+    currentMaxRawDiffPct: z.number().nullable(), edgeResidualInsidePct: z.number().nullable(),
+    bestOffset: z.looseObject({ dx: z.number(), dy: z.number(), residualPct: z.number() }).nullable(),
+    geometryClean: z.boolean(), affectedElementKeys: z.array(z.string()),
+    rendererFingerprint: z.string().nullable(),
+  }),
+  expiry: z.looseObject({
+    trigger: z.literal("renderer-or-source-fingerprint-change"),
+    rendererFingerprint: z.string().nullable(), referenceAssetId: z.string().nullable(),
+  }),
+  requiresHumanJudgement: z.literal(true),
+});
+
+/** Advisory-предупреждение рана (W7, AC §9.3): исключение пережило смену рендерера. */
+const acceptanceRunWarningSchema = z.looseObject({
+  code: z.literal("policy_exception_stale"),
+  caseId: z.string(), exceptions: z.array(z.string()),
+  baselineRunId: z.string(), baselineRendererFingerprint: z.string(),
+  rendererFingerprint: z.string(), detail: z.string(),
+});
+
 const acceptanceGateResultSchema = z.looseObject({
   gate: z.string(), status: z.string(), detail: z.string().optional(),
   metrics: z.record(z.string(), z.unknown()).optional(),
   causes: z.array(acceptanceCauseSchema).optional(),
+  suggestedPolicy: acceptanceSuggestedPolicySchema.optional(),
 });
 
 /** Группа ремедиаций рана (W5b): «одна правка» на все случаи с той же причиной в том же месте. */
@@ -1910,6 +1945,8 @@ const acceptanceRemediationGroupSchema = z.looseObject({
   sharedElementKey: z.string().nullable(),
   variantFamily: z.record(z.string(), z.string()).nullable(),
   cases: z.array(z.string()), caseCount: z.number(), suggestion: z.string(),
+  /** W7: одна правка на всю группу — только если она есть у каждого участника и одного вида. */
+  suggestedPolicy: acceptanceSuggestedPolicySchema.optional(),
 });
 const acceptanceSeveritySchema = z.looseObject({ rank: z.number(), class: z.string(), score: z.number() }).nullable();
 
@@ -1938,10 +1975,14 @@ const acceptanceRunViewSchema = z.looseObject({
   /** Причина терминального статуса (`refresh_scope_empty`, D2); `null` у обычного исхода. */
   statusReason: z.string().nullable(),
   remediationGroups: z.array(acceptanceRemediationGroupSchema),
+  /** W7 (AC §9.3): advisory-предупреждения рана; пустой массив — «нечего перепроверять». */
+  warnings: z.array(acceptanceRunWarningSchema),
   createdAt: isoDate, startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
   failedCases: z.array(z.looseObject({
     caseId: z.string(), caseKey: z.string(), status: z.string(), verdict: z.string().nullable(),
     severity: acceptanceSeveritySchema, causes: z.array(acceptanceCauseSchema),
+    /** W7: предложение по случаю; `null` — предложения нет (это не «случай в порядке»). */
+    suggestedPolicy: acceptanceSuggestedPolicySchema.nullable(),
     failedGates: z.array(acceptanceGateResultSchema),
   })),
 });
@@ -1967,9 +2008,13 @@ const acceptanceRunSummarySchema = z.looseObject({
     caseId: z.string(), gate: z.string(),
     raw: z.number().nullable(), aa: z.number().nullable(),
     cause: z.string(),
+    /** W7: предложение одной строкой (`textAaBudget=live-text-v1`); поля нет — предложения нет. */
+    suggest: z.string().optional(),
   })),
   /** `{<12 символов ключа группы>: "<cause> ×N: caseId, caseId…"}`. */
   remediationGroups: z.record(z.string(), z.string()),
+  /** W7: `["policy_exception_stale: <caseId> (<exceptions>)"]`. */
+  warnings: z.array(z.string()),
   evidenceUrl: z.string(),
 });
 
@@ -2082,7 +2127,7 @@ export const createAcceptanceRunContract = registerContract({
 
 export const getAcceptanceRunContract = registerContract({
   method: "GET", path: "/api/acceptance-runs/{runId}",
-  summary: "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. `?view=summary` (wave W8, `capabilities.features.acceptanceSummaryView`) answers with a COMPACT report instead: `{view:\"summary\", runId, status, statusReason, progress, gates {gate: \"pass:17 fail:8\"}, refresh {requested, impact, effective} as strings, failedCases [{caseId, gate, raw, aa, cause}], remediationGroups {key: \"<cause> ×N: caseIds\"}, evidenceUrl}` — a failed 25-case run prints under 100 lines instead of ~1800. The `view` marker in the BODY is the compatibility test: servers older than W8 ignore the query and return the full view, so a client must check both the capability flag and the marker. `view=full` is the default and is unchanged; any other value is 400 invalid_request. Drill down into a single case with GET /api/acceptance-runs/{runId}/cases?case=<id>. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. SUGGESTED POLICY (wave 2026-08-07 W7, `capabilities.features.suggestedPolicy`): a failed case whose TOP cause is a proven rasterisation residual (`text-raster-residual` with `edgeResidual.insidePct` at or above the classifier threshold) and whose geometry gate is clean carries `suggestedPolicy` — the MINIMAL budget covering the measured fact: either the named server-owned preset `textAaBudget` (preferred: the numbers stay the server's) or, when no preset covers it, a per-case `policy.perCase.<caseId>.maxRawDiffPct` rounded up to the nearest hundredth. It is REPORT-ONLY: it never enters a verdict, a gate or a fingerprint, always carries `requiresHumanJudgement: true`, and is REFUSED (null) for structural top causes (geometry-shift, descendant-outside-mask, effect-overflow, missing-late-asset), for non-budgetable ones (surface-tint, edge-radius-stroke, alpha-compositing), for an unmeasured residual and for any value softer than the loosest profile budget. A remediation group whose members all suggest the same KIND carries one group-level suggestion (`scope: \"remediation-group\"`, the widest member value). `warnings` carries the advisory expiry of accepted exceptions: `policy_exception_stale` says a case still passes under a declared budget that was first accepted by an earlier run under a DIFFERENT `renderer_fingerprint`; the baseline is taken only from runs whose `policy_profile_hash` equals today's hash of their profile, so runs recorded under a pre-wave readiness policy never raise a false stale. With EASYUI_SUGGESTED_POLICY_DISABLED=1 both `suggestedPolicy` and the warnings are absent. `?view=summary` (wave W8, `capabilities.features.acceptanceSummaryView`) answers with a COMPACT report instead: `{view:\"summary\", runId, status, statusReason, progress, gates {gate: \"pass:17 fail:8\"}, refresh {requested, impact, effective} as strings, failedCases [{caseId, gate, raw, aa, cause}], remediationGroups {key: \"<cause> ×N: caseIds\"}, evidenceUrl}` — a failed 25-case run prints under 100 lines instead of ~1800. The `view` marker in the BODY is the compatibility test: servers older than W8 ignore the query and return the full view, so a client must check both the capability flag and the marker. `view=full` is the default and is unchanged; any other value is 400 invalid_request. Drill down into a single case with GET /api/acceptance-runs/{runId}/cases?case=<id>. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   query: z.object({ view: z.enum(["full", "summary"]).optional() }),
   responseSchema: z.union([acceptanceRunViewSchema, acceptanceRunSummarySchema]),
   errors: [...acceptanceAuthErrors],
@@ -2090,7 +2135,7 @@ export const getAcceptanceRunContract = registerContract({
 
 export const getAcceptanceRunCasesContract = registerContract({
   method: "GET", path: "/api/acceptance-runs/{runId}/cases",
-  summary: "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason, the per-case REUSE RECEIPT and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). `reuseReceipt` (wave W8, feedback P2-10) reports reuse LEVEL BY LEVEL — `{reuse:{candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints:{frame, comparison, verdictPolicy, case}, reuseReason?}` — because a single `reused` counter cannot tell 'nothing was recomputed' from 'the verdict was recomputed under a new threshold over a reused frame'; it is null for cases recorded before schema v29. `?case=<id>` narrows the answer to one case (the drill-down after `?view=summary` on the run); an id outside this run's case set is 404, never an empty list. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason, the per-case REUSE RECEIPT and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). `reuseReceipt` (wave W8, feedback P2-10) reports reuse LEVEL BY LEVEL — `{reuse:{candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints:{frame, comparison, verdictPolicy, case}, reuseReason?}` — because a single `reused` counter cannot tell 'nothing was recomputed' from 'the verdict was recomputed under a new threshold over a reused frame'; it is null for cases recorded before schema v29. `suggestedPolicy` (wave 2026-08-07 W7) is the report-only minimal-budget proposal for this case, or null when there is none — which never means the case is fine. `?case=<id>` narrows the answer to one case (the drill-down after `?view=summary` on the run); an id outside this run's case set is 404, never an empty list. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   query: z.object({ case: z.string().optional() }),
   responseSchema: z.looseObject({
     runId: z.string(),
@@ -2112,6 +2157,7 @@ export const getAcceptanceRunCasesContract = registerContract({
       }).nullable(),
       referenceAssetId: z.string().nullable(), startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
       gates: z.array(acceptanceGateResultSchema), causes: z.array(acceptanceCauseSchema),
+      suggestedPolicy: acceptanceSuggestedPolicySchema.nullable(),
       artifacts: z.array(z.looseObject({ name: z.string(), sha256: z.string(), bytes: z.number() })),
     })),
   }),
@@ -3247,6 +3293,13 @@ export const capabilitiesResponseSchema = z.object({
     overlayScrollOwnership: z.boolean(),
     /** `capture.surface:"viewport"` в case-set (план 2026-08-06 §W5). */
     captureViewportSurface: z.boolean(),
+    /**
+     * Версия схемы агентской квитанции драйвера (`envelope`, план 2026-08-07 §1.4, W6b) —
+     * **число**, а не булев флаг: конверт существует всегда, вопрос только в том, какую его
+     * форму понимает эта пара «сервер × харнес». Растёт лишь при несовместимом изменении самого
+     * конверта; новые ключи внутри `summary` версию не двигают.
+     */
+    receiptEnvelopeVersion: z.number().int().positive(),
   }),
   /**
    * Именованные пресеты live-text AA-бюджета (план 2026-08-06 §W4): значения владеет сервер,

@@ -13,6 +13,7 @@ import type { CaptureProbe, JobOutcome, JobStatus } from "../../screenshot/servi
 import type { RunInkBbox } from "../inkBbox";
 import type { RunNormalizedDiff } from "../../visual/diff-runner";
 import type { VisualCause } from "../../visual/causes";
+import type { SuggestedPolicy } from "../suggest";
 import type { AcceptancePolicy, GateName } from "../policies";
 import type { CaseSurface } from "../ids";
 import type { AcceptanceCase, ResolvedSlotBinding } from "../cases";
@@ -41,6 +42,12 @@ export interface GateResult {
    * классификация — диагностика поверх него, которая **никогда** не влияет на pass/fail.
    */
   causes?: VisualCause[];
+  /**
+   * Предложение минимальной правки бюджета по типизированной причине (W7, план 2026-08-07 §W7).
+   * Пишет его **раннер** рядом с причинами и по тем же правилам: слой report-only, ни в один
+   * отпечаток и ни в одну свёртку он не входит, `null`-состояние выражается отсутствием поля.
+   */
+  suggestedPolicy?: SuggestedPolicy;
 }
 
 /** Кандидат как субъект приёмки: durable-идентичность + уже собранный candidate-кэш. */

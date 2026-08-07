@@ -53,6 +53,10 @@ import {
 } from "../acceptance/policies";
 import { isTerminalRunStatus } from "../acceptance/repo";
 import { readArtifact, readRunManifest, sanitizeEvidenceName, sha256Sums, type RunManifest } from "../acceptance/evidence";
+import {
+  groupSuggestion, policyExceptionWarnings, suggestedPolicyEnabled,
+  type PolicyExceptionWarning, type SuggestGate, type SuggestedPolicy,
+} from "../acceptance/suggest";
 
 /** Опции §19.1 фидбэка, отклонённые триажем (A2: `manifestAssetId` не поддерживается никогда). */
 const UNSUPPORTED_TOP_LEVEL = ["concurrency", "manifestAssetId"] as const;
@@ -142,7 +146,10 @@ function candidateView(row: CandidateRow, decision?: CandidateDecisionRow, runs:
   };
 }
 
-interface GateEntry { gate: string; status: string; detail?: string; causes?: unknown[] }
+interface GateEntry {
+  gate: string; status: string; detail?: string; metrics?: Record<string, unknown>;
+  causes?: unknown[]; suggestedPolicy?: Record<string, unknown>;
+}
 
 const gatesOf = (row: AcceptanceCaseRow): GateEntry[] => {
   const parsed = parseJson(row.gates_json);
@@ -156,12 +163,77 @@ const gatesOf = (row: AcceptanceCaseRow): GateEntry[] => {
       ...(isObject(gate.metrics) ? { metrics: gate.metrics } : {}),
       // W5b: классифицированные причины расхождения — диагностика поверх статуса гейта.
       ...(Array.isArray(gate.causes) ? { causes: gate.causes } : {}),
+      // W7: предложение минимальной правки бюджета — тот же слой, report-only.
+      ...(isObject(gate.suggestedPolicy) && suggestedPolicyEnabled() ? { suggestedPolicy: gate.suggestedPolicy } : {}),
     })) as GateEntry[];
 };
 
 /** Причины случая (W5b): их несёт визуальный гейт; на уровень случая они поднимаются для читателя. */
 const causesOf = (row: AcceptanceCaseRow): unknown[] =>
   gatesOf(row).find((gate) => gate.gate === "visual")?.causes ?? [];
+
+/**
+ * Предложение случая (W7): как и причины, его несёт визуальный гейт, а читателю оно нужно на
+ * уровне случая. `null` — предложения нет (структурная причина, недоказанный остаток, факт выше
+ * потолка); это **не** «случай в порядке».
+ */
+const suggestedPolicyOf = (row: AcceptanceCaseRow): Record<string, unknown> | null =>
+  // Kill-switch гасит и **эхо** уже сохранённых предложений: иначе выключенная фича продолжала бы
+  // отвечать полями из строк, записанных до выключения.
+  (suggestedPolicyEnabled() ? gatesOf(row).find((gate) => gate.gate === "visual")?.suggestedPolicy : undefined) ?? null;
+
+/** Гейты случая в форме, которую читает `suggest.ts` (метрики + причины, без артефактов). */
+const suggestGatesOf = (row: { gates_json: string | null }): SuggestGate[] => {
+  const parsed = parseJson(row.gates_json);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(isObject).map((gate) => ({
+    gate: String(gate.gate ?? ""), status: String(gate.status ?? ""),
+    ...(isObject(gate.metrics) ? { metrics: gate.metrics } : {}),
+  }));
+};
+
+/**
+ * Предупреждения рана (W7, AC §9.3): принятое исключение (`textAaBudget`/per-case бюджет)
+ * пережило смену рендерера и подлежит перепроверке. Advisory: ни на вердикт, ни на promote не
+ * влияет. Считается на чтении, а не на терминализации: сравнивать нужно с **историей**, которая
+ * после терминализации продолжает пополняться.
+ */
+function runWarnings(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orchestrator: AcceptanceOrchestrator): PolicyExceptionWarning[] {
+  if (!suggestedPolicyEnabled() || !isTerminalRunStatus(run.status)) return [];
+  const history = orchestrator.repo.passedCaseHistory(run).map((row) => ({
+    runId: row.run_id, createdAt: row.created_at, rendererFingerprint: row.renderer_fingerprint,
+    policyProfileId: row.policy_profile_id, policyProfileHash: row.policy_profile_hash,
+    caseId: row.case_id, gates: suggestGatesOf(row),
+  }));
+  return policyExceptionWarnings({
+    run: {
+      runId: run.run_id, rendererFingerprint: run.renderer_fingerprint,
+      policyProfileId: run.policy_profile_id, policyProfileHash: run.policy_profile_hash,
+    },
+    cases: cases.map((row) => ({ caseId: row.case_id, verdict: row.verdict, gates: suggestGatesOf(row) })),
+    history,
+  });
+}
+
+/**
+ * Предложение на группу ремедиаций (W7): у группы, все участники которой предлагают правку одного
+ * вида, — одна правка на всех. Считается на чтении из уже сохранённых предложений случаев: группы
+ * персистятся терминализацией, предложения живут в гейтах, и склейка не добавляет ни того, ни
+ * другого в хранилище.
+ */
+function groupsWithSuggestions(groups: unknown[], cases: AcceptanceCaseRow[]): Record<string, unknown>[] {
+  const byCaseId = new Map(cases.map((row) => [row.case_id, suggestedPolicyOf(row)] as const));
+  return groups.filter(isObject).map((group) => {
+    const members = (Array.isArray(group.cases) ? group.cases.map(String) : [])
+      .map((caseId) => byCaseId.get(caseId) ?? null)
+      .filter((item): item is Record<string, unknown> => item !== null) as unknown as SuggestedPolicy[];
+    const key = typeof group.key === "string" ? group.key : "";
+    const suggestion = members.length === (Array.isArray(group.cases) ? group.cases.length : 0)
+      ? groupSuggestion(key, members)
+      : null;
+    return { ...group, ...(suggestion === null ? {} : { suggestedPolicy: suggestion }) };
+  });
+}
 
 const severityOf = (row: AcceptanceCaseRow): { rank: number; class: string; score: number } | null => {
   const parsed = parseJson(row.severity_json);
@@ -184,7 +256,7 @@ function bySeverity(left: AcceptanceCaseRow, right: AcceptanceCaseRow): number {
   return left.case_id < right.case_id ? -1 : left.case_id > right.case_id ? 1 : 0;
 }
 
-function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<string, unknown> {
+function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orchestrator: AcceptanceOrchestrator): Record<string, unknown> {
   const stored = parseJson(run.progress_json);
   // `remediationGroups` хранятся внутри `progress_json` (там их пишет терминализация), но в ответе
   // это самостоятельный раздел отчёта: смешивать группы причин со счётчиками прогресса нельзя.
@@ -199,6 +271,8 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<stri
     verdict: row.verdict,
     severity: severityOf(row),
     causes: causesOf(row),
+    // W7: предложение по случаю — рядом с причинами, из которых оно и выведено.
+    suggestedPolicy: suggestedPolicyOf(row),
     failedGates: gatesOf(row).filter((gate) => gate.status === "fail" || gate.status === "indeterminate"),
   }));
   return {
@@ -224,7 +298,9 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<stri
     refresh: parseJson(run.refresh_json),
     // Сортировка задана группировкой: сначала самые массовые группы (одна правка чинит больше всего
     // случаев). Пустой массив у ещё не терминализованного рана — не «причин нет», а «отчёт не собран».
-    remediationGroups: Array.isArray(remediationGroups) ? remediationGroups : [],
+    remediationGroups: Array.isArray(remediationGroups) ? groupsWithSuggestions(remediationGroups, cases) : [],
+    // W7 (AC §9.3): advisory-предупреждения рана. Пустой массив — «нечего перепроверять».
+    warnings: runWarnings(run, cases, orchestrator),
     evidenceManifestHash: run.evidence_manifest_hash,
     createdAt: run.created_at,
     startedAt: run.started_at,
@@ -268,11 +344,20 @@ function summaryFailedCase(row: AcceptanceCaseRow): Record<string, unknown> {
     : primary?.detail !== undefined
       ? shorten(primary.detail)
       : shorten(row.status === "error" ? "case errored before a verdict" : `verdict ${row.verdict ?? row.status}`);
+  // W7: предложение в сводке — одной строкой («что предложено», не «почему»): полная форма с
+  // evidence и expiry живёт в `view=full` и в `?case=<id>`.
+  const suggestion = suggestedPolicyOf(row);
+  const suggest = suggestion === null
+    ? null
+    : suggestion.kind === "textAaBudget"
+      ? `textAaBudget=${String(suggestion.textAaBudget)}`
+      : `maxRawDiffPct=${String(suggestion.maxRawDiffPct)}`;
   return {
     caseId: row.case_id,
     gate: primary?.gate ?? (row.status === "error" ? "error" : "-"),
     raw, aa,
     cause: text,
+    ...(suggest === null ? {} : { suggest }),
   };
 }
 
@@ -317,7 +402,7 @@ function summaryRefreshPlan(plan: unknown): string {
  * 3. **Метрики случая не повторяются**: `raw`/`aa` — два числа визуального гейта, всё остальное
  *    (regions, bestOffset, thresholds) берётся точечно через `/cases?case=<id>`.
  */
-function runSummaryView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<string, unknown> {
+function runSummaryView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orchestrator: AcceptanceOrchestrator): Record<string, unknown> {
   const stored = parseJson(run.progress_json);
   // `eta` в сводке не нужен (ран терминален чаще, чем нет), `remediationGroups` едут отдельным
   // разделом — как и в полном виде.
@@ -352,6 +437,8 @@ function runSummaryView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Reco
       : null,
     failedCases: cases.filter(isFailedCase).sort(bySeverity).map(summaryFailedCase),
     remediationGroups: groups,
+    // W7: предупреждения — по строке на случай, как и всё остальное в сводке.
+    warnings: runWarnings(run, cases, orchestrator).map((item) => `${item.code}: ${item.caseId} (${item.exceptions.join(", ")})`),
     evidenceUrl: `/api/acceptance-runs/${run.run_id}/evidence`,
   };
 }
@@ -622,6 +709,8 @@ function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<
     finishedAt: row.finished_at,
     gates: gatesOf(row),
     causes: causesOf(row),
+    // W7: предложение минимальной правки бюджета; `null` — предложения нет (см. `suggest.ts`).
+    suggestedPolicy: suggestedPolicyOf(row),
     captureQuality: parseJson(row.capture_quality_json),
     // Имена и адреса — да, байты — нет: содержимое CAS уезжает только в `runId`-scoped zip.
     artifacts: (entry?.artifacts ?? []).map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
@@ -703,7 +792,7 @@ export async function routeAcceptance(
     }
     const run = requireOwnedRun(db, runId, principal, orchestrator);
     const cases = orchestrator.repo.cases(runId);
-    return json(view === "summary" ? runSummaryView(run, cases) : runView(run, cases), 200, noStore);
+    return json(view === "summary" ? runSummaryView(run, cases, orchestrator) : runView(run, cases, orchestrator), 200, noStore);
   }
   if (segments.length === 3 && segments[2] === "cases") {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
@@ -727,7 +816,7 @@ export async function routeAcceptance(
     if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     requireOwnedRun(db, runId, principal, orchestrator);
     const cancelled = orchestrator.cancelQueuedRun(runId);
-    return json(runView(cancelled, orchestrator.repo.cases(runId)), 200, noStore);
+    return json(runView(cancelled, orchestrator.repo.cases(runId), orchestrator), 200, noStore);
   }
   throw new ApiError(404, "not_found", "API route not found");
 }

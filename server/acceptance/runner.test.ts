@@ -21,6 +21,8 @@ import { ACCEPTANCE_POLICIES, policyProfileHash } from "./policies";
 import { AcceptanceRepo, type CandidateRow } from "./repo";
 import { causeInputOf, caseVerdictOf, foldRunVerdict, progressOf, severityOf, type CaseExecution } from "./runner";
 import { classifyVisualCauses } from "../visual/causes";
+import { suggestPolicy } from "./suggest";
+import { rendererFingerprint } from "../capture/renderer";
 
 // W1a (план 2026-08-03 §3 D10/D11, §5 W1a): исполнение случаев, reuse, авто-retry и свёртка.
 
@@ -707,6 +709,27 @@ test("смена requireVisual инвалидирует reuse: вердикт ad
   expect(harness.service.calls.length).toBe(capturedBefore);
   const progress = JSON.parse(hard.run.progress_json) as { reused: number; frameReused: number; verdictRecomputed: number };
   expect(progress).toMatchObject({ reused: 0, frameReused: 1, verdictRecomputed: 1 });
+  harness.db.close();
+});
+
+test("W7: у пересчитанной reused-строки предложение согласовано с пересчитанными причинами", async () => {
+  const harness = await setup();
+  const broken = await putAsset(harness, framePng({ label: "a" }, 6));
+  await runWithCaseSet(harness, caseSetOf(broken));
+  // Тот же кадр, то же сравнение, другая вердиктная политика ⇒ путь `recompute:policy`: причины
+  // снимаются со строки кэша и считаются заново — вместе с ними обязано пересчитаться и предложение.
+  const hard = await runWithCaseSet(harness, caseSetOf(broken, { requireVisual: true }));
+  expect(harness.repo.cases(hard.run.run_id)[0]!.reuse_reason).toBe("recompute:policy");
+
+  const stored = JSON.parse(harness.repo.cases(hard.run.run_id)[0]!.gates_json!) as GateResult[];
+  const visual = stored.find((gate) => gate.gate === "visual")!;
+  // Причина этого случая структурная (эталон сдвинут на 6px) ⇒ предложения быть не может (AC §9.2).
+  expect(visual.causes?.[0]?.code).toBe("geometry-shift");
+  // Инвариант: то, что лежит в строке, равно тому, что даёт продюсер по её же метрикам и причинам.
+  expect(visual.suggestedPolicy ?? null).toEqual(suggestPolicy(stored, {
+    caseId: "alpha",
+    rendererFingerprint: rendererFingerprint(readinessPolicyHashOf(ACCEPTANCE_POLICIES["default-v1"].readiness)),
+  }));
   harness.db.close();
 });
 

@@ -498,7 +498,7 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
 
 **Исполнение.** Ран живёт вне screenshot-помпы: собственный цикл ставит capture-джобы по одной, оставляя интерактиву слоты очереди, ретраит только инфраструктурные исходы джобы и терминализуется watchdog'ом при превышении дедлайна профиля. Пережившие рестарт `queued|running`-раны переводятся в `error` стартовой уборкой — потеря дешёвая, потому что повтор переиспользует результаты случаев по `case_fingerprint` (в `progress.reused`). Гейты: `contract`, `defaults`, `render`, `determinism` (повтор на выборке, побайтово), `audit`, [`geometry` 2.0](#geometry-contract-20--probe-paint-волна-w3-план-2026-08-03) и [`readiness`](#deterministic-capture-readiness-волна-w4-план-2026-08-03) — обязательные; [`visual`](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5) — advisory в `default-v1` и `required` в `pixel-strict-v1` либо при `requireVisual` case-set-манифеста; `regression`/`interactions` — `not-implemented` и в свёртке не участвуют. Свёртка: `fail` — любой случай `fail` **или** `indeterminate` по обязательному гейту; `error` — инфраструктурный отказ и нет ни одного `fail`; `cancelled` — по cancel; иначе `pass`. `reused`/`skipped`/алиасы не маскируют `fail`.
 
-**`GET /acceptance-runs/:runId`** отдаёт `status`, `statusReason` (названная причина терминального статуса, сегодня — `refresh_scope_empty`; иначе `null`), `policy {id,hash}`, `progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running, eta {secondsRemaining, basis}}` (смысл счётчиков reuse — [ниже](#трёхслойный-отпечаток-случая-каскад-reuse-и-алгебра-refresh-волна-w1-план-2026-08-04)), `refresh {requested, impact, effective}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash` и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое, — плюс [квитанцию reuse](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) `reuseReceipt`. `?case=<caseId>` сужает ответ до одного случая; id вне набора рана — `404 not_found`, а не пустой список.
+**`GET /acceptance-runs/:runId`** отдаёт `status`, `statusReason` (названная причина терминального статуса, сегодня — `refresh_scope_empty`; иначе `null`), `policy {id,hash}`, `progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running, eta {secondsRemaining, basis}}` (смысл счётчиков reuse — [ниже](#трёхслойный-отпечаток-случая-каскад-reuse-и-алгебра-refresh-волна-w1-план-2026-08-04)), `refresh {requested, impact, effective}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash`, `warnings` (advisory, волна W7 — см. [suggested policy](#suggested-policy-и-протухание-исключений-волна-w7-план-2026-08-07)) и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое, — плюс [квитанцию reuse](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) `reuseReceipt`. `?case=<caseId>` сужает ответ до одного случая; id вне набора рана — `404 not_found`, а не пустой список.
 
 ##### Компактная сводка рана и квитанция reuse (волна W8, план 2026-08-04)
 
@@ -511,8 +511,9 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
   "progress": {"total":25,"completed":25,"reused":0,"frameReused":25,"verdictRecomputed":0,"rediffed":25,"failed":8,"running":0},
   "gates": {"contract":"pass:25","visual":"pass:17 fail:8"},
   "refresh": {"requested":"verdict:failed","impact":"none","effective":"verdict:failed"},
-  "failedCases": [{"caseId":"…","gate":"visual","raw":2.69,"aa":1.27,"cause":"surface-tint: …"}],
+  "failedCases": [{"caseId":"…","gate":"visual","raw":2.69,"aa":1.27,"cause":"surface-tint: …","suggest":"textAaBudget=live-text-v1"}],
   "remediationGroups": {"<12 символов ключа>":"surface-tint ×8: caseId, caseId, …"},
+  "warnings": ["policy_exception_stale: alpha (textAaBudget)"],
   "evidenceUrl": "/api/acceptance-runs/acc_…/evidence"
 }
 ```
@@ -1581,6 +1582,11 @@ Layout owner вычисляется только из DOM: для непосре
 
 **CLI-контракт `driver.mjs` (волна 7.1/7.2).** `snap` завершается с кодом `0`, если PNG создан на всех экранах и `productErrors` пуст; `2`, если PNG создан, но есть product-ошибки; `1`, если PNG не создан вовсе. Инфраструктурный сбой (job `error`/`timeout`, 5xx) повторяется автоматически — ровно 2 попытки на экран; product-ошибки не повторяются никогда. `status` и `snap` принимают `--all-screens`, любой verb — `--json` (машинный документ в stdout вместо человеческих строк). `snap` дополнительно принимает `--viewport WxH`, `--dsf 1|2|3`, `--theme light|dark` (как `baseline`); вьюпорт по умолчанию — canvas-aware `resolveViewport` (паритет с `geometry`/`baseline`), бюджет capture-поверхности (`surface × dsf² ≤ 16 Mpx` — лимит ингеста ассетов) проверяется до постановки job'а. `component` принимает `--figma <file.json>` — provenance уходит одним вызовом вместе с source (create и update); флаг **опционален**: provenance наследуется между ревизиями, и update без флага её не обнуляет (см. [Provenance компонентов](#provenance-компонентов-без-новых-версий)). Смена и очистка ссылки — верб `provenance <componentId> <figma.json|null> [--rev N]`. Сессионная cookie кэшируется на диске между процессами (`scripts/easyui-auth.mjs`: `$XDG_STATE_HOME/easyui`, TTL 24 ч, атомарная запись; 401 с `code:"unauthorized"` на кэшированной cookie → один shared re-login с повтором запроса; выключатель `EASYUI_SESSION_CACHE=0`, путь — `EASYUI_SESSION_FILE`), GET-запросы и постановка screenshot-job'а ретраятся на 5xx с backoff 500/1500 мс.
 
+
+**Агентская квитанция драйвера `envelope` (волна W6b, план 2026-08-07 §1.4).** Любой `--json`-вывод харнеса несёт один дополнительный вложенный ключ `envelope: {schemaVersion, command, ok, summary, items, artifacts, warnings, nextActions}` — стабильную квитанцию верба, форма которой не зависит от глагола (плоский конверт коллидировал бы с ключами `warnings`/`artifacts` самих payload'ов). `ok === (exit code === 0)`; отказ запроса тоже приезжает конвертом (`ok: false`, `command` — верб из argv, `nextActions` — `nextSteps` ответа). `summary` — контракт per-verb: `accept`/`accept-status` (`runId, verdict, casesTotal, casesFailed, casesReused, topCauses[], revision`), `snap` (`captured, reused, cleanScreens, failedScreens, suppressedNoise`), `promote` (`version, rev, catalogRevision, candidateId, runsLinked`), `status` (`screensTotal, renderable, blocked[]`), `geometry` (`verdict, divergingSurfaces, gaps`), `audit` (`exitCode, deprecatedInUse, unused`), `migration-commit` (`commitId, phase, phasesDone[], regressionMode`); поля добавляются аддитивно, отсутствующий факт — честный `null`, а не догадка. Глобальный `--summary-json` печатает **ровно** этот объект и ничего больше (симметрия к `--json`); в человекочитаемом режиме конверта нет вовсе. Версия схемы — `capabilities.features.receiptEnvelopeVersion` (сейчас `1`); она растёт только при несовместимом изменении самого конверта, новые ключи `summary` её не двигают. Файлы квитанций подчиняются правилу **`.json` — всегда JSON, текст — `.txt`**: формат выводится из расширения и проверяется до работы верба. Полное описание — `.claude/skills/author/SKILL.md` («Квитанция агента»).
+
+**CLI саги миграционного коммита.** `driver.mjs migration-commit start <componentId> [--gallery <prototypeId> [--screen <fragment.json>]] [--dry-run] [--receipt <file.json|file.txt>]` создаёт сагу (ключ идемпотентности по умолчанию детерминирован — `driver-<componentId>-r<headRev>-<sourceHash[0:12]>`, так что повтор после обрыва возвращает ту же сагу) и поллит её до `complete` или до первого `needs-*`; `--status <commitId>`, `--advance <commitId>`, `--cancel <commitId> [--reason <text>]` — над существующей. `needs-*` и `cancelled` — exit `2` (продуктовый исход, а не сбой транспорта), `complete` — `0`. Сервер без набора ручек (`features.migrationCommit: false`) даёт понятный отказ до всякой мутации.
+
 Для component screenshot `exampleName` выбирается строго из `definition.examples`: неизвестное имя или отсутствие `examples` → `422 unknown_example`, одновременные `props` и `exampleName` → `400 invalid_request`. После выбора набор проходит обычную валидацию props и участвует в `propsHash`.
 
 **Границы (bounds).** `width ∈ [64,2000]`, `height ∈ [64,4000]`, `deviceScaleFactor ∈ {1,2,3}`, `width×height×dsf² ≤ 20 Mpx` — иначе `422 invalid_viewport`. PNG подчиняется лимитам ассетов (5 MiB / 16 Mpx). Пул concurrency 1, очередь ≤5 (`429 queue_full`), hard deadline job 60 s, TTL результата 10 минут (PNG остаётся в ассетах). Jobs хранятся в памяти.
@@ -2069,6 +2075,70 @@ stdMaxDelta, alphaDominantPct, semiTransparentPct}`) — статистика **
 сломанной иконкой дают одну группу, а не 20 (§19.6 фидбэка). `suggestion` — шаблон следующей правки
 по коду причины.
 
+### Suggested policy и протухание исключений (волна W7, план 2026-08-07)
+
+`capabilities.features.suggestedPolicy`; kill-switch `EASYUI_SUGGESTED_POLICY_DISABLED=1` гасит обе
+производные (предложение и предупреждения), не трогая ни один вердикт.
+
+**Предложение — минимальная правка бюджета, а не приговор.** Провальный случай, чья **топ-причина** —
+доказанный растровый остаток (`text-raster-residual` с `edgeResidual.insidePct` ≥ порога
+классификатора) и чей гейт `geometry` чист, получает `suggestedPolicy` рядом с причинами:
+`gates[].suggestedPolicy` визуального гейта, `cases[].suggestedPolicy` (`/cases`),
+`failedCases[].suggestedPolicy` (`GET /api/acceptance-runs/:runId`), `failedCases[].suggest`
+одной строкой в `view=summary`.
+
+```json
+{"kind":"textAaBudget","textAaBudget":"live-text-v1","target":"cases[alpha].textAaBudget",
+ "basis":"…","scope":"case-id","caseIds":["alpha"],
+ "evidence":{"topCause":"text-raster-residual","confidence":0.88,"rawDiffPct":0.6,
+   "currentMaxRawDiffPct":0.5,"edgeResidualInsidePct":99,"bestOffset":{"dx":0,"dy":0,"residualPct":0},
+   "geometryClean":true,"affectedElementKeys":[],"rendererFingerprint":"…"},
+ "expiry":{"trigger":"renderer-or-source-fingerprint-change","rendererFingerprint":"…","referenceAssetId":"asset_…"},
+ "requiresHumanJudgement":true}
+```
+
+Правки ровно две, обе уже существуют в контракте манифеста: именованный **серверный пресет**
+`textAaBudget` (предпочитается всегда, когда накрывает факт — числа остаются у сервера) и
+per-case `policy.perCase.<caseId>.maxRawDiffPct`, округлённый **вверх до сотых** — минимальное
+значение, накрывающее измеренный факт. Отказ (`null`) обязателен и не обсуждается:
+
+- топ-причина структурная — `geometry-shift`, `descendant-outside-mask`, `effect-overflow`,
+  `missing-late-asset` (бюджет не чинит дефект);
+- гейт `geometry` случая упал (в том числе `surface-mismatch` волны W1a);
+- топ-причина небюджетируема — `surface-tint`, `edge-radius-stroke`, `alpha-compositing`,
+  `unclassified` (другой цвет, рамка и альфа — это разница, а не шум);
+- `edgeResidual` не измерен («не измерено» ≠ «в допуске» — тот же инвариант, что у гейта);
+- предложенное значение мягче самого мягкого профиля реестра (2,0 %) — это уже просьба выключить
+  визуальный гейт, а не исключение для случая.
+
+**Группа ремедиаций** получает одно предложение на всех (`scope: "remediation-group"` +
+`remediationKey`) — только если оно есть у каждого участника и все одного вида; значение берётся
+самое широкое из участников. Разнородная группа предложения не получает.
+
+Слой **report-only**: `suggestedPolicy` не входит ни в один отпечаток, ни в свёртку вердикта, ни в
+promote-предикат, никогда не применяется автоматически и всегда несёт `requiresHumanJudgement: true`.
+У reused-строк предложение **пересчитывается вместе с причинами** (`recompute`/`re-diff`), а не
+переносится из кэша.
+
+**Advisory-expiry принятых исключений.** Durable-хранилища принятых исключений не существует
+(per-case бюджеты живут в контентно-адресованных манифестах), поэтому AC §9.3 закрыт в
+advisory-форме: терминальный ран несёт `warnings[]`, и код `policy_exception_stale` означает, что
+случай **проходит** под объявленным бюджетом (`textAaBudget`/`maxRawDiffPct`/`sizeDeltaPx`/
+`overflowBudgetPx`), впервые принятым в ране с **другим** `renderer_fingerprint`.
+
+```json
+{"code":"policy_exception_stale","caseId":"alpha","exceptions":["textAaBudget"],
+ "baselineRunId":"acc_…","baselineRendererFingerprint":"…","rendererFingerprint":"…","detail":"…"}
+```
+
+Baseline ищется среди ранов **того же компонента и того же case-set** (правка манифеста = новый
+набор = новый baseline) и берётся **только из пост-W2 ранов**: признак — `policy_profile_hash` рана
+равен сегодняшнему хэшу его профиля. W2 включила барьер ресурсов внутрь readiness-политики
+профилей, а хэш считается по профилю целиком, поэтому доволновой ран этому равенству не
+удовлетворяет никогда — иначе смена `rendererFingerprint` самой волной объявила бы устаревшими все
+бюджеты сразу. Раны без `renderer_fingerprint` (до схемы v30) в baseline не участвуют:
+«неизвестно» — не «другой». Предупреждение ни на что не влияет: ни на вердикт, ни на promote.
+
 ### Клиентский кэш харнеса (волна W7, план 2026-08-03 §5)
 
 Кэш живёт **только на клиенте** (`.claude/skills/author/cache.mjs`, флаги `--cache-dir` /
@@ -2400,6 +2470,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `acceptanceSummaryView` | `GET /acceptance-runs/:runId?view=summary` — [компактная сводка рана](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) | тот же флаг; сборка до W8 **молча** игнорирует query и отдаёт полный ран, поэтому клиент дополнительно проверяет маркер `view` в теле |
 | `caseSetSlotBindings` | case-set-манифест принимает [`cases[].slotBindings`](#slotbindings-дети-слотов-случая-план-2026-08-05-a) — детей именованных и default-слота с точным пином версии | тот же флаг; сборка до этой волны отвергает такой манифест `422 validation_failed` (strictObject), поэтому флаг читается **до** публикации набора |
 | `prototypeCandidateOverlay` | прототипная съёмка принимает [`candidateOverrides`](#overlay-кандидата-в-прототипном-кадре-план-2026-08-05-b) — подмену пина опубликованного компонента бандлом кандидата | гаснет **двумя** ключами: `EASYUI_ACCEPTANCE_MATRIX=0` (кандидатов нет) и `EASYUI_VALIDATE_DISABLED=1` (candidate-bundle не собирается); выключенная фича отвечает на `candidateOverrides` `404 not_found` |
+| `receiptEnvelopeVersion` | **число**, а не булев флаг: версия схемы агентской квитанции драйвера (`envelope`) — `1` с волны W6b | kill-switch'а нет: конверт печатается всегда; отсутствие ключа = образ старше W6b (конверт есть с W6a, но контрактов `summary` в нём ещё нет) |
 
 `EASYUI_SURFACES` — единственный switch с **обратной** полярностью: пустое значение означает «запись выключена» (`surfacesWrite: false`), а не «разрешено». Он читается на запросе, поэтому discovery и поведение ручки совпадают по определению. Остальные kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_ACCEPTANCE_MATRIX`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 
@@ -3130,7 +3201,7 @@ EASYUI_RENDERER_FLAGS=1 REUSE_GATE=shadow SERVE_DIST=dist DATA_DIR=.measure-data
   ~/.bun/bin/bun server/main.ts &   # дождаться "ready" в логе
 node scripts/renderer-corpus.mjs --verify --report --bootstrap --truncated \
   --server-url http://127.0.0.1:4199 --out /tmp/k2-http.json
-# шаг 2 (CLI-нога): EASYUI_API=http://127.0.0.1:4199/api driver.mjs snap --receipt (и сверка sha)
+# шаг 2 (CLI-нога, затем сверка sha): EASYUI_API=http://127.0.0.1:4199/api driver.mjs snap k2-corpus ./shots --receipt ./receipts/k2.json
 ``` Результат такого прогона (dev-хост,
 `source: "fallback"`, усечённая матрица 9 pixel-фикстур × 3 варианта = **27 капчуров**):
 `mismatches: 0` — то есть CLI-нога и HTTP-нога сходятся байт-в-байт, а `receipt.output.pngSha256`

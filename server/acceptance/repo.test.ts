@@ -264,6 +264,40 @@ test("case rows are patched field-by-field and untouched fields survive", () => 
   db.close();
 });
 
+test("W7: история прошедших случаев ограничена компонентом, набором и известным рендерером", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const seed = (id: string, extra: { rendererFingerprint?: string | null; caseSetId?: string | null } = {}) => {
+    const { candidate } = repo.createCandidate(candidateInput({ sourceHash: `src-${id}` }));
+    const { run } = repo.createRun({
+      candidateId: candidate.candidate_id,
+      componentId: candidate.component_id,
+      policyProfileId: policy.id,
+      policyProfileHash: profileHash,
+      createdBy: "user_a",
+      caseSetId: extra.caseSetId === undefined ? null : extra.caseSetId,
+      rendererFingerprint: extra.rendererFingerprint === undefined ? "rf-old" : extra.rendererFingerprint,
+      cases: [{ caseId: "alpha", caseKey: "default", propsHash: "props-1", casePolicyHash: "case-policy-v0", caseFingerprint: `fp-${id}` }],
+    });
+    return run;
+  };
+  const older = seed("older");
+  repo.updateCase(older.run_id, "alpha", { status: "done", verdict: "pass", gates: [{ gate: "visual", status: "pass" }] });
+  const unknownRenderer = seed("norf", { rendererFingerprint: null });
+  repo.updateCase(unknownRenderer.run_id, "alpha", { status: "done", verdict: "pass", gates: [] });
+  const otherSet = seed("otherset", { caseSetId: `cset_${"a".repeat(64)}` });
+  repo.updateCase(otherSet.run_id, "alpha", { status: "done", verdict: "pass", gates: [] });
+  const failed = seed("failed");
+  repo.updateCase(failed.run_id, "alpha", { status: "done", verdict: "fail", gates: [] });
+  const current = seed("current");
+
+  const history = repo.passedCaseHistory(current);
+  // Остаётся ровно прошедший случай того же набора со **известным** рендерером; сам ран себя не видит.
+  expect(history.map((row) => row.run_id)).toEqual([older.run_id]);
+  expect(history[0]).toMatchObject({ case_id: "alpha", renderer_fingerprint: "rf-old", policy_profile_id: policy.id });
+  db.close();
+});
+
 test("case results upsert, touch last_used_at, stay component-scoped and expose a union refcount", () => {
   const db = dbForRepo();
   const repo = new AcceptanceRepo(db);
