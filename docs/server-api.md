@@ -2103,7 +2103,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "figmaMultiSource": true, "geometryContractV2": true, "overlayScrollOwnership": true,
     "geometryCaseTolerances": false, "comparisonMatte": false, "nestedSlotBindings": false, "captureViewportSurface": false },
   "textAaPresets": { "live-text-v1": { "maxRawDiffPct": 0.75, "minEdgeResidualPct": 95 } },
-  "acceptance": { "policyProfiles": ["default-v1", "pixel-strict-v1"], "defaultPolicyProfile": "default-v1", "promotionPolicyProfiles": ["default-v1", "pixel-strict-v1"], "geometryContractVersion": 2 },
+  "acceptance": { "policyProfiles": ["default-v1", "pixel-strict-v1"], "defaultPolicyProfile": "default-v1", "promotionPolicyProfiles": ["default-v1", "pixel-strict-v1"], "geometryContractVersion": 2,
+    "comparisonSurfaces": ["root", "layoutUnion", "paint", "referenceExport"] },
   "renderer": { "rendererSchema": 2, "rendererVersion": "r2", "fingerprint": "<sha256>", "policyHash": "<sha256 дефолтной readiness-политики>",
     "os": "linux", "arch": "x64", "nodeVersion": "24.x.y", "playwrightVersion": "1.61.1",
     "browserName": "chromium", "browserVersion": "149.0.7827.55", "browserRevision": "1228",
@@ -2115,7 +2116,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 }
 ```
 
-`acceptance` разводит два разных множества политик приёмки: `policyProfiles` — что примет `POST /acceptance-runs` в `policy` (иначе `422 unknown_policy_profile`), `promotionPolicyProfiles` — под каким профилем полученный вердикт [допускает публикацию](#promotion-policy-какой-ран-допускает-публикацию-волна-w3-план-2026-08-04) (иначе `422 acceptance_policy_mismatch`). Сегодня множества совпадают; различать их обязан клиент, а не догадка — пересечение задано конфигурацией сервера, а не инвариантом кода.
+`acceptance` разводит два разных множества политик приёмки: `policyProfiles` — что примет `POST /acceptance-runs` в `policy` (иначе `422 unknown_policy_profile`), `promotionPolicyProfiles` — под каким профилем полученный вердикт [допускает публикацию](#promotion-policy-какой-ран-допускает-публикацию-волна-w3-план-2026-08-04) (иначе `422 acceptance_policy_mismatch`). Сегодня множества совпадают; различать их обязан клиент, а не догадка — пересечение задано конфигурацией сервера, а не инвариантом кода. `comparisonSurfaces` (волна W1a 2026-08-07) — закрытый список [поверхностей геометрии](#четыре-поверхности-геометрии-волна-2026-08-07-w1a), которые принимают `cases[].expectedSurfaces` и `cases[].comparisonSurface`; порядок совпадает с порядком `divergingSurfaces[]` вердикта.
 
 `reuseGate` описывает фазу [reuse-гейта](#reuse-gate-при-создании-и-публикации-компонента) этого инстанса: `mode` — `shadow` либо `enforce`, `intentRequired` истинно ровно в `enforce`, `policyVersion` — версия политики матчинга, та же, что в ответах `/api/catalog/candidates` и в записях аудита. Значение приходит из `REUSE_GATE`, прочитанной один раз на входе процесса, — повторного чтения окружения на запросе нет, поэтому discovery и сам гейт не могут разойтись.
 

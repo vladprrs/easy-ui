@@ -723,6 +723,10 @@ describe("route contracts", () => {
     // Инвариант P1-7: одна каноническая ось обязана вмещать целый ран, иначе семья на
     // `acceptanceMaxCasesPerRun` состояний шардируется исключительно из-за лимита схемы.
     expect(value.limits.caseSetMaxDimensionValues).toBeGreaterThanOrEqual(value.limits.acceptanceMaxCasesPerRun);
+    // План 2026-08-07 §W1a/§W11: закрытый список поверхностей геометрии в discovery. Порядок —
+    // часть контракта (он же порядок `divergingSurfaces[]`), поэтому сверяется массивом, а не
+    // множеством: клиент строит по нему текст вердикта.
+    expect(value.acceptance.comparisonSurfaces).toEqual(["root", "layoutUnion", "paint", "referenceExport"]);
     expect(value.computedOps).toEqual([...COMPUTED_OPS]);
     // The ordered contract case may have created the fixture system already; Bun can execute
     // this independent case before or after it, so assert the stable built-in system only.

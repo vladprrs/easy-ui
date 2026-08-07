@@ -2733,6 +2733,100 @@ describe("author driver case-set validate (W6)", () => {
     expect(caseSetManifestIssues(withCase({ matte: "#ffffff" })).join("\n")).toContain('unknown field "matte"');
   });
 
+  test("§W1a: локальный валидатор принимает четыре поверхности и отвергает три несовместимости", () => {
+    const withCase = (extra: Record<string, unknown>) => validManifest({
+      dimensions: undefined,
+      cases: [{ id: "default", props: { state: "default" }, ...extra }],
+    });
+    // Легальные декларации обязаны уехать: непринятое драйвером новое поле — это фича, которой на
+    // сервере нет только потому, что её не знает клиент (§1.5).
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: { root: { width: 343, height: 88 } } }))).toEqual([]);
+    expect(caseSetManifestIssues(withCase({
+      expectedSurfaces: {
+        root: { width: 343, height: 88 }, layoutUnion: { width: 480, height: 88 },
+        paint: { width: 480, height: 90 }, referenceExport: { width: 367, height: 88 },
+      },
+      comparisonSurface: "referenceExport",
+      clipExpectation: "root-does-not-clip-layout",
+    }))).toEqual([]);
+    // Легаси-путь не ломается: `expectedGeometry` читается как `layoutUnion`, поэтому доволновой
+    // случай с явной поверхностью сравнения законен.
+    expect(caseSetManifestIssues(withCase({
+      expectedGeometry: { width: 480, height: 88 }, comparisonSurface: "layoutUnion",
+    }))).toEqual([]);
+
+    // Три несовместимости — с теми же кодами, что у сервера, и до единого запроса.
+    expect(caseSetManifestIssues(withCase({
+      expectedGeometry: { width: 480, height: 88 }, expectedSurfaces: { layoutUnion: { width: 480, height: 88 } },
+    })).join("\n")).toContain("case_surface_conflict");
+    expect(caseSetManifestIssues(withCase({
+      expectedSurfaces: { root: { width: 343, height: 88 } }, comparisonSurface: "referenceExport",
+    })).join("\n")).toContain("case_comparison_surface_undeclared");
+    expect(caseSetManifestIssues(withCase({
+      expectedSurfaces: { layoutUnion: { width: 480, height: 88 } }, clipExpectation: "root-does-not-clip-layout",
+    })).join("\n")).toContain("case_clip_expectation_requires_root");
+
+    // Форма: неизвестная поверхность, пустая карта, дробные и запредельные габариты, лишняя ось,
+    // чужое значение ожидания клипа и опечатка в имени поверхности сравнения.
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: { rootBox: { width: 1, height: 1 } } })).join("\n"))
+      .toContain('unknown surface "rootBox"');
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: {} })).join("\n")).toContain("at least one surface");
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: { root: { width: 343.5, height: 88 } } })).join("\n"))
+      .toContain("expectedSurfaces.root.width must be an integer 1..8192");
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: { root: { width: 9000, height: 88 } } })).join("\n"))
+      .toContain("expectedSurfaces.root.width must be an integer 1..8192");
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: { root: { width: 343, height: 88, depth: 1 } } })).join("\n"))
+      .toContain('expectedSurfaces.root: unknown field "depth"');
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: { root: [343, 88] } })).join("\n"))
+      .toContain("expectedSurfaces.root must be an object {width, height}");
+    expect(caseSetManifestIssues(withCase({
+      expectedSurfaces: { root: { width: 343, height: 88 } }, clipExpectation: "root-clips-layout",
+    })).join("\n")).toContain('clipExpectation must be "root-does-not-clip-layout"');
+    expect(caseSetManifestIssues(withCase({
+      expectedSurfaces: { root: { width: 343, height: 88 } }, comparisonSurface: "rootBounds",
+    })).join("\n")).toContain("comparisonSurface must be one of root, layoutUnion, paint, referenceExport");
+    // `null` вместо опущенного поля ловится общей проверкой, а не тремя разными сообщениями.
+    expect(caseSetManifestIssues(withCase({ expectedSurfaces: null })).join("\n")).toContain("null is not a value the schema accepts");
+  });
+
+  test("§W1a: манифест с поверхностями доезжает до dry-run, конфликт не стоит ни одного запроса", async () => {
+    const surfaced = validManifest({
+      dimensions: undefined,
+      cases: [{
+        id: "default", props: { state: "default" },
+        expectedSurfaces: { root: { width: 343, height: 88 }, referenceExport: { width: 367, height: 88 } },
+        comparisonSurface: "referenceExport",
+      }],
+    });
+    const directory = await testDirectory();
+    {
+      const { api, calls } = await stubApi(validateRoutes());
+      const manifestPath = resolve(directory, "surfaces-ok.json");
+      await writeFile(manifestPath, JSON.stringify(surfaced));
+      const result = await run(api, ["case-set", "validate", manifestPath, "--json"]);
+      expect(result.exitCode).toBe(0);
+      expect(calls.map((call) => `${call.method} ${call.path}`))
+        .toEqual(["GET /api/capabilities", "POST /api/components/pay-payment-card/case-sets/validate"]);
+    }
+    {
+      const { api, calls } = await stubApi(validateRoutes());
+      const manifestPath = resolve(directory, "surfaces-conflict.json");
+      await writeFile(manifestPath, JSON.stringify(validManifest({
+        dimensions: undefined,
+        cases: [{
+          id: "default", props: { state: "default" },
+          expectedGeometry: { width: 480, height: 88 },
+          expectedSurfaces: { layoutUnion: { width: 480, height: 88 } },
+        }],
+      })));
+      const result = await run(api, ["case-set", "validate", manifestPath]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("case_surface_conflict");
+      expect(result.stderr).toContain("nothing was sent to the server");
+      expect(calls).toEqual([]);
+    }
+  }, 30_000);
+
   test("case-set validate takes exactly one positional and rejects the put-shaped call", () => {
     expect(parseArgs(["case-set", "validate", "matrix.json"]))
       .toMatchObject({ cmd: "case-set", args: ["validate", "matrix.json"] });

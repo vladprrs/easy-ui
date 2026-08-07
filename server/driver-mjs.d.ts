@@ -310,5 +310,26 @@ declare module "*/author/driver.mjs" {
   export function caseSetManifestIssues(manifest: unknown, limits?: DriverCaseSetLimits): string[];
   /** Локальная проверка `policy`/`policy.perCase` манифеста (план 2026-08-06 §W3). */
   export function casePolicyIssues(policy: unknown, limits?: DriverCaseSetLimits): string[];
+  /**
+   * Четыре поверхности геометрии случая (план 2026-08-07 §W1a). Единицы всех — **CSS px**, как у
+   * легаси-`expectedGeometry`: `referenceExport` нормализуется гейтом из device px ассета.
+   */
+  export type DriverGeometrySurface = "root" | "layoutUnion" | "paint" | "referenceExport";
+  export interface DriverSurfaceDims { width: number; height: number }
+  export type DriverExpectedSurfaces = Partial<Record<DriverGeometrySurface, DriverSurfaceDims>>;
+  export type DriverClipExpectation = "root-does-not-clip-layout";
+  /** Новые поля случая, известные драйверу офлайн (allowlist `CASE_SET_CASE_KEYS`). */
+  export interface DriverCaseSurfaceDeclaration {
+    expectedGeometry?: DriverSurfaceDims;
+    expectedSurfaces?: DriverExpectedSurfaces;
+    comparisonSurface?: DriverGeometrySurface;
+    clipExpectation?: DriverClipExpectation;
+  }
+  /**
+   * Локальное зеркало `caseSurfaceIssueOf` (`src/acceptance/surfaces.ts`): форма поверхностей плюс
+   * три несовместимости (`case_surface_conflict`, `case_comparison_surface_undeclared`,
+   * `case_clip_expectation_requires_root`) — до сети и с теми же кодами в тексте.
+   */
+  export function caseSurfaceIssues(item: unknown, where: string): string[];
   export function caseSetIdOfManifest(manifest: unknown): string;
 }

@@ -3651,6 +3651,18 @@
                     "acceptance": {
                       "additionalProperties": false,
                       "properties": {
+                        "comparisonSurfaces": {
+                          "items": {
+                            "enum": [
+                              "root",
+                              "layoutUnion",
+                              "paint",
+                              "referenceExport"
+                            ],
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
                         "defaultPolicyProfile": {
                           "type": "string"
                         },
@@ -3676,7 +3688,8 @@
                         "policyProfiles",
                         "defaultPolicyProfile",
                         "promotionPolicyProfiles",
-                        "geometryContractVersion"
+                        "geometryContractVersion",
+                        "comparisonSurfaces"
                       ],
                       "type": "object"
                     },

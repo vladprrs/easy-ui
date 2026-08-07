@@ -42,6 +42,7 @@ import {
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
   CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
 } from "../../src/acceptance/caseSetSchema";
+import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { TEXT_AA_PRESETS } from "../acceptance/gates/visual";
 import { prototypeCandidateOverlayMax } from "./screenshots";
@@ -311,6 +312,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // План 2026-08-06 §1.3: версия контракта измерения геометрии — кадровый вход
       // frameFingerprint; её смена = полная пересъёмка затронутых наборов.
       geometryContractVersion: GEOMETRY_CONTRACT_VERSION,
+      // План 2026-08-07 §W1a: какие поверхности геометрии принимает `expectedSurfaces`/
+      // `comparisonSurface` случая. Порядок — тот же, что у `divergingSurfaces[]` вердикта:
+      // от «что построил браузер» к «что прислал дизайнер». Все габариты объявляются в CSS px.
+      comparisonSurfaces: [...GEOMETRY_SURFACES],
     },
     // План renderer-contract-2 §5 R1: чем именно эта сборка рисует кадры. Агент (и приёмка
     // прода) обязаны иметь возможность сверить отпечаток с тем, что приехало в результате джобы,

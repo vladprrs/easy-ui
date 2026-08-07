@@ -2993,6 +2993,95 @@ function comparisonIssues(item, where) {
   return issues;
 }
 
+/**
+ * Четыре поверхности геометрии (план 2026-08-07 §W1a). Порядок значим — он же порядок
+ * `divergingSurfaces[]` вердикта; здесь он даёт стабильный текст отказа.
+ */
+const GEOMETRY_SURFACES = ["root", "layoutUnion", "paint", "referenceExport"];
+/** Единственное значение `clipExpectation`: вариант «root-clips-layout» снят вместе со сценарием. */
+const CLIP_EXPECTATION = "root-does-not-clip-layout";
+/** Потолок габарита поверхности в CSS px — тот же `dimensionPx`, что у схемы набора. */
+const SURFACE_DIMENSION_MAX = 8192;
+
+const surfaceDimsIssues = (dims, at) => {
+  if (!isPlainObject(dims)) return [`${at} must be an object {width, height} in CSS px`];
+  const issues = [];
+  for (const key of Object.keys(dims)) {
+    if (key !== "width" && key !== "height") issues.push(`${at}: unknown field "${key}" (a surface is {width, height} in CSS px)`);
+  }
+  for (const axis of ["width", "height"]) {
+    const value = dims[axis];
+    if (!Number.isInteger(value) || value <= 0 || value > SURFACE_DIMENSION_MAX) {
+      issues.push(`${at}.${axis} must be an integer 1..${SURFACE_DIMENSION_MAX} (CSS px)`);
+    }
+  }
+  return issues;
+};
+
+/**
+ * Локальная проверка четырёх поверхностей случая (план 2026-08-07 §W1a, §1.1).
+ *
+ * Зеркалит `caseSurfaceIssueOf` (`src/acceptance/surfaces.ts`) — те же три несовместимости и те же
+ * коды, только до сети: манифест на полсотни состояний иначе уезжает целиком, чтобы вернуться
+ * одним `422`. Нормализация здесь та же, что на сервере: `expectedGeometry` читается как
+ * `expectedSurfaces.layoutUnion`, поэтому доволновой случай с `comparisonSurface: "layoutUnion"`
+ * законен и обязан уехать.
+ *
+ * Семантические проверки идут **после** формы и возвращают ровно одну причину (как сервер): автор
+ * чинит по одной, а список из трёх взаимозависимых претензий читается как три разных бага.
+ */
+export function caseSurfaceIssues(item, where) {
+  const issues = [];
+  const declared = item.expectedSurfaces;
+  if (declared !== undefined) {
+    if (!isPlainObject(declared)) issues.push(`${where}.expectedSurfaces must be an object of surface -> {width, height}`);
+    else {
+      const names = Object.keys(declared);
+      if (names.length === 0) {
+        issues.push(`${where}.expectedSurfaces must declare at least one surface`
+          + " (an empty object is a forgotten intent, not \"no surfaces\" — omit the field instead)");
+      }
+      for (const name of names) {
+        if (!GEOMETRY_SURFACES.includes(name)) {
+          issues.push(`${where}.expectedSurfaces: unknown surface "${name}" (one of ${GEOMETRY_SURFACES.join(", ")})`);
+          continue;
+        }
+        issues.push(...surfaceDimsIssues(declared[name], `${where}.expectedSurfaces.${name}`));
+      }
+    }
+  }
+  if (item.expectedGeometry !== undefined) {
+    issues.push(...surfaceDimsIssues(item.expectedGeometry, `${where}.expectedGeometry`));
+  }
+  if (item.comparisonSurface !== undefined && !GEOMETRY_SURFACES.includes(item.comparisonSurface)) {
+    issues.push(`${where}.comparisonSurface must be one of ${GEOMETRY_SURFACES.join(", ")}`
+      + ` (got ${JSON.stringify(item.comparisonSurface)})`);
+  }
+  if (item.clipExpectation !== undefined && item.clipExpectation !== CLIP_EXPECTATION) {
+    issues.push(`${where}.clipExpectation must be "${CLIP_EXPECTATION}" (the only expectation the contract defines)`);
+  }
+  if (issues.length > 0) return issues;
+
+  // Нормализация сервера: явная декларация, иначе `expectedGeometry` в роли `layoutUnion`.
+  const declaresSurfaces = isPlainObject(declared) && Object.keys(declared).length > 0;
+  const surfaces = declaresSurfaces ? declared
+    : (isPlainObject(item.expectedGeometry) ? { layoutUnion: item.expectedGeometry } : {});
+  if (item.expectedGeometry !== undefined && declaresSurfaces) {
+    return [`${where}: expectedGeometry and expectedSurfaces are mutually exclusive (422 case_surface_conflict):`
+      + " expectedGeometry is the legacy spelling of expectedSurfaces.layoutUnion — keep one of them"];
+  }
+  if (item.comparisonSurface !== undefined && surfaces[item.comparisonSurface] === undefined) {
+    return [`${where}: comparisonSurface "${item.comparisonSurface}" is never declared`
+      + ` (422 case_comparison_surface_undeclared): declare expectedSurfaces.${item.comparisonSurface} (CSS px)`];
+  }
+  if (item.clipExpectation !== undefined && surfaces.root === undefined) {
+    return [`${where}: clipExpectation "${item.clipExpectation}" without expectedSurfaces.root`
+      + " (422 case_clip_expectation_requires_root): the expectation is a statement about the root box"
+      + " and is unverifiable without it"];
+  }
+  return [];
+}
+
 const CASE_SET_ID_CHARSET = /^[A-Za-z0-9._-]{1,64}$/;
 const CASE_SET_TOP_LEVEL_KEYS = new Set(["manifestVersion", "componentId", "source", "capture", "dimensions", "requireVisual", "policy", "cases"]);
 /** Блок `capture` строгий на сервере: опечатка в нём — отказ, а не умолчание (W5 добавил `surface`). */
@@ -3007,6 +3096,9 @@ const CASE_SET_CASE_KEYS = new Set([
   // План 2026-08-05 §A1: дети слотов случая. Держать ключ в allowlist обязательно — иначе
   // локальная проверка отвергала бы легальный манифест, до сети и без шанса на объяснение.
   "slotBindings",
+  // План 2026-08-07 §W1a: четыре поверхности геометрии вместо одного числа `expectedGeometry`,
+  // поверхность сравнения и ожидание «корень не режет layout». Все габариты — CSS px.
+  "expectedSurfaces", "comparisonSurface", "clipExpectation",
 ]);
 /** Ключ слота — тот же kebab-charset, что и у `definition.slots`; `default` зарезервирован (§A2a). */
 const CASE_SET_SLOT_KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -3108,6 +3200,7 @@ export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
     }
     if (item.slotBindings !== undefined) issues.push(...slotBindingIssues(item.slotBindings, `cases[${index}]`, limits));
     issues.push(...comparisonIssues(item, `cases[${index}]`));
+    issues.push(...caseSurfaceIssues(item, `cases[${index}]`));
   }
   for (const item of cases) {
     if (!isPlainObject(item) || item.aliasOf === undefined) continue;

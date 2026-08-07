@@ -10,6 +10,7 @@ import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
 import { tokenize } from "../src/library/text";
 import { reuseOverrideSchema as componentReuseOverrideSchema } from "./catalog/reuseOverride";
+import { GEOMETRY_SURFACES } from "../src/acceptance/surfaces";
 
 // Figma provenance (plan §J): optional on write, nullable on read-back.
 const figmaResponseSchema = figmaSchema.nullable();
@@ -3069,6 +3070,11 @@ export const capabilitiesResponseSchema = z.object({
     promotionPolicyProfiles: z.array(z.string()),
     /** Версия контракта измерения геометрии — кадровый вход frameFingerprint (план 2026-08-06 §1.3). */
     geometryContractVersion: z.number().int().positive(),
+    /**
+     * Поверхности геометрии случая (план 2026-08-07 §W1a): что принимают `expectedSurfaces` и
+     * `comparisonSurface` манифеста. Порядок совпадает с `divergingSurfaces[]` вердикта.
+     */
+    comparisonSurfaces: z.array(z.enum(GEOMETRY_SURFACES)),
   }),
   /** Объявленный рендерер этой сборки (план renderer-contract-2 §5 R1). */
   renderer: rendererReportSchema,
