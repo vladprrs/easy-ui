@@ -394,7 +394,7 @@ describe("geometry surfaces (W1a)", () => {
     expect(drift(5).policyVerdict).toBe("surface-mismatch");
   });
 
-  it("clipExpectation: без rootBounds — null, с эффективным клипом — нарушено", () => {
+  it("clipExpectation: без rootBounds — null, с клипом на корне — нарушено (W1b)", () => {
     const withoutRoot = evaluateGeometryPolicy({
       layoutBounds: layout, paintBounds: { ...layout }, paintBoundsSource: "alpha",
       tolerances: { expectedSurfaces: { layoutUnion: { width: 140, height: 96 } }, clipExpectation: "root-does-not-clip-layout" },
@@ -402,14 +402,26 @@ describe("geometry surfaces (W1a)", () => {
     expect(withoutRoot.clipSatisfied).toBeNull();
     expect(withoutRoot.policyVerdict).toBe("clean");
 
+    // W1b: факт — клип **самого корня**, а не первое эффективное звено восходящей цепочки.
     const clipped = evaluateGeometryPolicy({
+      ...PAYMENT_SCHEDULE,
+      rootClip: { property: "overflow", value: "hidden hidden" },
+      tolerances: { expectedSurfaces: { root: { width: 343, height: 88 } }, clipExpectation: "root-does-not-clip-layout" },
+    });
+    expect(clipped.clipSatisfied).toBe(false);
+    expect(clipped.reasons.join(" ")).toContain("the root box declares overflow: hidden hidden");
+    expect(clipped.policyVerdict).toBe("surface-mismatch");
+    expect(geometryVerdictBlocks(clipped.policyVerdict, clipped.overflow)).toBe(true);
+
+    // Клипающий **предок** поверхности съёмки утверждение о корне не опровергает: он режет краску
+    // (и остаётся в `clippedBy`), но layout корня по-прежнему не обрезан самим корнем.
+    const ancestorOnly = evaluateGeometryPolicy({
       ...PAYMENT_SCHEDULE,
       clipChain: [{ key: "card", property: "overflow", value: "hidden hidden", effective: true }],
       tolerances: { expectedSurfaces: { root: { width: 343, height: 88 } }, clipExpectation: "root-does-not-clip-layout" },
     });
-    expect(clipped.clipSatisfied).toBe(false);
-    expect(clipped.policyVerdict).toBe("surface-mismatch");
-    expect(geometryVerdictBlocks(clipped.policyVerdict, clipped.overflow)).toBe(true);
+    expect(ancestorOnly.clipSatisfied).toBe(true);
+    expect(ancestorOnly.clippedBy).toMatchObject({ key: "card" });
 
     const honest = evaluateGeometryPolicy({
       ...PAYMENT_SCHEDULE,

@@ -30,7 +30,14 @@ export type CaptureFailureCode =
    * бы воспроизвести ровно ту потерю различий, ради которой заводились четыре поверхности.
    * `ref` — имя поверхности (`root`|`layoutUnion`|`paint`|`referenceExport`).
    */
-  | "surface_mismatch";
+  | "surface_mismatch"
+  /**
+   * Габариты эталонного ассета не сводятся с масштабом съёмки (план 2026-08-07 §W1b): device px
+   * файла не кратны `deviceScaleFactor`, то есть экспорт снят в другом масштабе. Отдельный код, а
+   * не `surface_mismatch`: это не расхождение размеров, а **невозможность их сравнить** — чинится
+   * перевыгрузкой эталона, а не правкой компонента. `ref` — id ассета.
+   */
+  | "dimensions_irreconcilable";
 
 /**
  * `severity` — не украшение: `warning` означает «зафиксировано, вердикта не меняет» (напр.
@@ -48,7 +55,7 @@ export const CAPTURE_FAILURE_CODES: readonly CaptureFailureCode[] = [
   "font_load_failed", "font_face_missing", "image_load_failed",
   "layout_unstable", "surface_missing", "surface_overflow",
   "renderer_mismatch", "navigation_failed", "runtime_error",
-  "surface_mismatch",
+  "surface_mismatch", "dimensions_irreconcilable",
 ] as const;
 
 export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCode =>
@@ -62,7 +69,7 @@ export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCod
 export interface CaptureCodeOrigin {
   code: CaptureFailureCode;
   emitter: string;
-  wave: "R3" | "R4" | "R6" | "W1a";
+  wave: "R3" | "R4" | "R6" | "W1a" | "W1b";
 }
 
 export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
@@ -76,6 +83,7 @@ export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
   { code: "navigation_failed", emitter: "scripts/screenshot-worker.mjs (page.goto)", wave: "R3" },
   { code: "runtime_error", emitter: "scripts/screenshot-worker.mjs (handshake/mismatch); readiness network_timeout", wave: "R3" },
   { code: "surface_mismatch", emitter: "server/acceptance/gates/geometry2.ts (divergingSurfaces)", wave: "W1a" },
+  { code: "dimensions_irreconcilable", emitter: "server/acceptance/gates/geometry2.ts (referenceExportCodes)", wave: "W1b" },
 ] as const;
 
 /**

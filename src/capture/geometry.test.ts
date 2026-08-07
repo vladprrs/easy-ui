@@ -314,6 +314,71 @@ describe("layout bounds and attribution", () => {
     } finally { restoreTwo(); }
   });
 
+  // --- W1b (план 2026-08-07 §1.1): безусловный замер `rootBounds` ------------------------------
+
+  it("маркер display:contents с одним корневым боксом: rootBounds измерен, клип корня записан", () => {
+    // Маркер рантайма (`src/catalog/runtime.ts`) собственного бокса не имеет: без спуска сквозь
+    // `display:contents` замер дал бы 0×0 и объявил компонент вырожденным.
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<div data-rect="body" style="overflow:hidden"><div data-rect="strip"></div></div></span></div>`;
+    const restore = installRects({ surface, body: box(64, 64, 140, 96), strip: box(64, 64, 900, 96) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["root"] }).details![0]!;
+      expect(detail.rootBounds).toEqual({ x: 64, y: 64, width: 140, height: 96 });
+      // Клип объявлен самим корнем ⇒ `clipExpectation: "root-does-not-clip-layout"` нарушено.
+      expect(detail.rootClip).toMatchObject({ property: "overflow" });
+      expect(detail.rootClip!.value).toContain("hidden");
+      // Замер аддитивен: `layoutBounds` (клипнутая лента) не сдвинулся.
+      expect(detail.layoutBounds).toEqual({ x: 64, y: 64, width: 140, height: 96 });
+    } finally { restore(); }
+  });
+
+  it("Fragment-корень (два бокса первого поколения): rootBounds = null, а не union", () => {
+    // Ровно тот случай, где угадывание было бы подменой: union двух боксов — это `layoutUnion`,
+    // а корневого бокса у Fragment'а нет вовсе. `null` ⇒ поверхность `root` = `not-measured`.
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<div data-rect="a"></div><div data-rect="b"></div></span></div>`;
+    const restore = installRects({ surface, a: box(64, 64, 140, 40), b: box(64, 120, 140, 40) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["root"] }).details![0]!;
+      expect(detail.rootBounds).toBeNull();
+      expect(detail.rootClip).toBeNull();
+      expect(detail.layoutBounds).toEqual({ x: 64, y: 64, width: 140, height: 96 });
+    } finally { restore(); }
+  });
+
+  it("вложенный маркер прозрачен для спуска, а вырожденный бокс не публикуется", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<span data-eui-key="inner" style="display:contents"><div style="display:contents">`
+      + `<div data-rect="body"></div></div></span></span></div>`;
+    const restore = installRects({ surface, body: box(64, 64, 140, 96) });
+    try {
+      expect(collectGeometry({ detailKeys: ["root"] }).details![0]!.rootBounds).toEqual({ x: 64, y: 64, width: 140, height: 96 });
+    } finally { restore(); }
+
+    // Единственный потомок без размеров — «нулевой бокс», и он остаётся отсутствием факта.
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<div></div></span></div>`;
+    const restoreZero = installRects({ surface });
+    try {
+      expect(collectGeometry({ detailKeys: ["root"] }).details![0]!.rootBounds).toBeNull();
+    } finally { restoreZero(); }
+  });
+
+  it("overlay-деталь меряет свой бокс, без спуска к содержимому", () => {
+    document.body.innerHTML = overlayScene("position:absolute;overflow-y:auto");
+    const restore = installRects({
+      surface, viewport: box(16, 16, 390, 844), content: box(32, 32, 358, 812), inner: box(32, 32, 358, 2000),
+    });
+    try {
+      const detail = collectGeometry({ detailKeys: [], overlayAwareRoot: true }).details![0]!;
+      expect(detail.rootSource).toBe("overlay");
+      expect(detail.rootBounds).toEqual({ x: 32, y: 32, width: 358, height: 812 });
+      // Прокрутка, которой владеет модалка, — клип её корня (та же ветка, что у `layoutBounds`).
+      expect(detail.rootClip).toMatchObject({ property: "overflow" });
+    } finally { restore(); }
+  });
+
   it("версия контракта измерения объявлена и равна 2", () => {
     // Значение — кадровый вход `frameFingerprint` (§1.3): его сдвиг честно инвалидирует кадры.
     expect(GEOMETRY_CONTRACT_VERSION).toBe(2);

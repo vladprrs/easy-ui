@@ -386,6 +386,39 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
   // Range нужен ради текстовых узлов: у них нет border-box, и до W2 строка, лежащая прямо в
   // маркере или в обёртке `display:contents`, не существовала для layout-измерения вовсе.
   const textRange = typeof document.createRange === "function" ? document.createRange() : null;
+  /**
+   * Первое поколение **боксовых** потомков сквозь цепочки `display:contents` (план 2026-08-07
+   * §1.1, W1b). Обёртка без собственного бокса (включая вложенный маркер-`span` рантайма,
+   * `src/catalog/runtime.ts`) прозрачна для этого спуска — иначе `rootBounds` замерил бы нулевой
+   * бокс маркера и объявил компонент размером 0×0.
+   *
+   * Больше одного бокса искать незачем: два и есть ответ «корня нет» (Fragment-корень).
+   */
+  const boxedGeneration = (element, out) => {
+    for (const child of element.children) {
+      if (out.length > 1) return out;
+      if (isHidden(child)) continue;
+      if (getComputedStyle(child).display === "contents") { boxedGeneration(child, out); continue; }
+      out.push(child);
+    }
+    return out;
+  };
+  /**
+   * Элемент, чья border-box и есть `rootBounds` корня измерения, либо `null`.
+   *
+   * Две ветки по построению корня, а не по флагу: у viewport-поверхности корнем детали служит сам
+   * `[data-eui-overlay-content]` — элемент **со своим боксом**, и спускаться из него некуда (его
+   * бокс и есть контур модалки). У маркерного корня (`display:contents`) бокса нет вовсе, поэтому
+   * ищется ровно один боксовый потомок первого поколения; ноль или два и более — `null`, то есть
+   * `not-measured` у поверхности `root`. Догадка «возьмём union» здесь была бы ровно той подменой
+   * одной величины другой, ради устранения которой заводились четыре поверхности.
+   */
+  const rootBoxOf = (root) => {
+    if (isHidden(root)) return null;
+    if (getComputedStyle(root).display !== "contents") return root;
+    const boxed = boxedGeneration(root, []);
+    return boxed.length === 1 ? boxed[0] : null;
+  };
   const detailOf = (marker, { scrollAwareRoot = false } = {}) => {
     const boxes = [];
     const sources = [];
@@ -479,10 +512,35 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
       }
       if (current === surface) break;
     }
+    // --- W1b (план 2026-08-07 §1.1): безусловный замер корневого бокса ------------------------
+    // Замер аддитивен: `layoutBounds` не трогается, PNG не меняется, ни один вход
+    // `frameFingerprint` не добавляется — поэтому `GEOMETRY_CONTRACT_VERSION` остаётся 2.
+    const rootBox = rootBoxOf(marker);
+    const rootRect = rootBox ? rootBox.getBoundingClientRect() : null;
+    // Вырожденный бокс не публикуется как измерение: «0×0» — это отсутствие факта, а не факт.
+    const rootBounds = rootRect && rootRect.right - rootRect.left > 0 && rootRect.bottom - rootRect.top > 0
+      ? boxOf(rootRect)
+      : null;
+    // Клип **самого корня** — факт для `clipExpectation: "root-does-not-clip-layout"`: утверждение
+    // автора «union может выходить за корень, потому что корень не режет» проверяется объявлением
+    // на корневом боксе, а не восходящей `clipChain` (её звенья — предки поверхности съёмки, а не
+    // корень компонента). Прокручиваемый корень считается клипом там же, где им считает W5, — у
+    // overlay-корня со своей прокруткой.
+    const rootStyle = rootBounds && rootBox ? getComputedStyle(rootBox) : null;
+    const rootDeclaration = rootStyle
+      ? clipDeclarationOf(rootStyle) ?? (scrollAwareRoot && rootBox === marker ? scrollClipOf(rootStyle) : null)
+      : null;
     return {
       key: marker.getAttribute("data-eui-key") ?? "",
       instance: instanceByMarker.get(marker) ?? 0,
       layoutBounds: union ? boxOf(union) : null,
+      rootBounds,
+      rootClip: rootDeclaration
+        ? {
+          property: rootDeclaration.clipPath ? "clip-path" : "overflow",
+          value: rootDeclaration.clipPath ?? `${rootDeclaration.overflowX} ${rootDeclaration.overflowY}`,
+        }
+        : null,
       effectSources: sources,
       clipChain,
     };
@@ -505,7 +563,9 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
     ? [{ ...detailOf(overlayRoot, { scrollAwareRoot: true }), rootSource: "overlay" }]
     : requestedKeys.map((key) => {
       const marker = markers.find((candidate) => (candidate.getAttribute("data-eui-key") ?? "") === key);
-      return marker ? detailOf(marker) : { key, instance: 0, layoutBounds: null, effectSources: [], clipChain: [] };
+      return marker
+        ? detailOf(marker)
+        : { key, instance: 0, layoutBounds: null, rootBounds: null, rootClip: null, effectSources: [], clipChain: [] };
     });
 
   const bounded = Math.max(0, Math.floor(limit));

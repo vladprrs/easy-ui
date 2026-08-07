@@ -20,7 +20,7 @@ import {
   type GeometryOverflowSides, type GeometryPolicyRect, type GeometryPolicyResult, type GeometryPolicyVerdict,
   type GeometryTolerancesInput,
 } from "../../../src/capture/geometryPolicy";
-import { declaresSurfaces, type GeometrySurface } from "../../../src/acceptance/surfaces";
+import { declaresSurfaces, type GeometrySurface, type SurfaceDims } from "../../../src/acceptance/surfaces";
 import type { CaptureCode } from "../../../src/capture/failureCodes";
 import type { GeometryDetail } from "../../../src/capture/geometry.mjs";
 import { putArtifact } from "../evidence";
@@ -46,8 +46,60 @@ export interface GeometryFacts {
    * оверлея координата произвольная и вывести её из `expectedGeometry` (там только w/h) нельзя.
    */
   layoutBounds: { x: number; y: number; width: number; height: number } | null;
+  /**
+   * Бокс корня компонента в тех же координатах (W1b). Поле **опционально** намеренно: мемо
+   * заполняет гейт геометрии, а конструкторы фактов в тестах визуала жили до волны — «поля нет»
+   * и «корень не измерен» одинаково означают «строить по нему нечего».
+   */
+  rootBounds?: { x: number; y: number; width: number; height: number } | null;
   paintMargin: number | null;
   deviceScaleFactor: number;
+}
+
+/**
+ * Габариты эталонного экспорта в **CSS px** из габаритов ассета в device px (W1b, §1.1).
+ *
+ * Единственная точка нормализации: `expectedSurfaces.referenceExport` объявляется в CSS px, а в
+ * `assets.width/height` лежат пиксели файла. Два места деления на `deviceScaleFactor` рано или
+ * поздно разошлись бы, и вердикт `referenceExport` начал бы врать ровно в ×dsf раз.
+ *
+ * `null` — габариты **неразрешимы против dsf**, а не «примерно подойдут»: device px, не кратные
+ * масштабу съёмки, означают экспорт в другом масштабе (1x-ассет против 2x-кадра), и деление дало
+ * бы правдоподобное, но неверное число.
+ */
+export function referenceExportCssDims(device: SurfaceDims, deviceScaleFactor: number): SurfaceDims | null {
+  if (!Number.isFinite(deviceScaleFactor) || deviceScaleFactor <= 0) return null;
+  if (!Number.isFinite(device.width) || !Number.isFinite(device.height) || device.width <= 0 || device.height <= 0) return null;
+  const width = device.width / deviceScaleFactor;
+  const height = device.height / deviceScaleFactor;
+  const integral = (value: number): boolean => Math.abs(value - Math.round(value)) <= 0.001;
+  if (!integral(width) || !integral(height)) return null;
+  return { width: Math.round(width), height: Math.round(height) };
+}
+
+/**
+ * Три исхода замера эталонного экспорта (§W1b.2, N6 — колонки `assets.width/height` nullable):
+ * габариты есть и сводятся с dsf ⇒ факт; ассета либо габаритов нет ⇒ факта нет (`not-measured` у
+ * поверхности, а не догадка); габариты есть, но не сводятся ⇒ названный отказ.
+ */
+export type ReferenceExportMeasurement =
+  | { dims: SurfaceDims; reason: null; deviceDims: SurfaceDims }
+  | { dims: null; reason: "no_reference" | "asset_dims_missing" | "dimensions_irreconcilable"; deviceDims: SurfaceDims | null };
+
+export function referenceExportDimsOf(ctx: GateContext): ReferenceExportMeasurement {
+  const assetId = ctx.case.referenceAssetId ?? null;
+  if (assetId === null) return { dims: null, reason: "no_reference", deviceDims: null };
+  const row = ctx.db
+    ? ctx.db.query("SELECT width, height FROM assets WHERE id=?").get(assetId) as { width: number | null; height: number | null } | null
+    : null;
+  if (!row || typeof row.width !== "number" || typeof row.height !== "number") {
+    return { dims: null, reason: "asset_dims_missing", deviceDims: null };
+  }
+  const deviceDims = { width: row.width, height: row.height };
+  const dims = referenceExportCssDims(deviceDims, ctx.surface.dsf);
+  return dims === null
+    ? { dims: null, reason: "dimensions_irreconcilable", deviceDims }
+    : { dims, reason: null, deviceDims };
 }
 
 /**
@@ -153,6 +205,29 @@ export function geometryCodes(
   }];
 }
 
+/**
+ * Код несводимых габаритов эталона (W1b). Эмитится **только** на третьем исходе замера: «ассета
+ * нет» и «у ассета нет габаритов» — не отказ, а отсутствие факта, и поверхность честно получает
+ * `not-measured`.
+ *
+ * `severity` зависит от того, объявлена ли поверхность `referenceExport`: если объявлена, вердикт
+ * без факта невозможен и это ошибка кадра; если нет — это диагностика («эталон снят в другом
+ * масштабе»), которая ничей вердикт не двигает.
+ */
+export function referenceExportCodes(measurement: ReferenceExportMeasurement, ctx: GateContext): CaptureCode[] {
+  if (measurement.reason !== "dimensions_irreconcilable") return [];
+  const declared = geometrySurfacesEnabled() && declaresSurfaces(ctx.case)
+    && ctx.case.expectedSurfaces?.referenceExport !== undefined;
+  const device = measurement.deviceDims!;
+  return [{
+    code: "dimensions_irreconcilable",
+    severity: declared ? "error" : "warning",
+    detail: `reference asset is ${device.width}×${device.height} device px, which does not reduce to CSS px`
+      + ` at deviceScaleFactor ${ctx.surface.dsf}: the export was taken at a different scale`,
+    ...(ctx.case.referenceAssetId ? { ref: ctx.case.referenceAssetId } : {}),
+  }];
+}
+
 export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWorker): Gate {
   return {
     name: "geometry",
@@ -183,6 +258,12 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         : { ok: false as const, error: "paint capture returned no image bytes" };
 
       const paintBounds = ink.ok && isRect(ink.bounds) ? ink.bounds : null;
+      // W1b: оба факта меряются **безусловно** — и когда поверхности не объявлены. Кадр обязан
+      // нести их всегда, иначе первая же декларация ожидания стоила бы пересъёмки (AC §3.4).
+      const rootBoundsFact = detail?.rootBounds ?? null;
+      const rootBounds = isRect(rootBoundsFact) ? rootBoundsFact : null;
+      const rootClip = detail?.rootClip ?? null;
+      const referenceExport = referenceExportDimsOf(ctx);
       const policy = evaluateGeometryPolicy({
         layoutBounds: detail?.layoutBounds ?? null,
         paintBounds,
@@ -190,6 +271,9 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         paintClamped: ink.ok ? ink.clamped : null,
         effectSources: detail?.effectSources ?? [],
         clipChain: detail?.clipChain ?? [],
+        rootBounds,
+        rootClip,
+        referenceExportDims: referenceExport.dims,
         tolerances,
       });
 
@@ -198,6 +282,14 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         paintMargin: capture.paintMargin ?? null,
         deviceScaleFactor: ctx.surface.dsf,
         layoutBounds: detail?.layoutBounds ?? null,
+        rootBounds,
+        rootClip,
+        // Габариты эталона едут вместе с их происхождением: «не измерено» и «не сводится с dsf» —
+        // разные факты, и по сохранённому рану это должно читаться без похода в БД.
+        referenceExportDims: referenceExport.dims,
+        referenceExportDimsSource: referenceExport.reason === null
+          ? { deviceDims: referenceExport.deviceDims, deviceScaleFactor: ctx.surface.dsf }
+          : { reason: referenceExport.reason, deviceDims: referenceExport.deviceDims, deviceScaleFactor: ctx.surface.dsf },
         paintBounds,
         paintBoundsSource: paintBounds ? "alpha" : null,
         paintBoundsPixels: ink.ok ? ink.pixelBounds : null,
@@ -219,6 +311,7 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         layoutBounds: isRect(record.layoutBounds)
           ? { x: record.layoutBounds.x, y: record.layoutBounds.y, width: record.layoutBounds.width, height: record.layoutBounds.height }
           : null,
+        rootBounds,
         paintMargin: record.paintMargin,
         deviceScaleFactor: ctx.surface.dsf,
       } satisfies GeometryFacts);
@@ -228,12 +321,19 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
 
       const named = geometryVerdictIsNamed(policy);
       const blocks = geometryVerdictBlocks(policy.policyVerdict, policy.overflow, tolerances);
+      // W1b: объявленная поверхность без факта (`not-measured`) — это **отсутствие вердикта**, а не
+      // `pass`. С безусловными замерами такое состояние осталось честно недостижимым для
+      // измеримых случаев и означает ровно две вещи: корня как бокса нет (Fragment) либо габариты
+      // эталона не прочитаны. Молчаливый `pass` здесь означал бы «ожидание объявлено и не
+      // проверено» — ровно та тихая подстановка, ради устранения которой заводились поверхности.
+      const unmeasuredSurfaces = Object.entries(policy.surfaces ?? {})
+        .filter(([, verdict]) => verdict.verdict === "not-measured").map(([name]) => name);
       // Инвариант: провал обязан назвать виновника. Иначе — `indeterminate` (D10 всё равно не даст
       // такому случаю `pass`, но вердикт не будет ложно обвинять компонент).
       const status = policy.policyVerdict === "indeterminate" ? "indeterminate"
-        : !blocks ? "pass"
-        : named ? "fail"
-        : "indeterminate";
+        : blocks ? (named ? "fail" : "indeterminate")
+        : unmeasuredSurfaces.length > 0 ? "indeterminate"
+        : "pass";
       const detailMessage = status === "pass" ? undefined
         : named || policy.reasons.length > 0
           ? policy.reasons.join("; ")
@@ -250,9 +350,14 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           // кадра, если поверхность их принесла: paint-джоба несёт доказательство).
           codes: [
             ...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons, policy.divergingSurfaces ?? []),
+            ...referenceExportCodes(referenceExport, ctx),
             ...(capture.readiness?.readinessCodes ?? []),
           ],
           layoutBounds: record.layoutBounds,
+          rootBounds: record.rootBounds,
+          rootClip: record.rootClip,
+          referenceExportDims: record.referenceExportDims,
+          referenceExportDimsSource: record.referenceExportDimsSource,
           paintBounds: record.paintBounds,
           paintBoundsSource: record.paintBoundsSource,
           paintClamped: record.paintClamped,

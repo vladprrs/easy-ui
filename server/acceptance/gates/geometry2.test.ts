@@ -47,6 +47,10 @@ function framePng(width: number, height: number, ink: { x: number; y: number; wi
 
 interface PaintShape {
   layoutBounds?: { x: number; y: number; width: number; height: number } | null;
+  /** W1b: бокс корня. По умолчанию совпадает с layout-контуром — типичный однокоренной компонент. */
+  rootBounds?: { x: number; y: number; width: number; height: number } | null;
+  /** W1b: клип, объявленный самим корнем (факт `clipExpectation`). */
+  rootClip?: { property: string; value: string } | null;
   effectSources?: unknown[];
   clipChain?: unknown[];
   bytes?: Uint8Array;
@@ -62,6 +66,8 @@ const paintResult = (shape: PaintShape = {}): ScreenshotResult => ({
   details: [{
     key: "root", instance: 0,
     layoutBounds: shape.layoutBounds === undefined ? { ...LAYOUT } : shape.layoutBounds,
+    rootBounds: shape.rootBounds === undefined ? { ...LAYOUT } : shape.rootBounds,
+    rootClip: shape.rootClip ?? null,
     effectSources: shape.effectSources ?? [],
     clipChain: shape.clipChain ?? [],
   }],
@@ -88,12 +94,12 @@ const ink = (bounds: { x: number; y: number; width: number; height: number } | n
     clamped: { left: false, right: false, top: false, bottom: false, ...clamped },
   });
 
-async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; expectedSurfaces?: Record<string, { width: number; height: number }>; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES } = {}) {
+async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; expectedSurfaces?: Record<string, { width: number; height: number }>; clipExpectation?: "root-does-not-clip-layout"; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES; db?: Database; referenceAssetId?: string; dsf?: number } = {}) {
   const dir = await mkdtemp(resolve(process.cwd(), ".geo2-test-"));
   dirs.push(dir);
   const service = new PaintCapture(options.result ?? paintResult());
   const ctx: GateContext = {
-    db: null as unknown as Database,
+    db: options.db ?? (null as unknown as Database),
     dataDir: dir,
     service,
     policy: ACCEPTANCE_POLICIES[options.policyId ?? "default-v1"],
@@ -103,9 +109,11 @@ async function context(options: { result?: ScreenshotResult; inkBbox?: GateConte
       caseId: "alpha", caseKey: "alpha", props: {}, propsHash: "ph", aliasOfCaseId: null,
       ...(options.expectedGeometry ? { expectedGeometry: options.expectedGeometry } : {}),
       ...(options.expectedSurfaces ? { expectedSurfaces: options.expectedSurfaces as never } : {}),
+      ...(options.clipExpectation ? { clipExpectation: options.clipExpectation } : {}),
+      ...(options.referenceAssetId ? { referenceAssetId: options.referenceAssetId } : {}),
       ...(options.casePolicy ? { casePolicy: options.casePolicy } : {}),
     },
-    surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
+    surface: { viewport: { width: 390, height: 844 }, dsf: options.dsf ?? 2, theme: "light" },
     determinismSampled: false,
     shared: new Map<string, unknown>(),
     sleep: () => Promise.resolve(),
@@ -375,4 +383,135 @@ test("W1a: kill-switch EASYUI_GEOMETRY_SURFACES_DISABLED возвращает л
   } finally {
     delete process.env.EASYUI_GEOMETRY_SURFACES_DISABLED;
   }
+});
+
+// ------------------------------------- безусловные замеры W1b (план 2026-08-07 §1.1)
+
+/** Ассет эталона с габаритами в **device px** (колонки nullable — отсюда третий исход замера). */
+function assetWith(db: Database, dims: { width: number | null; height: number | null }): string {
+  const id = `asset_${"a".repeat(56)}${Math.floor(Math.random() * 1e6).toString().padStart(8, "0")}`.slice(0, 70);
+  db.run("INSERT INTO assets (id,sha256,mime,size,width,height,original_name,created_at) VALUES (?,?,?,?,?,?,?,'now')",
+    [id, id.slice(6), "image/png", 1, dims.width, dims.height, "ref.png"]);
+  return id;
+}
+
+test("W1b: rootBounds измерен безусловно и доезжает до вердикта, метрик и мемо фактов", async () => {
+  // Замер аддитивен: он есть и там, где поверхностей никто не объявлял, — иначе первая декларация
+  // ожидания стоила бы пересъёмки (AC §3.4).
+  const plain = await context();
+  const plainResult = await geometry2Gate.run(plain.ctx);
+  expect(plainResult.metrics!.rootBounds).toEqual(LAYOUT);
+  expect(plain.ctx.shared.get("geometry.facts:alpha")).toMatchObject({ rootBounds: LAYOUT });
+
+  // Объявленный `root` судится по **своему** факту, а не по union'у.
+  const mismatch = await context({
+    result: paintResult({ rootBounds: { x: 64, y: 64, width: 343, height: 88 } }),
+    expectedSurfaces: { root: { width: 320, height: 88 } },
+  });
+  const mismatchResult = await geometry2Gate.run(mismatch.ctx);
+  expect(mismatchResult.status).toBe("fail");
+  expect(mismatchResult.metrics!.divergingSurfaces).toEqual(["root"]);
+  expect((mismatchResult.metrics!.surfaces as Record<string, { observed: unknown }>).root!.observed)
+    .toEqual({ width: 343, height: 88 });
+});
+
+test("W1b: rootBounds не измерен (Fragment-корень) ⇒ поверхность root = not-measured, не догадка", async () => {
+  const { ctx } = await context({
+    result: paintResult({ rootBounds: null }),
+    expectedSurfaces: { root: { width: 140, height: 96 } },
+  });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.metrics!.rootBounds).toBeNull();
+  expect((result.metrics!.surfaces as Record<string, { verdict: string }>).root!.verdict).toBe("not-measured");
+  // Union 140×96 совпал бы с ожиданием — подстановка чужого факта дала бы ложный `clean`.
+  expect(result.metrics!.divergingSurfaces).toEqual([]);
+  // Объявлено и не проверено ⇒ вердикта нет: `pass` тут был бы молчаливым «сойдёт».
+  expect(result.status).toBe("indeterminate");
+  expect(result.detail).toContain("surface root was not measured");
+});
+
+test("W1b: referenceExportDims нормализуются в CSS px делением на dsf", async () => {
+  const db = new Database(":memory:");
+  migrate(db);
+  // Экспорт 2x: 734×176 device px ⇒ 367×88 CSS px — ровно та величина, которую объявляет манифест.
+  const assetId = assetWith(db, { width: 734, height: 176 });
+  const { ctx } = await context({ db, referenceAssetId: assetId, expectedSurfaces: { referenceExport: { width: 367, height: 88 } } });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.metrics!.referenceExportDims).toEqual({ width: 367, height: 88 });
+  expect((result.metrics!.surfaces as Record<string, { verdict: string }>).referenceExport!.verdict).toBe("clean");
+
+  const drift = await context({ db, referenceAssetId: assetId, expectedSurfaces: { referenceExport: { width: 343, height: 88 } } });
+  const driftResult = await geometry2Gate.run(drift.ctx);
+  expect(driftResult.status).toBe("fail");
+  expect(driftResult.metrics!.divergingSurfaces).toEqual(["referenceExport"]);
+  expect(driftResult.metrics!.codes).toEqual([
+    { code: "surface_mismatch", severity: "error", detail: expect.stringContaining("surface referenceExport measured"), ref: "referenceExport" },
+  ]);
+  db.close();
+});
+
+test("W1b: три исхода замера эталона — факт, not-measured, dimensions_irreconcilable", async () => {
+  const db = new Database(":memory:");
+  migrate(db);
+
+  // 1. Ассета у случая нет вовсе — факта нет, отказа тоже нет.
+  const none = await context({ db });
+  const noneResult = await geometry2Gate.run(none.ctx);
+  expect(noneResult.metrics!.referenceExportDims).toBeNull();
+  expect(noneResult.metrics!.referenceExportDimsSource).toMatchObject({ reason: "no_reference" });
+  expect(noneResult.metrics!.codes).toEqual([]);
+
+  // 2. Колонки габаритов nullable: ассет есть, чисел нет ⇒ `not-measured`, а не отказ.
+  const blind = await context({
+    db, referenceAssetId: assetWith(db, { width: null, height: null }),
+    expectedSurfaces: { referenceExport: { width: 367, height: 88 } },
+  });
+  const blindResult = await geometry2Gate.run(blind.ctx);
+  expect(blindResult.metrics!.referenceExportDimsSource).toMatchObject({ reason: "asset_dims_missing" });
+  expect((blindResult.metrics!.surfaces as Record<string, { verdict: string }>).referenceExport!.verdict).toBe("not-measured");
+  expect(blindResult.metrics!.codes).toEqual([]);
+  expect(blindResult.status).toBe("indeterminate");
+
+  // 3. Габариты есть, но не сводятся с dsf=2 (нечётная ширина: экспорт снят в другом масштабе).
+  const odd = assetWith(db, { width: 367, height: 88 });
+  const declared = await context({ db, referenceAssetId: odd, expectedSurfaces: { referenceExport: { width: 367, height: 88 } } });
+  const declaredResult = await geometry2Gate.run(declared.ctx);
+  expect(declaredResult.metrics!.referenceExportDims).toBeNull();
+  expect(declaredResult.metrics!.codes).toEqual([
+    { code: "dimensions_irreconcilable", severity: "error", detail: expect.stringContaining("367×88 device px"), ref: odd },
+  ]);
+  // Вердикта по этой поверхности нет — и гейт это говорит, а не выдаёт `pass`.
+  expect(declaredResult.status).toBe("indeterminate");
+
+  // Та же несводимость без объявленной поверхности — диагностика: ничей вердикт от неё не зависит.
+  const undeclared = await context({ db, referenceAssetId: odd });
+  const undeclaredResult = await geometry2Gate.run(undeclared.ctx);
+  expect((undeclaredResult.metrics!.codes as { severity: string }[])[0]!.severity).toBe("warning");
+  // Никто ничего не объявлял — несводимость ничей вердикт не двигает.
+  expect(undeclaredResult.status).toBe("pass");
+
+  // dsf=1: те же 367×88 device px сводятся один к одному.
+  const oneToOne = await context({ db, referenceAssetId: odd, dsf: 1, expectedSurfaces: { referenceExport: { width: 367, height: 88 } } });
+  const oneToOneResult = await geometry2Gate.run(oneToOne.ctx);
+  expect(oneToOneResult.metrics!.referenceExportDims).toEqual({ width: 367, height: 88 });
+  expect(oneToOneResult.metrics!.codes).toEqual([]);
+  db.close();
+});
+
+test("W1b: clipExpectation судится по клипу самого корня, а не по предкам поверхности", async () => {
+  const honest = await context({
+    result: paintResult({ rootBounds: { x: 64, y: 64, width: 343, height: 88 }, clipChain: [{ key: "card", property: "overflow", value: "hidden hidden", effective: true }] }),
+    expectedSurfaces: { root: { width: 343, height: 88 } }, clipExpectation: "root-does-not-clip-layout",
+  });
+  const honestResult = await geometry2Gate.run(honest.ctx);
+  expect(honestResult.metrics!.clipSatisfied).toBe(true);
+
+  const violated = await context({
+    result: paintResult({ rootBounds: { x: 64, y: 64, width: 343, height: 88 }, rootClip: { property: "overflow", value: "hidden hidden" } }),
+    expectedSurfaces: { root: { width: 343, height: 88 } }, clipExpectation: "root-does-not-clip-layout",
+  });
+  const violatedResult = await geometry2Gate.run(violated.ctx);
+  expect(violatedResult.status).toBe("fail");
+  expect(violatedResult.metrics!.clipSatisfied).toBe(false);
+  expect(violatedResult.detail).toContain("the root box declares overflow: hidden hidden");
 });

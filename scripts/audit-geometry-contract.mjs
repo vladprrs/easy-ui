@@ -18,6 +18,14 @@
  *   измеренного `layoutBounds` прямо в ране (`server/acceptance/gates/visual.ts#referenceCanvasOf`).
  *   Числа в манифесте не поменяются, а канва — да, поэтому эталон подлежит перепроверке.
  *
+ * **Волна 2026-08-07 (W1a/W1b), класс `legacy-branch-order-sensitive`.** Вердикт получил вторую
+ * ветку (per-surface), а легаси-вход обязан исполнять прежний код байт-в-байт. Наблюдаемая разница
+ * между ветками возможна ровно там, где значим **порядок решений**: `expectedGeometry` вместе с
+ * `allowPaintOverflow`/`expectedClip`. Прогон на восстановленной копии прод-тома — доказательство
+ * того, что таких семей ноль (либо поимённый список, который координатор переводит осознанно).
+ * Прогон с `--server-url` дополнительно печатает новые факты кадра (`rootBounds`,
+ * `referenceExportDims`) — они меряются безусловно и в доволновых манифестах.
+ *
  * **Режимы.**
  *   bun scripts/audit-geometry-contract.mjs                       # инвентаризация data/easy-ui.db
  *   bun scripts/audit-geometry-contract.mjs --db .backups/prod.db # то же по копии прод-базы
@@ -49,15 +57,35 @@ const serverUrl = flag("server-url", null);
 const onlyComponent = flag("component", null);
 const asJson = has("json");
 
-/** Классификация случая: почему смена контракта измерения его касается. */
-function riskOf(entry, manifest) {
-  const surface = entry.referenceSurface ?? null;
-  if (entry.expectedGeometry) return "expected-geometry-declared";
-  if (surface === "content-hug") return "canvas-from-measurement";
+/**
+ * Классификация случая: почему смена контракта измерения (W2) либо новая ветка вердикта
+ * (волна 2026-08-07, W1a/W1b) его касается. Классов у случая может быть несколько — они отвечают
+ * на разные вопросы, и схлопывать их в один значило бы потерять ровно тот, ради которого запущен
+ * прогон.
+ *
+ * - `expected-geometry-declared` / `canvas-from-measurement` / `paint-policy-declared` — исходные
+ *   классы W2 (смена семантики `layoutBounds`).
+ * - `legacy-branch-order-sensitive` (**W1b**) — `expectedGeometry` **вместе с**
+ *   `allowPaintOverflow`/`expectedClip`. Это единственная комбинация, где наблюдаем **порядок
+ *   решений** легаси-ветки: ранний `return layout-overflow` выносится до проверки краски, поэтому
+ *   paint-намерения на таком случае сегодня не применяются вовсе. Ожидание аудита — ноль
+ *   расхождений (легаси-ветка байт-идентична), и перечень существует как **доказательство** этого,
+ *   а не как список к правке.
+ * - `surfaces-declared` — случай уже переведён на новый путь (`expectedSurfaces`/
+ *   `comparisonSurface`/`clipExpectation`): его вердикт считается новой веткой по построению.
+ */
+export function risksOf(entry, manifest) {
+  const policy = manifest.policy?.perCase?.[entry.id] ?? {};
+  const paintPolicy = Boolean(policy.allowPaintOverflow || policy.expectedClip);
+  const risks = [];
+  if (entry.expectedGeometry) risks.push("expected-geometry-declared");
+  else if ((entry.referenceSurface ?? null) === "content-hug") risks.push("canvas-from-measurement");
   // Кейс без объявленного контура и без content-hug эталона: вердикт геометрии смотрит только на
   // paint-overflow, а он от смены layoutBounds тоже зависит — но лишь когда краска выходит наружу.
-  const policy = manifest.policy?.perCase?.[entry.id] ?? {};
-  return policy.allowPaintOverflow || policy.expectedClip ? "paint-policy-declared" : null;
+  if (paintPolicy) risks.push("paint-policy-declared");
+  if (entry.expectedGeometry && paintPolicy) risks.push("legacy-branch-order-sensitive");
+  if (entry.expectedSurfaces || entry.comparisonSurface || entry.clipExpectation) risks.push("surfaces-declared");
+  return risks;
 }
 
 function inventory() {
@@ -74,11 +102,18 @@ function inventory() {
     if (onlyComponent && row.component_id !== onlyComponent) continue;
     const cases = [];
     for (const entry of manifest.cases ?? []) {
-      const risk = riskOf(entry, manifest);
-      if (!risk) continue;
+      const risks = risksOf(entry, manifest);
+      if (!risks.length) continue;
       cases.push({
         caseId: entry.id,
-        risk,
+        // `risk` — ведущий класс (совместимость с прежним отчётом), `risks` — полный набор.
+        risk: risks[0],
+        risks,
+        expectedSurfaces: entry.expectedSurfaces ?? null,
+        clipExpectation: entry.clipExpectation ?? null,
+        comparisonSurface: entry.comparisonSurface ?? null,
+        allowPaintOverflow: manifest.policy?.perCase?.[entry.id]?.allowPaintOverflow ?? null,
+        expectedClip: manifest.policy?.perCase?.[entry.id]?.expectedClip ?? null,
         expectedGeometry: entry.expectedGeometry ?? null,
         referenceSurface: entry.referenceSurface ?? null,
         referencePlacement: entry.referencePlacement ?? null,
@@ -140,6 +175,11 @@ async function measure(report) {
       const gate = (item.gates ?? []).find((candidate) => candidate.gate === "geometry");
       const measured = gate?.metrics?.layoutBounds ?? null;
       target.measured = measured ? { width: measured.width, height: measured.height } : null;
+      // W1b: безусловные замеры кадра — их и предстоит объявлять поверхностями.
+      const root = gate?.metrics?.rootBounds ?? null;
+      target.measuredRoot = root ? { width: root.width, height: root.height } : null;
+      target.measuredReferenceExport = gate?.metrics?.referenceExportDims ?? null;
+      target.rootClip = gate?.metrics?.rootClip ?? null;
       target.geometryStatus = gate?.status ?? null;
       target.delta = measured && target.expectedGeometry
         ? { width: measured.width - target.expectedGeometry.width, height: measured.height - target.expectedGeometry.height }
@@ -155,8 +195,13 @@ if (asJson) {
   console.log(JSON.stringify({ db: dbPath, measured: Boolean(serverUrl), caseSets: report }, null, 2));
 } else {
   const affectedCases = report.reduce((total, set) => total + (set.cases?.length ?? 0), 0);
+  const byClass = new Map();
+  for (const set of report) for (const entry of set.cases ?? []) {
+    for (const risk of entry.risks ?? [entry.risk]) byClass.set(risk, (byClass.get(risk) ?? 0) + 1);
+  }
   console.log(`db: ${dbPath}`);
   console.log(`затронутых case-set'ов: ${report.length}, случаев: ${affectedCases}`);
+  for (const [risk, count] of [...byClass].sort()) console.log(`  ${risk}: ${count}`);
   for (const set of report) {
     if (set.error) { console.log(`- ${set.caseSetId} (${set.componentId}): ${set.error}`); continue; }
     console.log(`\n- ${set.caseSetId}  component=${set.componentId}  ds=${set.designSystem}  created=${set.createdAt}`);
@@ -166,8 +211,15 @@ if (asJson) {
       const measured = entry.measured ? `${entry.measured.width}×${entry.measured.height}` : "—";
       const delta = entry.delta ? ` Δ=${entry.delta.width >= 0 ? "+" : ""}${entry.delta.width}×${entry.delta.height >= 0 ? "+" : ""}${entry.delta.height}` : "";
       const gate = entry.geometryStatus ? ` geometry=${entry.geometryStatus}` : "";
-      console.log(`    ${entry.caseId}: ${entry.risk}  expected=${declared}  measured=${measured}${delta}${gate}`
-        + (entry.referenceSurface ? `  referenceSurface=${entry.referenceSurface}` : ""));
+      console.log(`    ${entry.caseId}: ${(entry.risks ?? [entry.risk]).join("+")}  expected=${declared}  measured=${measured}${delta}${gate}`
+        + (entry.referenceSurface ? `  referenceSurface=${entry.referenceSurface}` : "")
+        + (entry.expectedSurfaces ? `  expectedSurfaces=${Object.keys(entry.expectedSurfaces).join(",")}` : "")
+        + (entry.clipExpectation ? `  clipExpectation=${entry.clipExpectation}` : ""));
+      if (entry.measuredRoot || entry.measuredReferenceExport) {
+        const root = entry.measuredRoot ? `${entry.measuredRoot.width}×${entry.measuredRoot.height}` : "—";
+        const exported = entry.measuredReferenceExport ? `${entry.measuredReferenceExport.width}×${entry.measuredReferenceExport.height}` : "—";
+        console.log(`        root=${root}  referenceExport=${exported}${entry.rootClip ? `  rootClip=${entry.rootClip.property}` : ""}`);
+      }
     }
   }
   if (!serverUrl) console.log("\n(измерение не запускалось: передайте --server-url для dry-run на новой семантике)");

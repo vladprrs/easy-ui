@@ -92,6 +92,12 @@ export interface GeometryPolicyInput {
    * не измерен: поверхность `root` получает вердикт `not-measured`, а не догадку по `layoutBounds`.
    */
   rootBounds?: GeometryPolicyRect | null;
+  /**
+   * Клип, объявленный **самим корневым боксом** (`detail.rootClip`, W1b). `null`/отсутствие — корень
+   * не режет свой layout. Это не то же самое, что `clipChain`: там предки поверхности съёмки, а
+   * `clipExpectation` — утверждение ровно о корне компонента.
+   */
+  rootClip?: { property: string; value: string } | null;
   /** Габариты эталонного экспорта в **CSS px** (гейт нормализует device px ассета делением на dsf). */
   referenceExportDims?: SurfaceDims | null;
   tolerances?: GeometryTolerancesInput;
@@ -397,12 +403,18 @@ function evaluateSurfaces(input: GeometryPolicyInput, declared: ExpectedSurfaces
 
   // `clipExpectation` проверяем только когда есть с чем сравнивать: без бокса корня утверждение
   // «корень не режет layout» непроверяемо, и `null` честнее выдуманного `true`.
+  //
+  // Факт — `rootClip` (W1b): клип, объявленный **самим** корневым боксом. Восходящая `clipChain`
+  // здесь не годится дважды: её звенья лежат выше корня (обёртки поверхности съёмки), и её
+  // `effective` считается по краске, тогда как утверждение автора — про layout. Клип объявлен ⇒
+  // `layoutUnion` уже обрезан корнем, то есть «union может выходить за корень» — ложь.
+  const rootClip = input.rootClip ?? null;
   const clipSatisfied = tolerances.clipExpectation === undefined || input.rootBounds == null
     ? null
-    : clip === null;
+    : rootClip === null;
   if (clipSatisfied === false) {
     reasons.push(`clipExpectation "${tolerances.clipExpectation!}" is violated:`
-      + ` the layout union is clipped by ${clip!.property}: ${clip!.value}`);
+      + ` the root box declares ${rootClip!.property}: ${rootClip!.value}, so it does clip its layout`);
   }
 
   // `expectedGeometryDelta` сохраняется как **проекция** `surfaces.layoutUnion`: потребители

@@ -70,6 +70,23 @@ export interface GeometryDetail {
    * элементов, а каждый бокс пересекается со стеком клипающих предков внутри поддерева маркера.
    */
   layoutBounds: GeometryBox | null;
+  /**
+   * Border-box **корневого бокса** компонента (W1b, план 2026-08-07 §1.1). Замер безусловный и
+   * аддитивный: `layoutBounds` не меняется, поэтому `GEOMETRY_CONTRACT_VERSION` остаётся 2.
+   *
+   * Определение: от маркера (`span[display:contents]`) спуск **сквозь** цепочки `display:contents`
+   * (включая вложенные маркеры) до первого поколения боксовых потомков; ровно один бокс — его
+   * border-box, ноль либо два и более (Fragment-корень) — `null`. У overlay-корня
+   * (`rootSource: "overlay"`) — бокс самого элемента детали, без спуска. `null` означает
+   * «не измерено» (`not-measured` у поверхности `root`), а не «нулевой размер».
+   */
+  rootBounds: GeometryBox | null;
+  /**
+   * Клип, объявленный **самим корневым боксом** (`overflow: hidden|clip`, `clip-path`; у
+   * прокручиваемого overlay-корня — ещё и `auto|scroll`). Факт для `clipExpectation`: `null` —
+   * корень не режет свой layout, и превышение `layoutUnion` над `rootBounds` законно.
+   */
+  rootClip: { property: "overflow" | "clip-path"; value: string } | null;
   effectSources: GeometryEffectSource[];
   clipChain: GeometryClipLink[];
   /**
