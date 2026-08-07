@@ -45,6 +45,7 @@ import { referencedArtifactShas } from "./acceptance/evidence";
 import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
 import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
+import { candidateOverlayEnabled } from "./acceptance/caseSets";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -258,6 +259,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // режима `reference` и галерейного опт-ина. Он render-affecting через отпечатки
     // (`policyProfileHash`/`readinessPolicyHash`/`rendererFingerprint`), поэтому факт включения
     // обязан быть виден в логе старта, а не только в env контейнера.
+    // W3 (план 2026-08-07 §1.2/§W3): kill-switch candidate dependency overlay. Он **не** меняет
+    // отпечатки уже созданных ранов — он запрещает создавать новые overlay-манифесты и overlay-раны
+    // (`422 candidate_overlay_disabled`), то есть возвращает доволновое «сначала опубликуй лист».
+    // Rollback-window миграции v33: пока откат образа возможен без восстановления тома, overlay-раны
+    // создавать нельзя — старый образ промоутит такой ран **без** верификации графа зависимостей.
+    if(!candidateOverlayEnabled()) console.warn("[acceptance] EASYUI_CANDIDATE_OVERLAY_DISABLED=1: candidate dependency overlay off, case-set manifests with candidateOverlay are refused (422 candidate_overlay_disabled)");
     if(RESOURCE_BARRIER_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_DISABLED=1: resource barrier off, profiles fall back to their pre-wave readiness policies (default-v1 → v1, pixel-strict-v1 → v2, reference → v2)");
     const dataDir=process.env.DATA_DIR??"data";
     // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,

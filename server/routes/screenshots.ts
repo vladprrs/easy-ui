@@ -5,6 +5,7 @@ import type { Principal } from "../auth";
 import { requirePrototypeOwner, requirePrototypeRead, requireResourceOwner, requireUser, resourceOwner } from "../authorization";
 import { registerOverlayLease, releaseOverlayLease } from "../components/candidates";
 import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
+import { parseCandidateOverlayInput, resolveOverlayMap } from "../acceptance/caseSets";
 import type { ReadinessPolicy } from "../../src/capture/readinessPolicy";
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -164,6 +165,11 @@ export function authorizeReceiptOwner(db: Database, ownerKey: string, principal:
  * draft-preview (P1b), потому что постановка draft-джобы собирает candidate-bundle тем же
  * тяжёлым префлайтом. Опубликованная съёмка кандидата не строит и продолжает работать.
  */
+/** ДС компонента — фильтр узлов overlay на диагностических поверхностях (§W3). */
+const componentDesignSystem = (db: Database, id: string): string | null =>
+  (db.query("SELECT design_system FROM components WHERE id=? AND deleted_at IS NULL")
+    .get(id) as { design_system: string } | null)?.design_system ?? null;
+
 export async function routeScreenshots(request: Request, db:Database, service: ScreenshotService | undefined, segments: string[], principal:Principal, options:{validateDisabled?:boolean;acceptanceMatrix?:boolean}={}): Promise<Response | null> {
   // GET /api/screenshot-jobs/:jobId
   if (segments[0] === "screenshot-jobs" && segments.length === 2) {
@@ -259,8 +265,23 @@ export async function routeScreenshots(request: Request, db:Database, service: S
     if (b.props !== undefined && !isObject(b.props)) throw new ApiError(422, "invalid_props", "props must be a JSON object");
     if (b.exampleName !== undefined && typeof b.exampleName !== "string") throw new ApiError(400, "invalid_request", "exampleName must be a string");
     if (b.probe !== undefined && b.probe !== "geometry") throw new ApiError(400, "invalid_request", "probe must be geometry");
+    // §W3 (план 2026-08-07), диагностическая поверхность: карта overlay резолвится и уезжает в
+    // ответ **эхом** — узлы с их `rev/sourceHash/bundleHash`. Ничего не сохраняется и ничем не
+    // подменяется: приёмочная поверхность графа ровно одна — component case set.
+    if (b.candidateOverlay !== undefined && options.acceptanceMatrix !== true) {
+      throw new ApiError(404, "not_found", "Candidate dependency overlay is disabled");
+    }
+    const overlay = b.candidateOverlay === undefined ? null : resolveOverlayMap({
+      db,
+      overlay: parseCandidateOverlayInput(b.candidateOverlay),
+      // ДС субъекта: узел чужой системы не диагностика, а ошибка адресации.
+      designSystem: componentDesignSystem(db, segments[1]!),
+      // `dataDir` не передаётся намеренно: диагностика отвечает на вопрос «во что резолвится карта»,
+      // а живость файлового бандла — вопрос постановки рана, и подменять один другим нельзя.
+      mode: "gating",
+    });
     const result = await service.enqueueComponentDraft(segments[1]!, actor.userId, { props: b.props as Record<string, unknown> | undefined, exampleName: b.exampleName as string | undefined, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false, probe: b.probe as "geometry" | undefined });
-    return json(result, 202, noStore);
+    return json({ ...result, ...(overlay === null ? {} : { candidateOverlay: overlay }) }, 202, noStore);
   }
   return null;
 }

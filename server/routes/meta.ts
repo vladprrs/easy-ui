@@ -38,7 +38,7 @@ import {
 } from "../acceptance/policies";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
-  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
+  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
   CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
 } from "../../src/acceptance/caseSetSchema";
@@ -151,6 +151,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // Подмен кандидатов на один прототипный кадр (§B1): overlay — точечная проверка ревизии
       // уже опубликованного компонента в композиции, а не способ собрать кадр из черновиков.
       prototypeCandidateOverlayMax,
+      // Узлов candidate dependency overlay в одном case-set-манифесте (план 2026-08-07 §W3).
+      // Не путать с `prototypeCandidateOverlayMax`: тот про **swap опубликованных** пинов
+      // прототипного кадра, этот — про неопубликованные зависимости приёмочного графа.
+      caseSetMaxOverlayNodes: CASE_SET_MAX_OVERLAY_NODES,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,

@@ -24,7 +24,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/p
 import { resolve } from "node:path";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { ApiError } from "../http";
-import type { ResolvedSlotBinding } from "./cases";
+import type { ResolvedSlotBinding, RunOverlayNode } from "./cases";
 import { isRunId, type VerdictPolicySnapshot } from "./ids";
 import { evidenceMaxBytes as DEFAULT_EVIDENCE_MAX_BYTES, acceptanceCaseTtlHours } from "./policies";
 import type { AcceptanceRepo } from "./repo";
@@ -122,9 +122,12 @@ export interface EvidenceEntry { name: string; sha256: string; bytes: number }
  */
 export interface EvidenceSlotChild {
   componentId: string;
-  /** Имя опубликованного компонента — то, чем ребёнок пинуется в манифесте набора. */
+  /** Имя компонента — то, чем ребёнок пинуется в манифесте набора. */
   name: string;
-  version: number;
+  /** Отсутствует у overlay-ребёнка (волна 2026-08-07 §W3): кандидат не опубликован. */
+  version?: number;
+  /** Кандидат, из которого взят overlay-ребёнок (§W3); у пиннутого ребёнка отсутствует. */
+  candidateId?: string;
   bundleHash: string;
   props: Record<string, unknown>;
   propsHash: string;
@@ -196,7 +199,9 @@ export function evidenceSlotsOf(
     children.push({
       componentId: binding.componentId,
       name: binding.name,
-      version: binding.version,
+      // §W3: условные ключи — запись пиннутого ребёнка остаётся побайтово прежней (golden §A7).
+      ...(binding.version === undefined ? {} : { version: binding.version }),
+      ...(binding.candidate === undefined ? {} : { candidateId: binding.candidate.candidateId }),
       bundleHash: binding.bundleHash,
       props: binding.props,
       propsHash: binding.propsHash,
@@ -219,6 +224,13 @@ export interface RunManifest {
   finishedAt: string;
   /** A10/N1: расхождение снимаемого билда с head — advisory-метка, а не отказ. */
   headDiverged?: boolean;
+  /**
+   * Резолвнутый граф неопубликованных зависимостей рана (волна 2026-08-07 §W3) и его хэш —
+   * ровно то, что персистировано в `acceptance_runs.overlay_manifest_json`/`overlay_hash`.
+   * Условные ключи: манифест overlay-free рана остаётся байт-в-байт прежним.
+   */
+  candidateOverlay?: RunOverlayNode[];
+  overlayHash?: string;
   cases: EvidenceCaseEntry[];
 }
 

@@ -45,7 +45,7 @@ function seedRun(repo: AcceptanceRepo, id: string, extra: Record<string, unknown
 
 test("v25 lands on a database migrated from scratch and leaves no foreign-key violations", () => {
   const db = dbForRepo();
-  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(33);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Partial unique index — первый в проекте; его наличие и есть механизм «≤1 нетерминальный run».
   const index = db.query("SELECT sql FROM sqlite_master WHERE type='index' AND name='acceptance_runs_one_in_flight'").get() as { sql: string } | null;
@@ -550,5 +550,60 @@ test("runCoverage separates two cases that differ only in slots_hash", () => {
   const otherCoverage = repo.runCoverage(other);
   expect(otherCoverage.keys.size).toBe(1);
   expect([...otherCoverage.keys].filter((key) => coverage.keys.has(key))).toEqual([]);
+  db.close();
+});
+
+// -------------------- candidate dependency overlay: durable-пин GC (§W3, план 2026-08-07)
+
+const OVERLAY = [
+  { componentId: "pay-leaf", candidateId: `cand_${"1".repeat(64)}`, rev: 1, sourceHash: "src-leaf", bundleHash: "bh-leaf" },
+  { componentId: "pay-mid", candidateId: `cand_${"2".repeat(64)}`, rev: 1, sourceHash: "src-mid", bundleHash: "bh-mid" },
+] as const;
+
+test("§W3: overlay персистится на ране и пинует бандлы зависимостей от GC — durable, через рестарт", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const { candidate } = repo.createCandidate(candidateInput());
+  const { run } = repo.createRun({
+    candidateId: candidate.candidate_id,
+    componentId: candidate.component_id,
+    policyProfileId: policy.id,
+    policyProfileHash: profileHash,
+    createdBy: "user_a",
+    overlay: OVERLAY,
+    cases: [{ caseId: "alpha", caseKey: "alpha", propsHash: "props-1", casePolicyHash: "case-policy-v0", caseFingerprint: "fp-1" }],
+  });
+  expect(JSON.parse(run.overlay_manifest_json!)).toEqual([...OVERLAY]);
+  expect(run.overlay_hash).toMatch(/^[0-9a-f]{64}$/);
+  expect(repo.runOverlay(run)).toEqual([...OVERLAY]);
+
+  // Пин: и голова кандидата, и **все** узлы графа. Иначе GC вытеснил бы бандл зависимости
+  // посреди рана, и кадр снялся бы с пустым слотом при том же frame_fingerprint.
+  expect([...repo.pinnedSourceHashes()].sort()).toEqual(["src-hash", "src-leaf", "src-mid"]);
+
+  // Имитация рестарта процесса: свежий репозиторий над той же БД. In-memory лизы для этого
+  // непригодны (триаж C-M2) — пин обязан жить в строке рана.
+  expect([...new AcceptanceRepo(db).pinnedSourceHashes()].sort()).toEqual(["src-hash", "src-leaf", "src-mid"]);
+
+  // Терминальный ран пин снимает: доказательства уже записаны, бандл больше не нужен.
+  repo.terminalizeRun(run.run_id, { status: "pass" });
+  expect([...repo.pinnedSourceHashes()]).toEqual([]);
+  db.close();
+});
+
+test("§W3: overlay-free ран оставляет обе колонки NULL и прежний набор пинов", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const run = seedRun(repo, "alpha");
+  expect({ manifest: run.overlay_manifest_json, hash: run.overlay_hash }).toEqual({ manifest: null, hash: null });
+  // Пустой массив — то же самое, что отсутствие графа (инвариант «отсутствует, а не пусто»).
+  const { candidate } = repo.createCandidate(candidateInput({ componentId: "yp-other", sourceHash: "src-other" }));
+  const empty = repo.createRun({
+    candidateId: candidate.candidate_id, componentId: candidate.component_id,
+    policyProfileId: policy.id, policyProfileHash: profileHash, createdBy: "user_a", overlay: [],
+    cases: [{ caseId: "alpha", caseKey: "alpha", propsHash: "props-1", casePolicyHash: "case-policy-v0", caseFingerprint: "fp-2" }],
+  }).run;
+  expect(empty.overlay_manifest_json).toBeNull();
+  expect([...repo.pinnedSourceHashes()].sort()).toEqual(["src-hash", "src-other"]);
   db.close();
 });

@@ -909,6 +909,53 @@ Charset `case.id` совпадает с charset имён записей evidence
 
 **Dry-run: `POST /components/:id/case-sets/validate`.** Те же проверки, что у `PUT`, **без записи**: ответ несёт вычисленный `caseSetId`, `cases {count, ids}` (набор случаев рана в том виде, в каком его построил бы оркестратор — с алиасами и отказом `empty_case_set`), `frames {count, ids}` (случаи **без** алиасов, то есть то, что действительно снимается: два состояния с одинаковыми props и разными `slotBindings` обязаны быть здесь двумя записями), `coverage`, `warnings` и `wouldBeCached` (набор с таким адресом уже опубликован, то есть `PUT` был бы идемпотентным повтором). Гейт возможности — `capabilities.features.caseSetValidate`; авторизация и коды отказов — как у `PUT`. Раньше единственным способом узнать вердикт сервера была мутирующая публикация, и черновой манифест оставлял в базе `cset_`-строку навсегда.
 
+#### `candidateOverlay`: неопубликованные зависимости графа (план 2026-08-07 §W3)
+
+Слот-биндинги закрыли «родитель со **опубликованными** детьми», но не первую публикацию связки: `type/version` адресует **публикацию**, и лист приходилось публиковать только ради приёмки родителя — та самая преждевременная публикация, которую ретроспектива миграции назвала дефектом P0.3. Манифест объявляет карту неопубликованных зависимостей и биндит их **overlay-формой** ребёнка:
+
+```jsonc
+{
+  "manifestVersion": 1,
+  "componentId": "pay-lead-block",
+  "candidateOverlay": { "pay-row": "cand_<sha256>", "pay-button": "cand_<sha256>" },
+  "cases": [{
+    "id": "primary",
+    "props": { "state": "default" },
+    "slotBindings": {
+      "items": [{ "overlay": "pay-row", "props": { "tone": "accent" },
+                  "slotBindings": { "action": [{ "overlay": "pay-button", "props": { "label": "Оплатить" } }] } }]
+    }
+  }]
+}
+```
+
+**Адресация — `components.id`, а не имя+версия.** У кандидата публикации нет, поэтому резолв идёт **мимо** `publishedPinByNameAndVersion` (та джойнит `component_publishes` и неопубликованное вернуть не может) — напрямую по строке компонента с проверкой той же дизайн-системы плюс строка `component_candidates`. У резолвнутого ребёнка поля `version` **нет вовсе**, а на его месте стоит `candidate.candidateId`: сентинел вроде `version: 0` исказил бы `slots_hash` и дизъюнктность покрытия мультиран-promote, притворившись настоящей версией. `props` у overlay-ребёнка те же, что у обычного, — иначе зависимость была бы вставима только пустой.
+
+**Замкнутость карты.** Дерево случая = голова рана (кандидат самого субъекта) + `slotBindings`. Узел, до которого дерево не дотягивается, — `422 candidate_overlay_unused`: молча принятый лишний узел сдвинул бы `frameFingerprint` **всех** случаев набора, не изменив ни одного пикселя. Объявление самого субъекта — тот же отказ (его голова приезжает кандидатом рана). Обратно: ребёнок, ссылающийся на необъявленный узел, — `422 candidate_overlay_unknown`.
+
+| Код | Когда | Где |
+|---|---|---|
+| `422 candidate_overlay_limit` | больше `limits.caseSetMaxOverlayNodes` (**8**) узлов | `PUT`/`validate` |
+| `422 candidate_overlay_duplicate` | один `candidateId` под двумя `componentId` (кандидат component-scoped) | `PUT`/`validate` |
+| `422 candidate_overlay_unused` / `candidate_overlay_unknown` | карта не замкнута на дерево случаев | `PUT`/`validate` |
+| `422 candidate_overlay_component_not_found` / `candidate_overlay_design_system_mismatch` / `candidate_overlay_component_mismatch` | узел не компонент каталога, из чужой системы, либо кандидат описывает другой компонент | `PUT`/`validate` |
+| `409 candidate_overlay_expired` / `candidate_overlay_evicted` | кандидат протух по TTL, его строки или его бандла больше нет | **старт рана** |
+| `422 candidate_overlay_disabled` | `EASYUI_CANDIDATE_OVERLAY_DISABLED=1` | везде |
+
+Живость кандидата на `PUT` — только warning `candidate_overlay_unresolved`: манифест контентно адресован и обязан переживать 24-часовой TTL кандидатского кэша, иначе идемпотентный повтор `PUT` переставал бы работать через сутки. Кандидат восстанавливается повторным `validate` того же исходника — его id детерминирован (`sourceHash` → `buildFingerprint` → `cand_`).
+
+**Durable-граф и пин GC.** На старте рана карта разворачивается в `[{componentId, candidateId, rev, sourceHash, bundleHash}]` (порядок — по `componentId`) и пишется одной записью с раном в `acceptance_runs.overlay_manifest_json` + `overlay_hash` (миграция **v33**). Отсюда же работает пин: `pinnedSourceHashes()` джойнит эту колонку, поэтому бандл зависимости нетерминального рана не вытесняется GC кандидатского кэша — **durable, переживает рестарт процесса** (in-memory лизы для этого непригодны; они остаются только у request-scoped превью). Реконструкция набора бегущего рана читает граф **из строки рана**, а не пересчитывает его по манифесту: durable-манифест обязан дать те же отпечатки, что персистированы, даже если кандидат за это время протух.
+
+**Слой инвалидации — кадровый, целиком.** `candidateOverlay` входит в `frameFingerprint` **каждого** случая набора. Принятая цена: узел, не дотягивающийся до конкретного кейса, всё равно двигает его кадр; дедуп по достижимости не строится (он потребовал бы обхода дерева на кейс ради экономии пересъёмки, которой в первой публикации графа всё равно нет). Overlay-free манифест байт-в-байт прежний: `.optional()` без `.default()` в схеме, условный спред в пре-образе.
+
+**Promote закрывает граф.** Фаза A сверяет: каждый узел overlay каждого зачтённого рана опубликован **сейчас** и тем же билдом — `409 overlay_dependency_not_published` (лист так и не опубликован) и `409 overlay_dependency_diverged` (публикация есть, но `bundleHash`/`sourceHash` другие: зелёный вердикт родителя относится к пикселям, которых больше никто не соберёт). Раны мультиран-promote обязаны нести **один** граф — иначе `422 overlay_hash_mismatch`. Успешная сверка едет warning'ом с номером версии, на которую приземлилась каждая зависимость. Порядок работ координатора: приёмка родителя с overlay → promote **зависимостей** → promote родителя.
+
+**Честная граница скоупа.** Durable-приёмочная поверхность графа ровно одна — component case set. Прототипный `candidateOverrides` остаётся **swap-only** над уже опубликованными пинами ревизии (документ прототипа принципиально не сохраняется с неопубликованным типом — инвариант `snapshotDefinitions`; осознанный отказ feedback-3, см. changelog), а **приёмки композиций не существует в принципе** — `server/acceptance/` про composition не знает. Диагностические поверхности принимают ту же карту и возвращают **эхо** резолва, ничего не подменяя и ничего не сохраняя: `POST /components/:id/head/screenshot` и `POST /compositions/:id/preview-tree` — полем `candidateOverlay` тела, `GET /prototypes/:id/screens/:screenId/render-status` — повторяемым query-параметром `candidateOverlay=<componentId>:<candidateId>`.
+
+**Коллизия имён.** `candidateOverlay` case-set-манифеста — **не** то же самое, что `CaptureExpected.candidateOverlay` прототипного пути (`src/capture/protocol.ts`): там это эхо swap'а **опубликованных** пинов в handshake кадра, здесь — декларация неопубликованных зависимостей случая. Разные типы, разные неймспейсы, общего кода нет.
+
+**Kill-switch и rollback-window.** `EASYUI_CANDIDATE_OVERLAY_DISABLED=1` отказывает **созданию** новых overlay-манифестов и overlay-ранов (`422 candidate_overlay_disabled`), возвращая доволновое «сначала опубликуй лист»; уже созданные раны дочитываются как есть — их отпечатки персистированы. Rollback-window миграции v33: **пока откат образа возможен, overlay-раны создавать нельзя** — старый образ прочитает такой ран и промоутит его **без** верификации графа зависимостей. После первого overlay-рана откат образа делается только вместе с восстановлением бэкапа тома (канон [Deployment](#deployment)).
+
 **Ран по набору.** `POST /acceptance-runs {candidateId, caseSetId}` строит случаи из манифеста: `capture` задаёт поверхность съёмки, `referenceAssetId`/`referenceSurface`/`referencePlacement`/`expectedGeometry`/`cropLineage` уезжают в durable-строки случаев, `policy.profile` + `policy.perCase[caseId]` дают `case_policy_hash`, который входит в `case_fingerprint` — правка допуска одного случая инвалидирует reuse ровно его. Эталон и его нормализацию потребляет [визуальный гейт](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5); все поля происхождения эталона — входы `comparisonFingerprint`, поэтому их правка даёт **re-diff** (пересравнение сохранённого кадра), а не пересъёмку и не пересчёт по старым метрикам.
 
 ### Поиск кандидатов на переиспользование
@@ -1417,6 +1464,8 @@ Cursor — каноническая строка `<ISO-8601>~<asset_id>`, нап
 **Байтовая ветка результата** (`{kind:"image-bytes", width, height, byteLength, pngSha256, imageProduced, consoleErrors, pageErrors, rendererBuild, browserVersion, …}`) принадлежит джобам, кадр которых **не ингестится в реестр ассетов**: capture'ам приёмки и overlay-джобам. Ни `assetId`, ни `imageUrl` у неё нет — байты живут в памяти процесса до истечения `RESULT_TTL` (10 минут) и читаются ручкой `GET /screenshot-jobs/:jobId/bytes` (`image/png`; у джобы без байтов — `404`). Сами байты в JSON-конверте статуса **не едут никогда**: санитизация стоит на HTTP-границе и применяется ко **всем** байтовым исходам, включая candidate-джобы приёмки (их статус раньше отдавал numeric-keyed массив на мегабайты); in-process потребитель (гейт капчура) продолжает получать байты тем же аксессором. `pngSha256` — тот же адрес кадра, что пишет в capture receipt воркер, и клиент обязан сверять им скачанное тело.
 
 **Capture-контракт (волна 7.1, аддитивно).** Обе ветки результата дополнительно несут `captureClean`, `productErrors[]`, `infraNoise[]`, `runtimeWarnings[]`; image-ветка ещё и `imageProduced: true`. `consoleErrors`/`pageErrors` остаются прежними (полный сырой список) — старые клиенты не ломаются. Классификация — единый allowlist в `server/screenshot/noise.ts`: `favicon.ico`, origin'ы браузерных расширений (`chrome-|moz-|safari-web-extension://`), `ERR_NETWORK_CHANGED`, `ResizeObserver loop …`, а также любое сообщение, все абсолютные URL которого ведут не на capture origin. Всё остальное — `productErrors`, то есть дефект самого прототипа; `captureClean === productErrors.length === 0`. `runtimeWarnings` — console-warning'и страницы (`[overlay] …` и подобные), они никогда не являются причиной провала.
+
+**Service capture hygiene (W10, план 2026-08-07, аддитивно).** Quality-блок дополнительно несёт `suppressedCount` (= `infraNoise.length`), а receipt — `console.suppressed[]` (`{signature, count}`) с теми же событиями, свёрнутыми в нормализованные сигнатуры (сумма `count` === `suppressedCount`). Сами capture-маршруты SPA вынесены из-под `AuthProvider`, поэтому сервисная съёмка больше не порождает фоновый `GET /api/auth/me` — этот источник шума удалён, а не подавлен.
 
 Geometry-ветка дискриминирована по `surface`: `"prototype"` — экран прототипа, `"component"` — одиночный компонент (`probe: "geometry"` принимают обе компонентные ручки, published и draft). Замер (`rects`, `truncated`, `total`, `safeArea`, `roleRects`, `frame`, `content`, `scroll`, `viewportOwnership`, `issues`), `viewport`, `dpr` и capture-контракт качества у обеих поверхностей одинаковы; различаются только поля цели. Прототипная поверхность:
 
@@ -2569,7 +2618,7 @@ Receipt собирается в `ScreenshotService` **после воркера 
 | `renderer` | объявление рендерера (§ [Renderer fingerprint 2.0](#renderer-fingerprint-20-волна-r1-план-2026-08-03-renderer-contract-2)) + `fingerprint`, `provenance`, `observedBrowserVersion`, `drift[]` (typed-коды расхождения) |
 | `target` | `kind`, `componentId`/`prototypeId`, `version`/`rev`, `sourceHash?`, `bundleHash`, `dsMetaVersion`, `propsHash`; неприменимые поля — `null` |
 | `resources` | `fontManifestHash`, `fontFaces[]` (`family/weight/style/assetId/sha256/status/checked/required`), `images[]` (`url/assetId/интринсики/decoded/contentHash`), `themeResources` |
-| `console` | `errors[]`, `warnings[]`, `pageErrors[]` |
+| `console` | `errors[]`, `warnings[]`, `pageErrors[]`, `suppressed[]` (W10: агрегат подавленного инфраструктурного шума — `{signature, count}`, сигнатура нормализована: первая строка, без query/hash, длинные числа/hex свёрнуты; ≤32 различных сигнатур, отсортировано по count↓) |
 | `output` | `viewport`, `dpr`, `colorScheme`, `pngWidth/pngHeight`, `pngSha256`, `surfaceRect`, `paintMargin?` — **`null` для `probe:"geometry"`**: кадра в этой ветке не существует |
 | `timings` | `navigateMs`, `screenshotMs`, `totalMs`, `readyMs`, `readinessMs` измеряются; пофазовые `fontsMs/imagesMs/networkMs/framesMs/stabilizeMs` объявлены и пока `null` — их источник (`collectReadiness`) публикует только суммарный `elapsedMs`. `null` означает «не измерялось», а не «ноль» |
 | `verdict` | `captureClean`, `codes[]` (типизированные коды readiness), `readinessMet`, `readinessPolicyHash` |

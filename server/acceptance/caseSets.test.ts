@@ -8,7 +8,7 @@ import {
   type CaseSetManifest,
 } from "../../src/acceptance/caseSetSchema";
 import {
-  buildCasesFromManifest, CaseSetRepo, caseDedupKeyOf, casePolicyHashOf, caseSetIdOf, coverageOf,
+  buildCasesFromManifest, CaseSetRepo, caseDedupKeyOf, casePolicyHashOf, caseSetIdOf, casesOfRun, coverageOf,
   dedupSlotsKeyOf, manifestOfRow, publishedPinByNameAndVersion, slotsHashOf, surfaceOfManifest,
   validateManifest,
 } from "./caseSets";
@@ -1193,5 +1193,214 @@ test("W1a: три отказа декларации поверхностей", (
 
   // Схема: пустая карта поверхностей — забытое намерение, а не «поверхностей нет».
   fails(() => validateManifest(db, "yp-badge", surfaceCase({ expectedSurfaces: {} })), 422, "validation_failed");
+  db.close();
+});
+
+// ------------------------- candidate dependency overlay (план 2026-08-07 §1.2/§W3)
+
+const CAND_LEAF = `cand_${"1".repeat(64)}`;
+const CAND_MID = `cand_${"2".repeat(64)}`;
+const CAND_OTHER = `cand_${"3".repeat(64)}`;
+
+/** Компонент **без единой публикации** — ровно тот случай, который до волны был невыразим. */
+const seedUnpublished = (db: Database, input: { id: string; name: string; designSystem?: string }): void => {
+  const designSystem = input.designSystem ?? "yandex-pay";
+  db.run(`INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at)
+    VALUES (?,?,1,?,NULL,'now','now')`, [input.id, input.name, designSystem]);
+  db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,message,created_at) VALUES (?,1,'src',?,NULL,'now')",
+    [input.id, designSystem]);
+};
+
+const seedCandidate = (db: Database, input: {
+  candidateId: string; componentId: string; designSystem?: string; rev?: number; expiresAt?: string;
+}): void => {
+  db.query(`INSERT INTO component_candidates
+    (candidate_id,component_id,design_system,rev,source_hash,bundle_hash,host_abi_version,theme_version,build_fingerprint,
+     observed_catalog_revision,policy_profile_hash,status,created_by,created_at,expires_at)
+    VALUES (?,?,?,?,?,?,4,NULL,'bf','cat','ph','validated','u','2026-08-07T00:00:00.000Z',?)`)
+    .run(input.candidateId, input.componentId, input.designSystem ?? "yandex-pay", input.rev ?? 1,
+      `src-${input.componentId}`, `bundle-${input.componentId}`,
+      input.expiresAt ?? new Date(Date.now() + 3600_000).toISOString());
+};
+
+/** Родитель со слотом `items` + два **никогда не публиковавшихся** ребёнка с кандидатами. */
+const dbWithOverlayFamily = (): Database => {
+  const db = dbWithSlotFamily();
+  seedUnpublished(db, { id: "pay-leaf", name: "PayLeaf" });
+  seedUnpublished(db, { id: "pay-mid", name: "PayMid" });
+  seedCandidate(db, { candidateId: CAND_LEAF, componentId: "pay-leaf" });
+  seedCandidate(db, { candidateId: CAND_MID, componentId: "pay-mid" });
+  return db;
+};
+
+/** AC §5.1: неопубликованный родитель + два неопубликованных ребёнка (вложенный слот) — один набор. */
+const overlayManifest = (overrides: Record<string, unknown> = {}): Record<string, unknown> => manifest({
+  candidateOverlay: { "pay-leaf": CAND_LEAF, "pay-mid": CAND_MID },
+  cases: [{
+    id: "graph",
+    props: { title: "SMS" },
+    slotBindings: {
+      items: [{
+        overlay: "pay-mid",
+        props: { tone: "accent" },
+        slotBindings: { items: [{ overlay: "pay-leaf", props: { label: "inner" } }] },
+      }],
+    },
+  }],
+  ...overrides,
+} as unknown as Partial<CaseSetManifest>);
+
+test("§W3: неопубликованный родитель + два неопубликованных ребёнка живут в одном манифесте", () => {
+  const db = dbWithOverlayFamily();
+  const { manifest: parsed, warnings } = validateManifest(db, "yp-badge", overlayManifest());
+  expect(warnings).toEqual([]);
+  // Резолв идёт мимо `publishedPinByNameAndVersion`: та по построению не видит неопубликованное.
+  expect(publishedPinByNameAndVersion(db, "PayLeaf", 1, null)).toBeNull();
+
+  const cases = casesOfRun({
+    db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null,
+    manifest: parsed, mode: "gating",
+  });
+  const [item] = cases;
+  // Граф — durable-кортежи, отсортированные по componentId.
+  expect(item!.candidateOverlay).toEqual([
+    { componentId: "pay-leaf", candidateId: CAND_LEAF, rev: 1, sourceHash: "src-pay-leaf", bundleHash: "bundle-pay-leaf" },
+    { componentId: "pay-mid", candidateId: CAND_MID, rev: 1, sourceHash: "src-pay-mid", bundleHash: "bundle-pay-mid" },
+  ]);
+  const outer = item!.slotBindings![0]!;
+  // Версии у overlay-узла нет **вовсе** (не сентинел): её место занимает `candidate.candidateId`.
+  expect("version" in outer).toBe(false);
+  expect(outer.candidate).toEqual({ candidateId: CAND_MID, rev: 1, sourceHash: "src-pay-mid" });
+  expect(outer.componentId).toBe("pay-mid");
+  expect(outer.name).toBe("PayMid");
+  expect(outer.bundleHash).toBe("bundle-pay-mid");
+  expect(outer.children![0]!.componentId).toBe("pay-leaf");
+  expect(outer.children![0]!.candidate!.candidateId).toBe(CAND_LEAF);
+  // `slotsHash` считается по кандидатам, а не по несуществующим версиям.
+  expect(item!.slotsHash).toBe(slotsHashOf(item!.slotBindings!));
+  db.close();
+});
+
+test("§W3: незадействованный узел overlay — 422 candidate_overlay_unused", () => {
+  const db = dbWithOverlayFamily();
+  fails(() => validateManifest(db, "yp-badge", overlayManifest({
+    // `pay-leaf` объявлен, но дерево до него не дотягивается — тихий сдвиг frameFingerprint.
+    cases: [{ id: "graph", props: { title: "SMS" }, slotBindings: { items: [{ overlay: "pay-mid" }] } }],
+  })), 422, "candidate_overlay_unused");
+  // Субъект приёмки — тоже «никогда не задействован»: его голова приезжает кандидатом рана.
+  fails(() => validateManifest(db, "yp-badge", overlayManifest({
+    candidateOverlay: { "pay-leaf": CAND_LEAF, "pay-mid": CAND_MID, "yp-badge": CAND_OTHER },
+  })), 422, "candidate_overlay_unused");
+  db.close();
+});
+
+test("§W3: остальные декларативные отказы карты overlay", () => {
+  const db = dbWithOverlayFamily();
+  // Ребёнок ссылается на необъявленный узел.
+  fails(() => validateManifest(db, "yp-badge", manifest({
+    cases: [{ id: "graph", props: { title: "t" }, slotBindings: { items: [{ overlay: "pay-mid" }] } }],
+  } as unknown as Partial<CaseSetManifest>)), 422, "candidate_overlay_unknown");
+  // Один кандидат под двумя компонентами: кандидат component-scoped по построению.
+  fails(() => validateManifest(db, "yp-badge", overlayManifest({
+    candidateOverlay: { "pay-leaf": CAND_LEAF, "pay-mid": CAND_LEAF },
+  })), 422, "candidate_overlay_duplicate");
+  // Потолок графа.
+  const many: Record<string, string> = {};
+  for (let index = 0; index < 9; index += 1) many[`node-${index}`] = `cand_${String(index).repeat(64)}`;
+  fails(() => validateManifest(db, "yp-badge", overlayManifest({ candidateOverlay: many })), 422, "candidate_overlay_limit");
+  // Узел не компонент каталога / чужая дизайн-система.
+  fails(() => validateManifest(db, "yp-badge", overlayManifest({
+    candidateOverlay: { "pay-leaf": CAND_LEAF, "pay-mid": CAND_MID, ghost: CAND_OTHER },
+    cases: [{
+      id: "graph", props: { title: "t" },
+      slotBindings: { items: [{ overlay: "pay-mid" }, { overlay: "pay-leaf" }, { overlay: "ghost" }] },
+    }],
+  })), 422, "candidate_overlay_component_not_found");
+  seedUnpublished(db, { id: "sh-alien", name: "ShAlien", designSystem: "other-ds" });
+  fails(() => validateManifest(db, "yp-badge", overlayManifest({
+    candidateOverlay: { "pay-leaf": CAND_LEAF, "pay-mid": CAND_MID, "sh-alien": CAND_OTHER },
+    cases: [{
+      id: "graph", props: { title: "t" },
+      slotBindings: { items: [{ overlay: "pay-mid" }, { overlay: "pay-leaf" }, { overlay: "sh-alien" }] },
+    }],
+  })), 422, "candidate_overlay_design_system_mismatch");
+  // Цикл считается по всему пути — overlay-узел не исключение.
+  fails(() => validateManifest(db, "yp-badge", overlayManifest({
+    cases: [{
+      id: "graph", props: { title: "t" },
+      slotBindings: { items: [{ overlay: "pay-mid", slotBindings: { items: [{ overlay: "pay-mid" }, { overlay: "pay-leaf" }] } }] },
+    }],
+  })), 422, "slot_self_reference");
+  db.close();
+});
+
+test("§W3: живость кандидата — warning при PUT и 409 на постановке рана", () => {
+  const db = dbWithOverlayFamily();
+  db.run("DELETE FROM component_candidates WHERE candidate_id=?", [CAND_LEAF]);
+  const { manifest: parsed, warnings } = validateManifest(db, "yp-badge", overlayManifest());
+  // Манифест контентно адресован и обязан переживать 24-часовой TTL кандидатского кэша.
+  expect(warnings.some((line) => line.startsWith("candidate_overlay_unresolved:"))).toBe(true);
+  fails(() => casesOfRun({
+    db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null, manifest: parsed, mode: "gating",
+  }), 409, "candidate_overlay_evicted");
+
+  seedCandidate(db, { candidateId: CAND_LEAF, componentId: "pay-leaf", expiresAt: "2026-01-01T00:00:00.000Z" });
+  fails(() => casesOfRun({
+    db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null, manifest: parsed, mode: "gating",
+  }), 409, "candidate_overlay_expired");
+  // Реконструкция набора бегущего рана слепа к TTL: вопрос — «чем ран был поставлен».
+  expect(casesOfRun({
+    db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null, manifest: parsed, mode: "reconstruction",
+  })[0]!.candidateOverlay).toHaveLength(2);
+  db.close();
+});
+
+test("§W3: kill-switch отказывает манифесту с overlay, не трогая остальные", () => {
+  const db = dbWithOverlayFamily();
+  process.env.EASYUI_CANDIDATE_OVERLAY_DISABLED = "1";
+  try {
+    fails(() => validateManifest(db, "yp-badge", overlayManifest()), 422, "candidate_overlay_disabled");
+    expect(validateManifest(db, "yp-badge", manifest()).caseSetId).toMatch(/^cset_/);
+  } finally {
+    delete process.env.EASYUI_CANDIDATE_OVERLAY_DISABLED;
+  }
+  db.close();
+});
+
+test("§W3: overlay-free манифест байт-в-байт прежний — cset_ и frameFingerprint не двигаются", () => {
+  const db = dbWithOverlayFamily();
+  // Контентный адрес: поле `.optional()` без `.default()` не появляется в `parsed.data`.
+  expect(validateManifest(db, "yp-badge", manifest()).caseSetId)
+    .toBe("cset_" + Bun.CryptoHasher.hash("sha256", canonicalStringify({
+      manifestVersion: 1,
+      componentId: "yp-badge",
+      capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+      cases: [{ id: "default", props: { tone: "neutral" } }, { id: "accent", props: { tone: "accent" } }],
+    }), "hex"));
+
+  // Кадровый слой: пустой/отсутствующий overlay нормализуется в «поля нет».
+  const base = {
+    candidateId: `cand_${"0".repeat(64)}`, caseKey: "alpha", propsHash: "props-1",
+    surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
+    readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH, rendererFingerprint: DEFAULT_RENDERER_FINGERPRINT,
+  };
+  expect(frameFingerprint({ ...base, candidateOverlay: [] })).toBe(frameFingerprint(base));
+  expect(frameFingerprint({
+    ...base,
+    candidateOverlay: [{ componentId: "pay-leaf", candidateId: CAND_LEAF, rev: 1, sourceHash: "s", bundleHash: "b" }],
+  })).not.toBe(frameFingerprint(base));
+  db.close();
+});
+
+test("§W3: каталог неизменен — overlay не создаёт ни публикации, ни ревизии", () => {
+  const db = dbWithOverlayFamily();
+  const snapshot = () => JSON.stringify([
+    db.query("SELECT component_id,version,status FROM component_publishes ORDER BY component_id,version").all(),
+    db.query("SELECT component_id,rev FROM component_revisions ORDER BY component_id,rev").all(),
+  ]);
+  const before = snapshot();
+  const { manifest: parsed } = validateManifest(db, "yp-badge", overlayManifest());
+  casesOfRun({ db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null, manifest: parsed, mode: "gating" });
+  expect(snapshot()).toBe(before);
   db.close();
 });

@@ -26,7 +26,7 @@ import {
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import { rendererFingerprint } from "../capture/renderer";
-import type { AcceptanceCase } from "./cases";
+import type { AcceptanceCase, RunOverlayNode } from "./cases";
 import type { AcceptancePolicy, GateMode, GateName, GeometryTolerances, VisualTolerances } from "./policies";
 
 const sha256 = (value: string): string => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -196,6 +196,15 @@ export interface FrameFingerprintInput {
    * прод-кэш (инвариант «отсутствует, а не пусто», `cases.ts#ResolvedSlotBinding`).
    */
   slotBindings?: readonly FrameSlotBinding[];
+  /**
+   * **Candidate dependency overlay** случая (волна 2026-08-07 §W3), в порядке `componentId`.
+   * Кадровый слой по существу: узел overlay подменяет байты, которые рисуются внутри кадра.
+   *
+   * Кладётся **условным спредом** (`definedOnly`): `frameFingerprint` не версионируется, поэтому
+   * overlay-free вход обязан давать байт-в-байт тот же хэш, что до волны, — это доказывает
+   * golden-тест `ids.test.ts`.
+   */
+  candidateOverlay?: readonly RunOverlayNode[];
 }
 
 /** Кадровое подмножество разрешённой привязки слота (`ResolvedSlotBinding` без `name`/`props`). */
@@ -203,9 +212,12 @@ export interface FrameSlotBinding {
   slot: string;
   index: number;
   componentId: string;
-  version: number;
+  /** Отсутствует у overlay-узла (§W3): его место занимает `candidate.candidateId`. */
+  version?: number;
   bundleHash: string;
   propsHash: string;
+  /** Overlay-происхождение ребёнка (§W3); в пре-образ едет **только** `candidateId`. */
+  candidate?: { candidateId: string };
   /**
    * Вложенные дети (план 2026-08-06 §W6). Кладётся **условным спредом** ровно так же, как само
    * поле `slotBindings`: дерево глубины 1 обязано давать байт-в-байт прежний `frameFingerprint`,
@@ -220,7 +232,10 @@ function frameSlotProjection(bindings: readonly FrameSlotBinding[]): Record<stri
     slot: child.slot,
     index: child.index,
     componentId: child.componentId,
-    version: child.version,
+    // §W3: у пиннутого ребёнка — версия, у overlay-узла — `candidate: {candidateId}` на её месте.
+    // Оба ключа условны, поэтому пиннутое дерево остаётся байт-в-байт доволновым.
+    ...(child.version === undefined ? {} : { version: child.version }),
+    ...(child.candidate === undefined ? {} : { candidate: { candidateId: child.candidate.candidateId } }),
     bundleHash: child.bundleHash,
     propsHash: child.propsHash,
     ...(child.children === undefined || child.children.length === 0
@@ -254,8 +269,23 @@ export function frameFingerprint(
     readinessPolicyHash: input.readinessPolicyHash,
     rendererFingerprint: input.rendererFingerprint,
     slotBindings: slots,
+    // §W3: пустой overlay нормализуется в «поля нет» той же мерой, что и пустое дерево слотов.
+    candidateOverlay: input.candidateOverlay !== undefined && input.candidateOverlay.length > 0
+      ? input.candidateOverlay.map((node) => ({ ...node }))
+      : undefined,
     ...(geometryContractVersion > 1 ? { geometryContractVersion } : {}),
   }));
+}
+
+/**
+ * `overlay_hash` рана (§W3, миграция v33): sha256 канонизованного списка резолвнутых узлов.
+ *
+ * Отдельная величина, а не производная `frameFingerprint`: promote сверяет **набор ранов** на
+ * идентичность графа зависимостей (`422 overlay_hash_mismatch`) до всякого разбора кадров, а
+ * кадровые отпечатки у разных шардов семьи различны по построению.
+ */
+export function overlayHashOf(nodes: readonly RunOverlayNode[]): string {
+  return hashOf(nodes.map((node) => ({ ...node })));
 }
 
 /**
@@ -431,6 +461,12 @@ export interface CaseFingerprintCase {
    * `frameFingerprint`.
    */
   slotBindings?: readonly FrameSlotBinding[];
+  /**
+   * Overlay набора (§W3). Как и `slotBindings`, поле обязано быть **и здесь, и в
+   * `caseFingerprintsOf`**: тотальность `FIELD_LAYERS` доказывает только объявленный слой, но не
+   * то, что значение доехало до хэша.
+   */
+  candidateOverlay?: readonly RunOverlayNode[];
 }
 
 export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFingerprintCase): VerdictPolicySnapshot {
@@ -503,6 +539,8 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     // появиться ключом со значением `undefined` — и, что важнее, оно не должно быть **забыто**
     // здесь (гейт `FIELD_LAYERS` этого не ловит). Пустой массив нормализует `frameFingerprint`.
     ...(input.case.slotBindings === undefined ? {} : { slotBindings: input.case.slotBindings }),
+    // §W3: тот же условный спред. Overlay-free набор обязан остаться байт-в-байт доволновым.
+    ...(input.case.candidateOverlay === undefined ? {} : { candidateOverlay: input.case.candidateOverlay }),
   });
   const comparison = comparisonFingerprintOf({
     referenceAssetId: input.case.referenceAssetId ?? null,
@@ -623,6 +661,11 @@ export const FIELD_LAYERS = {
   // Дети слотов рисуются внутри кадра: их состав, версии, бандлы, props и **порядок** — прямые
   // входы пикселей, значит кадровый слой (план 2026-08-05 §A4).
   slotBindings: ["frame"],
+  // §W3 (волна 2026-08-07): узлы overlay подменяют байты **внутри кадра** — их состав, кандидаты и
+  // бандлы это прямые входы пикселей, значит кадровый слой. Цена принята планом (триаж C-m10):
+  // поле общее на набор, поэтому узел, не дотягивающийся до конкретного кейса, всё равно двигает
+  // его кадр; дедуп по достижимости не строится.
+  candidateOverlay: ["frame"],
   // Хэш разрешённого дерева слотов — производная `slotBindings`, уже захэшированных по значениям
   // кадровым слоем (та же логика, что у `casePolicyHash`). Он живёт как ключ покрытия, рукопожатия
   // капчура и evidence, но входом отпечатка быть не должен: иначе один и тот же факт учитывался бы

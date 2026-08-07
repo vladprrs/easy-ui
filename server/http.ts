@@ -14,6 +14,14 @@ export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRe
    */
   runPolicyProfileId?: string; allowed?: string[];
   /**
+   * План 2026-08-07 §W3 (candidate dependency overlay): какой узел графа и какой его кандидат
+   * не резолвится (`409 candidate_overlay_expired|evicted`, `422 candidate_overlay_*`), плюс
+   * срок жизни кандидата в отказе по протуханию.
+   */
+  componentId?: string; expiresAt?: string;
+  /** `422 overlay_hash_mismatch` мультиран-promote: какие графы разошлись. */
+  overlayHashes?: (string | null)[];
+  /**
    * План 2026-08-04 W7 (multi-run promote): состав набора ранов и то, чем он несогласован —
    * разные профили (`policyProfileIds`), разные рендереры (`rendererFingerprints`), пересечение
    * покрытия (`overlap`/`overlapCount`) или несходящееся суммарное покрытие

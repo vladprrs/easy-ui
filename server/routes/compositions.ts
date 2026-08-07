@@ -16,6 +16,7 @@ import { requireActiveDesignSystem } from "../designSystems";
 import { requireResourceOwner, requireUser } from "../authorization";
 import { writeAuditEvent } from "../audit";
 import type { Principal } from "../auth";
+import { parseCandidateOverlayInput, resolveOverlayMap } from "../acceptance/caseSets";
 
 /**
  * REST-поверхность версионированных композиций (волна 5 §5.4).
@@ -249,7 +250,7 @@ export async function routeCompositions(request: Request, db: Database, segments
     if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     requireUser(principal);
     const input = body(await readJson(request));
-    for (const key of Object.keys(input)) if (!["params", "variant", "rev"].includes(key)) throw new ApiError(400, "invalid_request", `Unknown field: ${key}`);
+    for (const key of Object.keys(input)) if (!["params", "variant", "rev", "candidateOverlay"].includes(key)) throw new ApiError(400, "invalid_request", `Unknown field: ${key}`);
     const params = input.params === undefined ? {} : input.params;
     if (typeof params !== "object" || params === null || Array.isArray(params)) throw new ApiError(400, "invalid_request", "params must be an object");
     const variant = input.variant;
@@ -259,6 +260,12 @@ export async function routeCompositions(request: Request, db: Database, segments
     }
     const revision = repo.revision(id, input.rev === undefined ? undefined : int(input.rev, "rev"));
     const designSystem = revision.designSystem;
+    // §W3 (план 2026-08-07), диагностическая поверхность: карта overlay резолвится и возвращается
+    // **эхом**. Раскрытие композиции она не трогает — приёмочная поверхность графа ровно одна
+    // (component case set), а composition-приёмки не существует в принципе (см. changelog).
+    const candidateOverlay = input.candidateOverlay === undefined ? null : resolveOverlayMap({
+      db, overlay: parseCandidateOverlayInput(input.candidateOverlay), designSystem, mode: "gating",
+    });
     const nested = resolveCompositionPins(db, nestedCompositionIds(revision.doc.spec.elements), designSystem);
     const compositions: Record<string, CompositionCatalogEntry> = {
       ...nested.sources,
@@ -300,6 +307,7 @@ export async function routeCompositions(request: Request, db: Database, segments
       slotBindings: log.slots.map((event) => ({ slot: event.slot, compositionId: event.compositionId, required: event.required, filled: event.filled, fallbackUsed: event.fallbackUsed })),
       layoutOwners: log.layouts.map((event) => ({ elementKey: event.elementKey, type: event.type, props: event.props })),
       expandedTree: expandedFragment(expanded.doc),
+      ...(candidateOverlay === null ? {} : { candidateOverlay }),
       issues,
     }, 200, noStore);
   }

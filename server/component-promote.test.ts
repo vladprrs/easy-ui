@@ -409,6 +409,61 @@ describe("promote with acceptance references (W1c, A9)", () => {
     expect(orchestrator.repo.requireCandidate(candidate.candidateId).status).toBe("validated");
   }, 180_000);
 
+  /**
+   * §W3 (план 2026-08-07): верификация графа overlay в фазе A promote.
+   *
+   * Раны создаются напрямую через repo с явным `overlay` — предмет проверки в том, как сага
+   * сверяет граф с каталогом, а не в том, как оркестратор его резолвит (это `caseSets.test.ts`).
+   */
+  test("overlay graph: unpublished dependency, diverged build, published match and a multi-run hash mismatch", async () => {
+    const { db, handler, orchestrator, id, candidate } = await acceptanceFixture("promote-overlay", "PromoteOverlay");
+    const promote = (body: Record<string, unknown>) =>
+      handler(req(`/components/${id}/promote`, "POST", { baseRev: 1, sourceHash: candidate.sourceHash, ...body }));
+    const codeOf = async (response: Response) => (await response.json() as { error: { code: string } }).error.code;
+    const overlayNode = { componentId: "pay-leaf", candidateId: `cand_${"1".repeat(64)}`, rev: 1, sourceHash: "src-leaf", bundleHash: "bh-leaf" };
+    const runWithOverlay = (overlay: { componentId: string; candidateId: string; rev: number; sourceHash: string; bundleHash: string }[]) => {
+      const run = orchestrator.repo.createRun({
+        candidateId: candidate.candidateId, componentId: id,
+        policyProfileId: DEFAULT_POLICY.id, policyProfileHash: POLICY_HASH,
+        createdBy: BOOTSTRAP_ADMIN_ID, cases: [], overlay,
+      }).run;
+      orchestrator.repo.terminalizeRun(run.run_id, { status: "pass" });
+      return run;
+    };
+
+    // 1. Зависимость не опубликована вовсе — версия каталога сослалась бы на байты кандидатского кэша.
+    const run = runWithOverlay([overlayNode]);
+    const notPublished = await promote({ candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+    expect(notPublished.status).toBe(409);
+    expect(await codeOf(notPublished)).toBe("overlay_dependency_not_published");
+
+    // 2. Опубликована — но другим билдом: зелёный вердикт родителя к нему не относится.
+    db.run(`INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('pay-leaf','PayLeaf',1,'yandex-pay','now','now')`);
+    db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('pay-leaf',1,'src','yandex-pay','now')");
+    db.run(`INSERT INTO component_publishes
+      (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at)
+      VALUES ('pay-leaf',1,1,'active','js','{}','src-leaf','bh-leaf-rebuilt',2,'now')`);
+    const diverged = await promote({ candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+    expect(diverged.status).toBe(409);
+    expect(await codeOf(diverged)).toBe("overlay_dependency_diverged");
+
+    // 3. Мультиран с разными графами — какая сборка дерева «настоящая», решить нельзя.
+    const other = runWithOverlay([]);
+    const mismatch = await promote({ candidateId: candidate.candidateId, acceptanceRunIds: [run.run_id, other.run_id] });
+    expect(mismatch.status).toBe(422);
+    expect(await codeOf(mismatch)).toBe("overlay_hash_mismatch");
+
+    // Ни один отказ не создал версии.
+    expect(versionRows(db, id)).toEqual([]);
+
+    // 4. Зависимость опубликована тем же билдом — promote проходит и рассказывает об этом warning'ом.
+    db.run("UPDATE component_publishes SET bundle_hash='bh-leaf' WHERE component_id='pay-leaf'");
+    const promoted = await promote({ candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    const body = await promoted.json() as { warnings: string[] };
+    expect(body.warnings.some((line) => line.includes("Overlay dependency pay-leaf"))).toBe(true);
+  }, 180_000);
+
   test("unknown ids are 404 and malformed ids are 400 — neither leaks another owner's acceptance", async () => {
     const { handler, id, candidate } = await acceptanceFixture("promote-badrefs", "PromoteBadrefs");
     const promote = (body: Record<string, unknown>) =>

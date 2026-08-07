@@ -24,17 +24,20 @@
  */
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
+import { existsSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import {
-  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
+  CANDIDATE_ID_PATTERN,
+  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
   COVERAGE_MISSING_TUPLES_LIMIT, DEFAULT_SLOT_KEY, caseSetManifestSchema,
-  expectedTuplesOf,
+  expectedTuplesOf, isOverlaySlotChild,
   type CaseSetCase, type CaseSetManifest, type CaseSetSlotBindings, type CaseSetSlotChild,
   type CropSourceSurface,
 } from "../../src/acceptance/caseSetSchema";
 import { caseSurfaceIssueOf } from "../../src/acceptance/surfaces";
 import { ApiError } from "../http";
-import type { CandidateEntry } from "../components/candidates";
-import { propsHashOf, type AcceptanceCase, type ResolvedSlotBinding } from "./cases";
+import { candidatesRoot, type CandidateEntry } from "../components/candidates";
+import { propsHashOf, type AcceptanceCase, type ResolvedSlotBinding, type RunOverlayNode } from "./cases";
 import { COMPARISON_PAINT_MARGIN_PX, type CaseSurface } from "./ids";
 import { acceptanceMaxCasesPerRun } from "./policies";
 
@@ -175,6 +178,302 @@ export function publishedPinByNameAndVersion(
     ? db.query(select).get(version, name)
     : db.query(`${select} AND cr.design_system=?`).get(version, name, designSystem);
   return (row as PublishedSlotPin | null) ?? null;
+}
+
+// ------------------------------------------- candidate dependency overlay (план 2026-08-07 §W3)
+
+/**
+ * Kill-switch волны (`EASYUI_CANDIDATE_OVERLAY_DISABLED=1`, план 2026-08-07 §1.2/§W11).
+ *
+ * Выключенный overlay — это отказ **создавать новые** overlay-манифесты и overlay-раны
+ * (`422 candidate_overlay_disabled`), а не тихое игнорирование карты: манифест без учтённых
+ * зависимостей снялся бы с пустыми слотами и объявил бы матрицу пройденной. Уже созданные раны
+ * дочитываются как есть — их отпечатки персистированы, и переписывать их флагом нельзя.
+ *
+ * Читается функцией, а не константой модуля: kill-switch обязан переключаться в тестах и в
+ * рестартнутом процессе одинаково (прецедент — `geometrySurfacesEnabled`).
+ */
+export const candidateOverlayEnabled = (): boolean => process.env.EASYUI_CANDIDATE_OVERLAY_DISABLED !== "1";
+
+interface OverlayCandidateRow {
+  candidate_id: string;
+  component_id: string;
+  design_system: string;
+  rev: number;
+  source_hash: string;
+  bundle_hash: string;
+  expires_at: string;
+}
+
+/** Строка кандидата overlay. Напрямую из `component_candidates`: publish-таблицы кандидата не знают. */
+function overlayCandidateRow(db: Database, candidateId: string): OverlayCandidateRow | null {
+  return (db.query(`SELECT candidate_id,component_id,design_system,rev,source_hash,bundle_hash,expires_at
+    FROM component_candidates WHERE candidate_id=?`).get(candidateId) as OverlayCandidateRow | null) ?? null;
+}
+
+/**
+ * Все `componentId`, на которые ссылаются overlay-дети дерева случаев — по **всем** случаям и всем
+ * уровням вложенности. Вход двух проверок замкнутости: узел overlay, до которого дерево не
+ * дотягивается (`candidate_overlay_unused`), и ребёнок, ссылающийся на необъявленный узел
+ * (`candidate_overlay_unknown`).
+ */
+function overlayReferencesOf(manifest: CaseSetManifest): Set<string> {
+  const referenced = new Set<string>();
+  const visit = (bindings: CaseSetSlotBindings): void => {
+    for (const children of Object.values(bindings)) {
+      for (const child of children) {
+        if (isOverlaySlotChild(child)) referenced.add(child.overlay);
+        if (child.slotBindings !== undefined) visit(child.slotBindings);
+      }
+    }
+  };
+  for (const item of manifest.cases) if (item.slotBindings !== undefined) visit(item.slotBindings);
+  return referenced;
+}
+
+/**
+ * Декларативные проверки overlay — то, что не зависит ни от живости кандидата, ни от момента
+ * запуска, и потому судится **при PUT** (и снова при dry-run/старте рана через ту же функцию).
+ *
+ * - `candidate_overlay_disabled` — kill-switch волны;
+ * - `candidate_overlay_limit` — больше `CASE_SET_MAX_OVERLAY_NODES` узлов: граф такого размера
+ *   надо резать на несколько публикаций, а не проносить одной приёмкой;
+ * - `candidate_overlay_duplicate` — один `candidateId` под двумя `componentId`: кандидат
+ *   component-scoped по построению (`ids.ts`), и такая карта описывает несуществующий факт;
+ * - `candidate_overlay_unused` — узел, до которого дерево случаев не дотягивается (сюда же попадает
+ *   объявление **субъекта** приёмки: его голова приезжает кандидатом рана, а не overlay'ем);
+ * - `candidate_overlay_unknown` — ребёнок ссылается на необъявленный `componentId`;
+ * - `candidate_overlay_component_not_found` / `candidate_overlay_design_system_mismatch` — узел
+ *   обязан быть компонентом той же дизайн-системы (не надгробием и не чужой системой): резолв идёт
+ *   **мимо** `publishedPinByNameAndVersion` (та не может вернуть неопубликованное), поэтому
+ *   принадлежность системе больше некому проверить.
+ *
+ * Живость самого кандидата здесь **не** проверяется: манифест контентно адресован и обязан
+ * переживать 24-часовой TTL кандидатского кэша, иначе идемпотентный повтор PUT переставал бы
+ * работать через сутки. Отсутствие/протухание — отказ старта рана (`409`, см. `resolveCandidateOverlay`).
+ */
+function assertOverlayDeclaration(
+  db: Database, manifest: CaseSetManifest, componentId: string, designSystem: string | null, warnings: string[],
+): void {
+  const overlay = manifest.candidateOverlay;
+  const referenced = overlayReferencesOf(manifest);
+  if (overlay === undefined) {
+    if (referenced.size > 0) {
+      const first = [...referenced].sort()[0]!;
+      throw new ApiError(422, "candidate_overlay_unknown",
+        `A slot child binds overlay "${first}", but the manifest declares no candidateOverlay map`,
+        { issues: [issue(["candidateOverlay"], `unknown overlay node: ${first}`)] });
+    }
+    return;
+  }
+  if (!candidateOverlayEnabled()) {
+    throw new ApiError(422, "candidate_overlay_disabled",
+      "Candidate dependency overlay is disabled on this server (EASYUI_CANDIDATE_OVERLAY_DISABLED=1);"
+      + " publish the dependencies first or re-enable the feature");
+  }
+  const entries = Object.entries(overlay);
+  if (entries.length > CASE_SET_MAX_OVERLAY_NODES) {
+    throw new ApiError(422, "candidate_overlay_limit",
+      `candidateOverlay declares ${entries.length} nodes, above the ceiling of ${CASE_SET_MAX_OVERLAY_NODES};`
+      + " split the dependency graph into several acceptance waves",
+      { issues: [issue(["candidateOverlay"], `at most ${CASE_SET_MAX_OVERLAY_NODES} overlay nodes`)] });
+  }
+  const byCandidate = new Map<string, string>();
+  for (const [node, candidateId] of entries) {
+    const first = byCandidate.get(candidateId);
+    if (first !== undefined) {
+      throw new ApiError(422, "candidate_overlay_duplicate",
+        `candidateOverlay maps ${first} and ${node} to the same candidate ${candidateId};`
+        + " a candidate is component-scoped and cannot stand for two components",
+        { issues: [issue(["candidateOverlay", node], `duplicate candidate id: ${candidateId}`)] });
+    }
+    byCandidate.set(candidateId, node);
+    if (node === componentId) {
+      throw new ApiError(422, "candidate_overlay_unused",
+        `candidateOverlay declares the subject component ${componentId}; the head of the run is its own`
+        + " acceptance candidate, so an overlay node for it can never be used",
+        { issues: [issue(["candidateOverlay", node], "the subject component is not an overlay node")] });
+    }
+    if (!referenced.has(node)) {
+      throw new ApiError(422, "candidate_overlay_unused",
+        `candidateOverlay declares ${node}, which no slot child of this set binds;`
+        + " an unused node would shift the frame fingerprint of every case without changing a pixel",
+        { issues: [issue(["candidateOverlay", node], "declared but never bound by a slot child")] });
+    }
+    const row = db.query("SELECT id,design_system FROM components WHERE id=? AND deleted_at IS NULL")
+      .get(node) as { id: string; design_system: string } | null;
+    if (!row) {
+      throw new ApiError(422, "candidate_overlay_component_not_found",
+        `candidateOverlay node ${node} is not a component of this catalog`,
+        { issues: [issue(["candidateOverlay", node], `unknown component: ${node}`)] });
+    }
+    if (designSystem !== null && row.design_system !== designSystem) {
+      throw new ApiError(422, "candidate_overlay_design_system_mismatch",
+        `candidateOverlay node ${node} belongs to design system ${row.design_system}, but ${componentId} belongs to ${designSystem}`,
+        { issues: [issue(["candidateOverlay", node], `child design system ${row.design_system} != ${designSystem}`)] });
+    }
+    // Живость кандидата — warning при PUT и отказ на старте рана: см. док-комментарий функции.
+    const candidate = overlayCandidateRow(db, candidateId);
+    if (candidate === null) {
+      warnings.push(`candidate_overlay_unresolved: candidateOverlay node ${node} points at ${candidateId},`
+        + " which this server no longer holds; re-validate the dependency before starting a run");
+    } else if (candidate.component_id !== node) {
+      throw new ApiError(422, "candidate_overlay_component_mismatch",
+        `candidateOverlay maps ${node} to candidate ${candidateId}, which describes ${candidate.component_id}`,
+        { issues: [issue(["candidateOverlay", node], `candidate belongs to ${candidate.component_id}`)] });
+    }
+  }
+  for (const node of [...referenced].sort()) {
+    if (overlay[node] === undefined) {
+      throw new ApiError(422, "candidate_overlay_unknown",
+        `A slot child binds overlay "${node}", which candidateOverlay does not declare`,
+        { issues: [issue(["candidateOverlay"], `unknown overlay node: ${node}`)] });
+    }
+  }
+}
+
+/**
+ * Разбор **эфемерной** карты overlay из запроса (§W3, п.3): диагностические поверхности
+ * (component preview, `preview-tree`, render-status) принимают ту же форму, что манифест набора,
+ * но ничего не сохраняют — ответ несёт лишь **эхо** резолва.
+ *
+ * Форма и потолки те же, что у декларации манифеста, и коды отказов те же: агент, научившийся
+ * читать `candidate_overlay_limit` на приёмочном пути, обязан узнавать его и на диагностическом.
+ */
+export function parseCandidateOverlayInput(value: unknown, at: (string | number)[] = ["candidateOverlay"]): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_request", "candidateOverlay must be an object of componentId → candidateId");
+  }
+  if (!candidateOverlayEnabled()) {
+    throw new ApiError(422, "candidate_overlay_disabled",
+      "Candidate dependency overlay is disabled on this server (EASYUI_CANDIDATE_OVERLAY_DISABLED=1)");
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > CASE_SET_MAX_OVERLAY_NODES) {
+    throw new ApiError(422, "candidate_overlay_limit",
+      `candidateOverlay declares ${entries.length} nodes, above the ceiling of ${CASE_SET_MAX_OVERLAY_NODES}`,
+      { issues: [issue(at, `at most ${CASE_SET_MAX_OVERLAY_NODES} overlay nodes`)] });
+  }
+  const out: Record<string, string> = {};
+  const byCandidate = new Map<string, string>();
+  for (const [node, candidateId] of entries) {
+    if (typeof candidateId !== "string" || !CANDIDATE_ID_PATTERN.test(candidateId)) {
+      throw new ApiError(400, "invalid_request", `candidateOverlay.${node} must be a candidate id (cand_<sha256>)`);
+    }
+    const first = byCandidate.get(candidateId);
+    if (first !== undefined) {
+      throw new ApiError(422, "candidate_overlay_duplicate",
+        `candidateOverlay maps ${first} and ${node} to the same candidate ${candidateId}`,
+        { issues: [issue([...at, node], `duplicate candidate id: ${candidateId}`)] });
+    }
+    byCandidate.set(candidateId, node);
+    out[node] = candidateId;
+  }
+  return out;
+}
+
+/**
+ * Резолв произвольной карты overlay (общий шов приёмочного и диагностического путей). Manifest-путь
+ * зовёт его через {@link resolveCandidateOverlay}, диагностический — напрямую.
+ */
+export function resolveOverlayMap(input: {
+  db: Database; dataDir?: string; overlay: Record<string, string>; designSystem: string | null;
+  mode: SlotResolutionMode; now?: number;
+}): readonly RunOverlayNode[] {
+  return resolveCandidateOverlay({
+    db: input.db,
+    ...(input.dataDir === undefined ? {} : { dataDir: input.dataDir }),
+    componentId: "",
+    designSystem: input.designSystem,
+    manifest: { candidateOverlay: input.overlay } as CaseSetManifest,
+    mode: input.mode,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  }) ?? [];
+}
+
+export interface ResolveCandidateOverlayInput {
+  db: Database;
+  /** Корень данных: нужен только gating-режиму — по нему проверяется, жив ли бандл кандидата. */
+  dataDir?: string;
+  componentId: string;
+  designSystem: string | null;
+  manifest: CaseSetManifest;
+  /**
+   * `"gating"` — постановка рана и dry-run: кандидат обязан быть жив (409 на протухшем/выселенном).
+   * `"reconstruction"` — восстановление набора бегущего рана: вопрос ровно один, «чем ран был
+   * поставлен», и TTL/наличие файлов на него не влияют (бандл пинует `pinnedSourceHashes`).
+   */
+  mode: SlotResolutionMode;
+  now?: number;
+}
+
+/**
+ * Разворачивает `candidateOverlay` манифеста в durable-кортежи узлов (§W3, п.2).
+ *
+ * Резолв идёт **напрямую по `component_candidates`**, мимо `publishedPinByNameAndVersion`: та
+ * джойнит `component_publishes` и по построению не может вернуть компонент, который никогда не
+ * публиковался (`caseSets.ts:1035-1057` — именно тот путь, который делал первую публикацию графа
+ * невыразимой).
+ *
+ * Порядок — по `componentId`: список входит в кадровый отпечаток и в `overlay_hash`, и порядок
+ * ключей клиентского JSON не имеет права его двигать.
+ */
+export function resolveCandidateOverlay(input: ResolveCandidateOverlayInput): readonly RunOverlayNode[] | undefined {
+  const overlay = input.manifest.candidateOverlay;
+  if (overlay === undefined || Object.keys(overlay).length === 0) return undefined;
+  if (input.mode === "gating" && !candidateOverlayEnabled()) {
+    throw new ApiError(422, "candidate_overlay_disabled",
+      "Candidate dependency overlay is disabled on this server (EASYUI_CANDIDATE_OVERLAY_DISABLED=1)");
+  }
+  const at = input.now ?? Date.now();
+  const nodes: RunOverlayNode[] = [];
+  for (const node of Object.keys(overlay).sort()) {
+    const candidateId = overlay[node]!;
+    const row = overlayCandidateRow(input.db, candidateId);
+    if (row === null) {
+      // Контентная иммутабельность `cset_` не гарантирует живучести референта (триаж C-m8):
+      // кандидат восстанавливается повторной валидацией того же исходника — id детерминирован.
+      throw new ApiError(409, "candidate_overlay_evicted",
+        `Overlay candidate ${candidateId} of ${node} no longer exists; re-run validate on that component`
+        + " and start the run again (the candidate id is derived from the source, so it will be the same)",
+        { componentId: node, candidateId });
+    }
+    if (row.component_id !== node) {
+      throw new ApiError(422, "candidate_overlay_component_mismatch",
+        `candidateOverlay maps ${node} to candidate ${candidateId}, which describes ${row.component_id}`,
+        { componentId: node, candidateId });
+    }
+    if (input.designSystem !== null && row.design_system !== input.designSystem) {
+      throw new ApiError(422, "candidate_overlay_design_system_mismatch",
+        `Overlay candidate ${candidateId} belongs to design system ${row.design_system}, not ${input.designSystem}`,
+        { componentId: node, candidateId });
+    }
+    if (input.mode === "gating") {
+      if (Date.parse(row.expires_at) <= at) {
+        throw new ApiError(409, "candidate_overlay_expired",
+          `Overlay candidate ${candidateId} of ${node} expired at ${row.expires_at};`
+          + " re-run validate on that component and start the run again",
+          { componentId: node, candidateId, expiresAt: row.expires_at });
+      }
+      // Бандл живёт в файловом кэше кандидатов и вытесняется GC независимо от строки БД
+      // (`components/candidates.ts`), поэтому «строка есть» ещё не значит «снять можно».
+      if (input.dataDir !== undefined
+        && !existsSync(resolvePath(candidatesRoot(input.dataDir), row.source_hash, "bundle.js"))) {
+        throw new ApiError(409, "candidate_overlay_evicted",
+          `The bundle of overlay candidate ${candidateId} (${node}) has been evicted from the candidate cache;`
+          + " re-run validate on that component and start the run again",
+          { componentId: node, candidateId });
+      }
+    }
+    nodes.push({
+      componentId: row.component_id,
+      candidateId: row.candidate_id,
+      rev: row.rev,
+      sourceHash: row.source_hash,
+      bundleHash: row.bundle_hash,
+    });
+  }
+  return nodes;
 }
 
 /** JSON-безопасность props ребёнка: тот же обход, что `validatePropsAgainstSchema` (`screenshot/service.ts`). */
@@ -336,11 +635,33 @@ function validateSlotBindings(db: Database, manifest: CaseSetManifest, component
               { issues: [issue(nodeAt, `the slot tree of a case holds at most ${CASE_SET_MAX_SLOT_NODES} nodes`)] });
           }
           const props = child.props ?? {};
+          const label = isOverlaySlotChild(child) ? `overlay ${child.overlay}` : child.type;
           if (!jsonSafeChildProps(props)) {
             throw new ApiError(422, "slot_props_dynamic",
-              `${where}: child ${child.type} declares $- or __eui-prefixed props;`
+              `${where}: child ${label} declares $- or __eui-prefixed props;`
               + " slot children take plain JSON data, not renderer directives",
               { issues: [issue([...nodeAt, "props"], "props must be JSON-safe and free of $-/__eui-prefixed keys")] });
+          }
+          // §W3: overlay-ребёнок адресуется `componentId` и разрешается кандидатом, а не публикацией.
+          // Проверять по нему нечего из того, что проверяется у пина: версии нет, статуса нет,
+          // `propsJsonSchema` живёт в кандидатском кэше и к манифесту отношения не имеет (голова
+          // кандидата законно отличается от последней публикации — тот же принцип, что §A2).
+          // Остаются структурные факты: цикл по пути и замкнутость карты (`assertOverlayDeclaration`).
+          if (isOverlaySlotChild(child)) {
+            if (ancestors.includes(child.overlay)) {
+              throw new ApiError(422, "slot_self_reference",
+                `${where}: binds overlay ${child.overlay}, which already renders this subtree`
+                + ` (${[...ancestors, child.overlay].join(" → ")})`,
+                { issues: [issue(nodeAt, "a slot subtree cannot bind the subject component or any of its own ancestors")] });
+            }
+            if (child.slotBindings !== undefined) {
+              // Хозяин вложенного уровня — неопубликованный кандидат: его слот-фактов в БД нет,
+              // судить членство нечем, и выдумывать отказ по несуществующему факту нельзя.
+              visit(child.slotBindings, [...nodeAt, "slotBindings"], depth + 1,
+                { facts: null, kind: "published", name: `overlay ${child.overlay}` },
+                [...ancestors, child.overlay]);
+            }
+            return;
           }
           const pin = pinOf(child.type, child.version);
           if (!pin) {
@@ -453,7 +774,10 @@ export function dedupSlotsKeyOf(slotBindings: CaseSetSlotBindings | undefined): 
   // Нормализация рекурсивна (§W6): дерево различается и вложенным содержимым тоже, а два случая с
   // одинаковыми props и разными внуками — два разных кадра.
   const normalizeChild = (child: CaseSetSlotChild): Record<string, unknown> => ({
-    type: child.type, version: child.version, propsHash: propsHashOf(child.props),
+    // §W3: у overlay-ребёнка нет ни имени публикации, ни версии — его различает `componentId`
+    // (сам `candidateId` в пределах одного манифеста от него производен и ничего не добавляет).
+    ...(isOverlaySlotChild(child) ? { overlay: child.overlay } : { type: child.type, version: child.version }),
+    propsHash: propsHashOf(child.props),
     // Условный ключ: набор глубины 1 обязан давать ровно прежний ключ дедупа.
     ...(child.slotBindings === undefined ? {} : { slotBindings: normalize(child.slotBindings) }),
   });
@@ -476,9 +800,11 @@ export interface ResolvedSlotTuple {
   slot: string;
   index: number;
   componentId: string;
-  version: number;
+  /** Отсутствует у overlay-узла (§W3): его место в пре-образе занимает `candidate.candidateId`. */
+  version?: number;
   bundleHash: string;
   propsHash: string;
+  candidate?: { candidateId: string };
   /** Вложенные дети (§W6). Отсутствует у листа — и у **всего** дерева глубины 1. */
   children?: readonly ResolvedSlotTuple[];
 }
@@ -501,7 +827,11 @@ export function slotsHashOf(bindings: readonly ResolvedSlotTuple[]): string {
 function slotsHashProjection(bindings: readonly ResolvedSlotTuple[]): Record<string, unknown>[] {
   return bindings.map((binding) => ({
     slot: binding.slot, index: binding.index, componentId: binding.componentId,
-    version: binding.version, bundleHash: binding.bundleHash, propsHash: binding.propsHash,
+    // §W3: `candidateId` **на месте версии** — оба ключа условны, поэтому пиннутое дерево даёт
+    // байт-в-байт прежний `slots_hash`, а overlay-узел не притворяется опубликованной версией.
+    ...(binding.version === undefined ? {} : { version: binding.version }),
+    ...(binding.candidate === undefined ? {} : { candidateId: binding.candidate.candidateId }),
+    bundleHash: binding.bundleHash, propsHash: binding.propsHash,
     ...(binding.children === undefined || binding.children.length === 0
       ? {}
       : { children: slotsHashProjection(binding.children) }),
@@ -713,6 +1043,11 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
   }
 
   const warnings: string[] = [];
+  // §W3: декларация overlay судится **до** биндингов — ребёнок, ссылающийся на необъявленный узел,
+  // обязан получить свой код, а не «неопубликованный компонент» от слот-проверок.
+  const subjectSystem = (db.query("SELECT design_system FROM components WHERE id=? AND deleted_at IS NULL")
+    .get(componentId) as { design_system: string } | null)?.design_system ?? null;
+  assertOverlayDeclaration(db, manifest, componentId, subjectSystem, warnings);
   // Слот-биндинги: опубликованные факты — жёсткие отказы, факты головы кандидата — warning'и (§A2).
   // Место в порядке проверок не случайно: после алиасов (их правило про биндинги уже применено) и
   // **до** дедупа — дедуп ниже опирается на биндинги, и опираться на непроверенные нельзя.
@@ -1029,6 +1364,14 @@ export interface ResolveSlotBindingsInput {
   manifest: CaseSetManifest;
   cases: AcceptanceCase[];
   mode: SlotResolutionMode;
+  /** Корень данных: gating-режим проверяет по нему живость бандлов узлов overlay (§W3). */
+  dataDir?: string;
+  /**
+   * Уже резолвнутый overlay рана (§W3). Передаётся **реконструкцией**: durable-манифест лежит на
+   * строке рана (`acceptance_runs.overlay_manifest_json`), и восстанавливать набор надо ровно тем
+   * графом, которым ран поставлен, а не тем, что сейчас в кандидатском кэше.
+   */
+  overlay?: readonly RunOverlayNode[];
 }
 
 /**
@@ -1043,10 +1386,30 @@ export interface ResolveSlotBindingsInput {
  * иначе slot-free наборы сменили бы кадровый отпечаток (§A4).
  */
 export function resolveSlotBindings(input: ResolveSlotBindingsInput): AcceptanceCase[] {
+  // §W3: overlay резолвится **до** биндингов и прикладывается к каждому случаю набора — он вход
+  // кадрового слоя целиком (принятая цена, триаж C-m10). Переданный `overlay` (реконструкция)
+  // сильнее пересчёта: durable-граф рана не имеет права разъехаться с персистированными кадрами.
+  const overlay = input.overlay ?? resolveCandidateOverlay({
+    db: input.db,
+    ...(input.dataDir === undefined ? {} : { dataDir: input.dataDir }),
+    componentId: input.componentId,
+    designSystem: input.designSystem,
+    manifest: input.manifest,
+    mode: input.mode,
+  });
+  const overlayById = new Map((overlay ?? []).map((node) => [node.componentId, node] as const));
+  const overlayNames = new Map<string, string>();
+  for (const node of overlay ?? []) {
+    const row = input.db.query("SELECT name FROM components WHERE id=?").get(node.componentId) as { name: string } | null;
+    overlayNames.set(node.componentId, row?.name ?? node.componentId);
+  }
+  const withOverlay = overlay === undefined || overlay.length === 0
+    ? input.cases
+    : input.cases.map((item) => ({ ...item, candidateOverlay: overlay }));
   const bindingsById = new Map(input.manifest.cases
     .filter((item) => item.slotBindings !== undefined)
     .map((item) => [item.id, item.slotBindings!] as const));
-  if (bindingsById.size === 0) return input.cases;
+  if (bindingsById.size === 0) return withOverlay;
 
   // Мемоизация в пределах одного разрешения — та же мера, что в `validateSlotBindings`: потолок
   // набора (64 × 8 × 12) иначе дал бы тысячи одинаковых запросов на каждую постановку рана.
@@ -1096,6 +1459,29 @@ export function resolveSlotBindings(input: ResolveSlotBindingsInput): Acceptance
         }
       }
       children.forEach((child, index) => {
+        // §W3: overlay-ребёнок резолвится картой узлов рана, а не строкой публикации. `version` у
+        // него отсутствует (не сентинел — см. `ResolvedSlotBinding.version`), `bundleHash` —
+        // кандидатный, а `rev`/`sourceHash` нужны капчуру, чтобы взять content-addressed бандл.
+        if (isOverlaySlotChild(child)) {
+          const node = overlayById.get(child.overlay);
+          if (!node) {
+            throw new ApiError(422, "candidate_overlay_unknown",
+              `Case ${caseId}: slot "${slot}" binds overlay ${child.overlay}, which candidateOverlay does not declare`);
+          }
+          const props = child.props ?? {};
+          const nested = child.slotBindings === undefined ? [] : resolveLevel(caseId, child.slotBindings, null);
+          resolved.push({
+            slot, index,
+            componentId: node.componentId,
+            name: overlayNames.get(node.componentId) ?? node.componentId,
+            bundleHash: node.bundleHash,
+            candidate: { candidateId: node.candidateId, rev: node.rev, sourceHash: node.sourceHash },
+            props,
+            propsHash: propsHashOf(props),
+            ...(nested.length === 0 ? {} : { children: nested }),
+          });
+          return;
+        }
         const pin = pinOf(child.type, child.version);
         if (!pin) {
           throw new ApiError(422, "slot_component_not_published",
@@ -1126,7 +1512,7 @@ export function resolveSlotBindings(input: ResolveSlotBindingsInput): Acceptance
     return resolved;
   };
 
-  return input.cases.map((item) => {
+  return withOverlay.map((item) => {
     const bindings = bindingsById.get(item.caseId);
     if (bindings === undefined) return item;
     const resolved = resolveLevel(item.caseId, bindings,

@@ -86,7 +86,7 @@ const imageBytes = (bytes: Uint8Array, productError = false, readiness: Readines
   pageErrors: [],
   captureClean: !productError,
   productErrors: productError ? ["TypeError: props.label is not a function"] : [],
-  infraNoise: [], runtimeWarnings: [],
+  infraNoise: [], runtimeWarnings: [], suppressedCount: 0,
   rendererBuild: null, browserVersion: "test/1",
   ...readiness,
 });
@@ -101,7 +101,7 @@ const paintResult = (bytes: Uint8Array, readiness: ReadinessFields = READY_READI
   kind: "paint", surface: "component", componentId: COMPONENT_ID, draftRev: 1, bundleHash: "bundle",
   designSystemMetaVersion: null, resolvedSpaceScale: {}, viewport: { width: 390, height: 844 }, dpr: 2,
   paintMargin: 64, bytes, width: 536, height: 448, imageProduced: true,
-  captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [],
+  captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [], suppressedCount: 0,
   consoleErrors: [], pageErrors: [], rendererBuild: null, browserVersion: "test/1",
   ...readiness,
   rects: [], truncated: false, total: 0,

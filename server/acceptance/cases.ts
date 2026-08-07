@@ -66,10 +66,22 @@ export interface ResolvedSlotBinding {
   /** Позиция внутри слота, с нуля: порядок рендера входит в кадр. */
   index: number;
   componentId: string;
-  /** Имя опубликованного компонента (глобально уникально, не переименовывается). */
+  /** Имя компонента (глобально уникально, не переименовывается). */
   name: string;
-  version: number;
+  /**
+   * Номер публикации ребёнка. **Отсутствует у overlay-узла** (волна 2026-08-07 §W3): кандидат не
+   * опубликован, и его место в `slotsHash`/кадровом отпечатке занимает `candidateId`. Условное
+   * отсутствие, а не сентинел вроде `version: 0`: сентинел исказил бы `slotsHash` и дизъюнктность
+   * покрытия мультиран-promote, притворившись настоящей версией.
+   */
+  version?: number;
   bundleHash: string;
+  /**
+   * Overlay-происхождение ребёнка (§W3): узел взят из кандидата, объявленного `candidateOverlay`
+   * манифеста. `rev`/`sourceHash` нужны капчуру (content-addressed путь draft-бандла), в кадровый
+   * отпечаток из них не едет ничего — там достаточно `candidateId`, который их уже содержит.
+   */
+  candidate?: { candidateId: string; rev: number; sourceHash: string };
   props: Record<string, unknown>;
   propsHash: string;
   /**
@@ -78,6 +90,22 @@ export interface ResolvedSlotBinding {
    * `slotsHash` и кадровый отпечаток.
    */
   children?: ResolvedSlotBinding[];
+}
+
+/**
+ * **Резолвнутый узел candidate dependency overlay** (план 2026-08-07 §1.2/§W3).
+ *
+ * Манифест объявляет `componentId → candidateId`; сервер разворачивает пару в неизменяемый кортеж
+ * строки `component_candidates`. Именно этот кортеж персистится (`acceptance_runs.overlay_manifest_json`,
+ * миграция v33), пинует бандл от GC (`AcceptanceRepo.pinnedSourceHashes`), входит в кадровый слой
+ * отпечатка и сверяется promote'ом с тем, что в итоге опубликовали.
+ */
+export interface RunOverlayNode {
+  componentId: string;
+  candidateId: string;
+  rev: number;
+  sourceHash: string;
+  bundleHash: string;
 }
 
 export interface AcceptanceCase {
@@ -164,6 +192,18 @@ export interface AcceptanceCase {
    * examples-путь слотов не знает.
    */
   slotBindings?: ResolvedSlotBinding[];
+  /**
+   * **Резолвнутый overlay набора** (§W3), отсортированный по `componentId`. Поле общее на весь
+   * набор, а не на случай: принятая планом цена (триаж C-m10) — overlay входит в
+   * `frameFingerprint` **целиком**, поэтому узел, не влияющий на конкретный кейс, всё равно
+   * двигает его кадр. Дедуп «какой узел до какого кейса дотягивается» не строится: он потребовал
+   * бы обхода дерева на каждый кейс ради экономии пересъёмки, которой в первой публикации графа
+   * всё равно нет.
+   *
+   * **Отсутствует, а не пусто** — тот же инвариант, что у `slotBindings`: манифест без overlay
+   * обязан давать байт-в-байт прежний кадровый отпечаток.
+   */
+  candidateOverlay?: readonly RunOverlayNode[];
   /**
    * sha256 разрешённого кортежа `[{slot,index,componentId,version,bundleHash,propsHash}]` — тот же
    * пре-образ, что у кадрового слоя отпечатка (§A3). Персистится (`acceptance_cases.slots_hash`,

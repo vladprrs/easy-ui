@@ -422,6 +422,8 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   // либо отсутствуют, либо непусты; здесь это лишь образец полноты типа.
   slotBindings: [],
   slotsHash: "slots-hash",
+  // §W3 (план 2026-08-07): резолвнутый overlay набора — кадровый слой целиком (проверка ниже).
+  candidateOverlay: [],
   // W1a (план 2026-08-07): поверхности геометрии. Двухслойное поле с расщеплением по под-полям,
   // `comparisonSurface` — чистое сравнение, `clipExpectation` — чистый вердикт (проверки ниже).
   expectedSurfaces: {},
@@ -537,4 +539,53 @@ test("W1a: comparisonSurface — только сравнение, clipExpectatio
 
 test("W1a: версия алгоритма отпечатка не двигается — легаси-семантика не менялась", () => {
   expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
+});
+
+// ------------------- candidate dependency overlay (§W3, план 2026-08-07)
+
+const OVERLAY_NODE = {
+  componentId: "pay-leaf", candidateId: `cand_${"1".repeat(64)}`,
+  rev: 3, sourceHash: "src-leaf", bundleHash: "bundle-leaf",
+} as const;
+
+test("§W3: candidateOverlay — чистый кадровый слой, и его отсутствие байт-в-байт прежнее", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+  // Каскад `caseFingerprintsOf`: поле обязано доехать до хэша, а не только быть классифицированным.
+  const withOverlay = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, candidateOverlay: [OVERLAY_NODE] });
+  expect(withOverlay.frame).not.toBe(base.frame);
+  expect(withOverlay.comparison).toBe(base.comparison);
+  expect(withOverlay.verdictPolicy).toBe(base.verdictPolicy);
+  expect("candidateOverlay" in withOverlay.verdictPolicySnapshot).toBe(false);
+
+  // Смена билда узла — другой кадр: именно ради этого граф и лежит в отпечатке.
+  const rebuilt = fingerprints({
+    ...PLAIN, referenceAssetId: ASSET_A,
+    candidateOverlay: [{ ...OVERLAY_NODE, bundleHash: "bundle-leaf-2" }],
+  });
+  expect(rebuilt.frame).not.toBe(withOverlay.frame);
+
+  // Пустой граф ≡ отсутствие графа, и golden кадра не двигается.
+  expect(fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, candidateOverlay: [] })).toEqual(base);
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT)).toBe(GOLDEN_FRAME);
+
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("candidateOverlay")).toEqual(["frame"]);
+});
+
+test("§W3: overlay-ребёнок слота хэшируется candidateId, а пиннутый — байт-в-байт как раньше", () => {
+  const pinned = { slot: "items", index: 0, componentId: "pay-child", version: 2, bundleHash: "bh", propsHash: "ph" };
+  const before = frameFingerprint({ ...GOLDEN_FRAME_INPUT, slotBindings: [pinned] });
+  // Проекция условная: у пиннутого ребёнка не появилось ни `candidate`, ни чего-либо ещё.
+  expect(frameFingerprint({ ...GOLDEN_FRAME_INPUT, slotBindings: [{ ...pinned }] })).toBe(before);
+
+  const overlaid = frameFingerprint({
+    ...GOLDEN_FRAME_INPUT,
+    slotBindings: [{ slot: "items", index: 0, componentId: "pay-leaf", bundleHash: "bh", propsHash: "ph", candidate: { candidateId: OVERLAY_NODE.candidateId } }],
+  });
+  expect(overlaid).not.toBe(before);
+  // Сентинела нет: «version: 0» — это другой вход, а не то же самое, что overlay-узел.
+  expect(frameFingerprint({
+    ...GOLDEN_FRAME_INPUT,
+    slotBindings: [{ slot: "items", index: 0, componentId: "pay-leaf", version: 0, bundleHash: "bh", propsHash: "ph" }],
+  })).not.toBe(overlaid);
 });

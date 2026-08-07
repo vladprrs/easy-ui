@@ -262,31 +262,86 @@ export const SLOT_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const slotKey = z.string().max(32).regex(SLOT_KEY_PATTERN, "slot key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$");
 
 /**
+ * **Candidate dependency overlay** (план `docs/plans/2026-08-07-migration-feedback-wave.md` §1.2,
+ * ретроспектива миграции P0.3).
+ *
+ * До этой волны первая публикация связки «родитель + его новые дети» была невыразима: слот-ребёнок
+ * адресуется парой `{type, version}`, то есть **опубликованной** версией, и лист приходилось
+ * публиковать до приёмки родителя — ровно та «преждевременная публикация», которую ретроспектива
+ * назвала главным дефектом миграции. Overlay объявляет карту `componentId → candidateId`: узел
+ * графа, который ещё не опубликован ни разу, но у которого есть валидированный кандидат.
+ *
+ * Три инварианта именно схемы:
+ *
+ * 1. **`.optional()` без `.default()`** (C6/C25): `caseSetIdOf` хэширует `parsed.data`, и любой
+ *    zod-дефолт сменил бы контентный адрес всех уже опубликованных манифестов.
+ * 2. **Карта, а не список.** Ключ — `componentId`, поэтому «два кандидата на один компонент»
+ *    невыразимо по построению; обратная коллизия (один `candidateId` у двух компонентов) —
+ *    доменный отказ сервера `422 candidate_overlay_duplicate`.
+ * 3. **Потолок судит сервер** (`422 candidate_overlay_limit`), а не `.refine()`: отказ обязан
+ *    называть код, по которому агент отличит «слишком большой граф» от «манифест не разобрался».
+ *
+ * Имя поля **не коллидирует** с `CaptureExpected.candidateOverlay` прототипного пути
+ * (`src/capture/protocol.ts`): там это эхо swap'а **опубликованных** пинов ревизии прототипа,
+ * здесь — декларация неопубликованных зависимостей случая. Разные типы, разные неймспейсы,
+ * пересечения кода нет (отмечено в `docs/server-api.md`).
+ */
+export const CASE_SET_MAX_OVERLAY_NODES = 8;
+
+/** Формат `candidate_id` (`server/acceptance/ids.ts#CANDIDATE_ID_PATTERN`, продублирован: `src/` не импортирует `server/`). */
+export const CANDIDATE_ID_PATTERN = /^cand_[0-9a-f]{64}$/;
+
+/**
  * Ребёнок слота. Тип объявлен **вручную**: `z.strictObject` + `z.lazy` теряет инференс на цикле,
  * и экспортируемый тип обязан быть читаемым, а не `any` (триаж V13; прецедент рекурсивной схемы с
  * явной аннотацией — `server/contracts.ts` `z.lazy` c `z.ZodType`).
+ *
+ * Две формы (волна 2026-08-07 §W3): **пин** (`{type, version}`) — опубликованный ребёнок, и
+ * **overlay** (`{overlay: "<componentId>"}`) — ребёнок, взятый из кандидата, объявленного
+ * `candidateOverlay` манифеста. У overlay-формы `props` те же, что у обычного ребёнка (без них
+ * зависимость была бы вставима только пустой — N4/N5), а версии нет вовсе: кандидат не
+ * опубликован, и придумывать ему номер значило бы врать в `slotsHash`.
  */
-export interface CaseSetSlotChild {
+export interface CaseSetSlotChildPin {
   type: string;
   version: number;
   props?: Record<string, unknown>;
   /** Собственные слоты ребёнка (план 2026-08-06 §W6). Строго `.optional()` без `.default()`. */
   slotBindings?: CaseSetSlotBindings;
 }
+export interface CaseSetSlotChildOverlay {
+  /** `components.id` узла overlay: адресация по id, а не по имени — кандидат публикации не имеет. */
+  overlay: string;
+  props?: Record<string, unknown>;
+  slotBindings?: CaseSetSlotBindings;
+}
+export type CaseSetSlotChild = CaseSetSlotChildPin | CaseSetSlotChildOverlay;
 export type CaseSetSlotBindings = Record<string, CaseSetSlotChild[]>;
 
-export const caseSetSlotChildSchema: z.ZodType<CaseSetSlotChild> = z.lazy(() => z.strictObject({
-  /** Имя опубликованного компонента (`components.name` уникально глобально и не переименовывается). */
-  type: z.string().min(1).max(64),
-  /** Точный пин версии: обязателен по построению (см. инвариант 1). */
-  version: z.number().int().positive(),
-  props: z.record(z.string(), z.unknown()).optional(),
-  /**
-   * Вложенные слоты (§W6). Тот же самый набор ограничений формы, что и у корня случая; глубину и
-   * тотал узлов судит сервер, потому что осмысленный отказ обязан назвать путь до узла.
-   */
-  slotBindings: caseSetSlotBindingsSchema.optional(),
-}));
+/** Дискриминатор форм ребёнка: наличие ключа `overlay` (обе формы — strict-объекты). */
+export const isOverlaySlotChild = (child: CaseSetSlotChild): child is CaseSetSlotChildOverlay =>
+  (child as CaseSetSlotChildOverlay).overlay !== undefined;
+
+export const caseSetSlotChildSchema: z.ZodType<CaseSetSlotChild> = z.lazy(() => z.union([
+  z.strictObject({
+    /** Имя опубликованного компонента (`components.name` уникально глобально и не переименовывается). */
+    type: z.string().min(1).max(64),
+    /** Точный пин версии: обязателен по построению (см. инвариант 1). */
+    version: z.number().int().positive(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * Вложенные слоты (§W6). Тот же самый набор ограничений формы, что и у корня случая; глубину и
+     * тотал узлов судит сервер, потому что осмысленный отказ обязан назвать путь до узла.
+     */
+    slotBindings: caseSetSlotBindingsSchema.optional(),
+  }),
+  z.strictObject({
+    /** Узел overlay: `componentId`, обязанный присутствовать ключом в `candidateOverlay` (§W3). */
+    overlay: z.string().min(1).max(64),
+    props: z.record(z.string(), z.unknown()).optional(),
+    slotBindings: caseSetSlotBindingsSchema.optional(),
+  }),
+]));
 
 export const caseSetSlotBindingsSchema: z.ZodType<CaseSetSlotBindings> = z.lazy(() => z
   .record(slotKey, z.array(caseSetSlotChildSchema).min(1).max(CASE_SET_MAX_SLOT_CHILDREN))
@@ -427,6 +482,16 @@ export const caseSetManifestSchema = z.strictObject({
     .optional(),
   /** Намерение «набор бессмысленен без визуального гейта»; потребляется W5a, хранится с W2. */
   requireVisual: z.boolean().optional(),
+  /**
+   * Карта неопубликованных зависимостей графа (§W3): `componentId → candidateId`. Каждый узел
+   * обязан быть **задействован** деревом случая (голова рана + `slotBindings`), иначе
+   * `422 candidate_overlay_unused`: молча принятый лишний узел сдвинул бы `frameFingerprint`
+   * всех случаев набора без единого эффекта на пикселях.
+   */
+  candidateOverlay: z.record(
+    z.string().min(1).max(64),
+    z.string().regex(CANDIDATE_ID_PATTERN, "must be a candidate id (cand_<sha256>)"),
+  ).optional(),
   policy: z.strictObject({
     profile: z.enum(["default-v1", "pixel-strict-v1"]).optional(),
     perCase: z.record(caseId, caseSetCasePolicySchema).optional(),

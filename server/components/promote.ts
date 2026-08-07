@@ -158,6 +158,7 @@ export const promotePolicyStrictEnabled = (): boolean => {
  * ответа и аудит-события, плюс warning.
  */
 function resolveAcceptanceRefs(
+  db: Database,
   acceptance: PromoteAcceptance,
   input: { id: string; baseRev: number; sourceHash: string },
   headRev: number,
@@ -219,6 +220,10 @@ function resolveAcceptanceRefs(
   // Когерентность набора (W7): единый профиль, единый рендерер, дизъюнктное покрытие и — при
   // явном `expectedCases` — полнота. Для одиночного рана остаётся только проверка полноты.
   warnings.push(...assertRunSetCoherent(repo, runs, acceptance.expectedCases));
+  // §W3 (волна 2026-08-07): граф неопубликованных зависимостей обязан быть **закрыт** к моменту
+  // публикации родителя — иначе версия уезжает в каталог с провенансом, который ссылается на
+  // байты, живущие только в 24-часовом кандидатском кэше.
+  warnings.push(...assertOverlayDependenciesPublished(db, repo, runs));
   // C18: сверка хэша рана с **текущим** определением профиля. Профиль неизвестен коду только на
   // strict-пути (иначе предикат выше уже отказал) — тогда текущего хэша нет, и `stale` не
   // утверждается: «сравнить не с чем» ≠ «разошлось».
@@ -241,6 +246,62 @@ function resolveAcceptanceRefs(
   // Легаси-скаляр — **первый элемент отсортированного** набора (контракт C7): старые читатели
   // (Library `accepted`, `audit --versions`) продолжают видеть один детерминированный id.
   return { candidate, runId: runIds[0]!, runIds, evidenceManifestHashes, policy, warnings };
+}
+
+/**
+ * **Верификация графа overlay при promote** (план 2026-08-07 §1.2/§W3, фаза A).
+ *
+ * Overlay-ран доказывает родителя вместе с **неопубликованными** зависимостями: их байты жили в
+ * кандидатском кэше, который вытесняется по TTL. Публикуя родителя, мы обязаны убедиться, что
+ * каждая зависимость уже опубликована, и опубликована **тем же** билдом, который участвовал в
+ * приёмке, — иначе зелёный вердикт относится к картинке, которую в проде никто больше не соберёт.
+ *
+ * Три отказа:
+ * - `422 overlay_hash_mismatch` — шарды семьи поставлены с **разными** графами. Склеенное покрытие
+ *   в этом случае описывает две разных сборки дерева, и какая из них «настоящая», решить нельзя.
+ *   Проверка идёт до поузловых: несогласованный набор незачем разбирать подробно.
+ * - `409 overlay_dependency_not_published` — узел до сих пор не имеет активной публикации.
+ * - `409 overlay_dependency_diverged` — активная публикация есть, но её `bundle_hash`/`source_hash`
+ *   разошлись с тем, что снималось. Это **не** «надо перезалить»: это другой билд, и вердикт
+ *   родителя к нему не относится — нужна новая приёмка.
+ *
+ * Статус — 409, а не 422: причина внешняя по отношению к телу запроса (состояние каталога), и
+ * повтор того же promote после публикации зависимости обязан пройти.
+ */
+function assertOverlayDependenciesPublished(db: Database, repo: AcceptanceRepo, runs: AcceptanceRunRow[]): string[] {
+  const warnings: string[] = [];
+  if (runs.length === 0) return warnings;
+  const hashes = [...new Set(runs.map((row) => row.overlay_hash ?? null))];
+  if (hashes.length > 1) {
+    throw new ApiError(422, "overlay_hash_mismatch",
+      "Acceptance runs of this promote declare different candidate dependency overlays;"
+      + " shards of one family must be captured against one dependency graph",
+      { runIds: runs.map((row) => row.run_id), overlayHashes: hashes });
+  }
+  const nodes = repo.runOverlay(runs[0]!);
+  for (const node of nodes) {
+    const published = db.query(`SELECT cp.version version, cp.bundle_hash bundleHash, cp.source_hash sourceHash
+      FROM component_publishes cp WHERE cp.component_id=? AND cp.status='active'
+      ORDER BY cp.version DESC`).all(node.componentId) as { version: number; bundleHash: string; sourceHash: string }[];
+    if (published.length === 0) {
+      throw new ApiError(409, "overlay_dependency_not_published",
+        `Acceptance of ${runs[0]!.component_id} used the unpublished candidate ${node.candidateId} of ${node.componentId};`
+        + " promote that dependency first, then promote this component",
+        { componentId: node.componentId, candidateId: node.candidateId });
+    }
+    const match = published.find((row) => row.bundleHash === node.bundleHash && row.sourceHash === node.sourceHash);
+    if (!match) {
+      throw new ApiError(409, "overlay_dependency_diverged",
+        `Component ${node.componentId} is published, but not with the build this acceptance run captured`
+        + ` (run bundleHash ${node.bundleHash}, active version${published.length > 1 ? "s" : ""}`
+        + ` ${published.map((row) => `v${row.version}=${row.bundleHash}`).join(", ")});`
+        + " re-run acceptance of this component against the published dependency",
+        { componentId: node.componentId, candidateId: node.candidateId });
+    }
+    warnings.push(`Overlay dependency ${node.componentId} was captured as candidate ${node.candidateId}`
+      + ` and is now published as v${match.version} with the same build`);
+  }
+  return warnings;
 }
 
 /**
@@ -384,7 +445,7 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
   // дешёвым и не оставлять за собой ни stage-строки, ни пересборки бандла.
   const acceptanceRefs = input.acceptance === undefined
     ? null
-    : resolveAcceptanceRefs(input.acceptance, input, revision.rev);
+    : resolveAcceptanceRefs(db, input.acceptance, input, revision.rev);
 
   // --- Фаза A.2: артефакты кандидата ------------------------------------------
   // Тёплый кэш отдаёт extraction/bundle без typecheck+compile; холодный — пересобирает

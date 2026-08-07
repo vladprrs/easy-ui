@@ -46,7 +46,7 @@ function rollbackPostV22(db:Database):void {
 
 test("migrations upgrade a fresh v0 database to latest and a v16 database is idempotent",()=>{
   const db=new Database(":memory:"); migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   const names=(db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(x=>x.name);
   expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","visual_baseline_sets","design_system_versions","share_grants","share_sessions","users","user_sessions","audit_events","catalog_reuse_decisions","component_fingerprints","catalog_replacements","catalog_migration_runs","catalog_migration_staging","atomic_policy","maintenance_locks","prototype_revision_theme_pins","component_candidates","acceptance_runs","acceptance_cases","acceptance_case_results","component_case_sets","component_provenance","candidate_decisions"]));
   // v27 (RFC candidate-acceptance R3a): provenance-слой и append-only надгробия решений.
@@ -82,7 +82,7 @@ test("migrations upgrade a fresh v0 database to latest and a v16 database is ide
   expect(resolver).toMatchObject({notnull:1,dflt_value:"1"});
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
 });
@@ -97,7 +97,7 @@ test("adds scoped-share grants and hashed sessions to a populated v9 database",(
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   db.run("INSERT INTO share_grants (id,token_hash,prototype_id,version,rev,dependencies_json,created_at,expires_at) VALUES ('g','hash','shared',1,1,'{}','now','later')");
   db.run("INSERT INTO share_sessions (id,session_hash,grant_id,created_at,expires_at) VALUES ('s','session-hash','g','now','later')");
   db.run("DELETE FROM share_grants WHERE id='g'");
@@ -235,7 +235,7 @@ test("v14 adds users, sessions, owners and publishes populated legacy prototypes
   db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at) VALUES ('legacy-v14','Legacy','desktop',1,1,'shadcn','instance','now','now')");
   db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('legacy-v14',1,'{"version":1,"id":"legacy-v14","designSystem":"shadcn"}','h','now')`);
   migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT owner_id,status FROM prototypes WHERE id='legacy-v14'").get()).toEqual({owner_id:null,status:"archived"});
   expect(db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='user_sessions_user'").get()).toEqual({name:"user_sessions_user"});
   expect(db.query("SELECT actor_id,subject_id FROM audit_events WHERE action='migration.applied'").get()).toEqual({actor_id:"system",subject_id:"v14"});
@@ -251,7 +251,7 @@ test("v18 adds composition tables to a populated v17 database and pins them with
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   db.run("INSERT INTO compositions (id,name,head_rev,design_system,owner_id,created_at,updated_at) VALUES ('c1','C1',1,'yandex-pay','user_owner_v18','now','now')");
   db.run("INSERT INTO composition_revisions (composition_id,rev,doc,design_system,created_at) VALUES ('c1',1,'{}','yandex-pay','now')");
   db.run("INSERT INTO composition_publishes (composition_id,version,rev,source_hash,published_at) VALUES ('c1',1,1,'hash','now')");
@@ -273,7 +273,7 @@ test("v19 adds prototype scenarios to a populated v18 database and cascades with
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   db.run(`INSERT INTO prototype_scenarios (prototype_id,id,name,steps_json,author,created_at,updated_at) VALUES ('legacy-v19','happy','Happy path','[{"type":"expectScreen","screenId":"home"}]','user_owner_v19','now','now')`);
   // id уникален в пределах прототипа, а не глобально.
   expect(()=>db.run(`INSERT INTO prototype_scenarios (prototype_id,id,name,steps_json,created_at,updated_at) VALUES ('legacy-v19','happy','Dup','[]','now','now')`)).toThrow();
@@ -292,7 +292,7 @@ test("v20 adds the append-only reuse audit and the content-addressed fingerprint
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   // Ключевое свойство схемы: `artifact_id` без FK — `blocked` ссылается на предложенный id
   // компонента, которого в базе нет и не будет.
   db.run(`INSERT INTO catalog_reuse_decisions (id,actor_id,artifact_kind,artifact_id,design_system,source_or_doc_hash,catalog_revision,policy_version,gate_mode,intent,candidates_json,decision,reason,created_at)
@@ -330,7 +330,7 @@ test("v16 adds lifecycle columns to a populated v15 database and defaults existi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT kind,tags,derived_from FROM prototypes WHERE id='legacy-v16'").get()).toEqual({kind:"product-flow",tags:null,derived_from:null});
   // The column carries no CHECK by design (see the migration comment) — the zod contract owns the enum.
   db.run("UPDATE prototypes SET kind='component-gallery',tags='[\"catalog\"]',derived_from='other' WHERE id='legacy-v16'");
@@ -347,7 +347,7 @@ test("v22 adds the track column to a populated v21 database and defaults existin
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   // Существующие строки читаются как pinned (сегодняшняя семантика пинов ревизии).
   expect(db.query("SELECT track FROM prototypes WHERE id='legacy-v22'").get()).toEqual({track:"pinned"});
   // Колонка без CHECK по дизайну (см. комментарий миграции): enum принадлежит zod-контракту.
@@ -368,7 +368,7 @@ test("v17 adds component tombstone columns to a populated v16 database without t
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT deleted_at,delete_reason,replacement_component_id FROM components WHERE id='legacy-v17'").get())
     .toEqual({deleted_at:null,delete_reason:null,replacement_component_id:null});
   // Надгробие пишется без FK на замену: удалённая замена не должна ломать историю.
@@ -408,7 +408,7 @@ test("a failed migration preserves the last successful version and retry applies
 
   db.run("DROP TABLE visual_baseline_sets");
   migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT instance_id FROM prototypes WHERE id='retry'").get()).toEqual({instance_id:expect.any(String)});
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
@@ -423,7 +423,7 @@ test("v11 preserves populated visual history and leaves legacy baseline evidence
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT reference_asset_id FROM visual_runs WHERE id='vrun_legacy'").get()).toEqual({reference_asset_id:null});
   expect(db.query("SELECT deleted_at FROM visual_references WHERE id='vref_legacy'").get()).toEqual({deleted_at:null});
   expect(()=>db.run("DELETE FROM visual_references WHERE id='vref_legacy'")).toThrow();
@@ -448,7 +448,7 @@ test("v12 adds asset listing and reverse hard-pin indexes to a populated v11 dat
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   const indexes=(db.query("SELECT name FROM sqlite_master WHERE type='index'").all() as {name:string}[]).map((row)=>row.name);
   expect(indexes).toEqual(expect.arrayContaining([...V12_INDEXES]));
   expect(db.query("SELECT asset_id FROM prototype_revision_assets WHERE prototype_id='p_index'").get()).toEqual({asset_id:"asset_populated"});
@@ -483,7 +483,7 @@ test("upgrades a populated v2 database and backfills revision design systems",()
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT design_system FROM component_revisions WHERE component_id='custom'").get()).toEqual({design_system:"wireframe"});
   expect(db.query("SELECT COUNT(*) count FROM design_systems").get()).toEqual({count:3});
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='validation_records'").get()).toEqual({name:"validation_records"});
@@ -502,7 +502,7 @@ test("adds validation_records to a populated v3 database without touching existi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM components").get()).toEqual({count:1});
@@ -522,7 +522,7 @@ test("adds the v5 asset registry to a populated v4 database without touching exi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:1});
@@ -541,7 +541,7 @@ test("adds the v6 visual regression tables to a populated v5 database with FK RE
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT COUNT(*) count FROM visual_references").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:1});
   // FK RESTRICT: an asset used as a reference baseline cannot be deleted.
@@ -564,7 +564,7 @@ test("adds the v7 design-system theme versions to a populated v6 database with F
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT COUNT(*) count FROM design_system_versions").get()).toEqual({count:0});
   expect((db.query("PRAGMA table_info(prototype_revisions)").all() as {name:string}[]).map(c=>c.name)).toContain("design_system_meta_version");
   // Existing rows survive and the new pin column defaults to NULL.
@@ -592,7 +592,7 @@ test("v23 backfills spacing_resolver=1 on existing theme versions of a populated
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   // Every pre-existing version keeps the legacy resolver; content is untouched.
   expect(db.query("SELECT version,spacing_resolver FROM design_system_versions WHERE system_id='legacy-ds' ORDER BY version").all())
     .toEqual([{version:1,spacing_resolver:1},{version:2,spacing_resolver:1}]);
@@ -662,7 +662,7 @@ test("v8 strictly rebuilds component_publishes on a populated pre-status databas
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   // No FK violations after the rebuild.
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Parent rows and their statuses survive; new columns default.
@@ -773,7 +773,7 @@ test("v24 adds the theme-pin table and re-creates the retired-design-system trig
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   // Бэкфила нет by design: существующая ревизия остаётся без строк пинов.
   expect(db.query("SELECT COUNT(*) n FROM prototype_revision_theme_pins").get()).toEqual({n:0});
   // Имена триггеров не менялись — старая проверка целостности зелёная.
@@ -801,10 +801,12 @@ test("v30 adds multi-run provenance columns to a populated v29 database without 
   const db=new Database(":memory:"); migrate(db);
   db.run("ALTER TABLE component_publishes DROP COLUMN acceptance_run_ids");
   db.run("ALTER TABLE acceptance_runs DROP COLUMN renderer_fingerprint");
-  // Искусственный откат до v29 снимает и колонки v31/v32 — иначе повторный прогон ловит
+  // Искусственный откат до v29 снимает и колонки v31/v32/v33 — иначе повторный прогон ловит
   // duplicate column (их шаги применяются в том же вызове `migrate` следом за v30).
   db.run("ALTER TABLE acceptance_cases DROP COLUMN slots_hash");
   db.run("ALTER TABLE acceptance_cases DROP COLUMN expected_surfaces_json");
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_manifest_json");
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_hash");
   db.run("PRAGMA user_version = 29");
   const at="2026-08-04T00:00:00.000Z";
   db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-legacy','YpLegacy',1,'yandex-pay','now','now')");
@@ -822,7 +824,7 @@ test("v30 adds multi-run provenance columns to a populated v29 database without 
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   expect(db.query("SELECT acceptance_run_id one,acceptance_run_ids many FROM component_publishes WHERE component_id='yp-legacy'").get())
     .toEqual({one:"acc_legacy",many:null});
   expect(db.query("SELECT status,renderer_fingerprint fp FROM acceptance_runs WHERE run_id='acc_legacy'").get())
@@ -847,6 +849,8 @@ test("v31 adds slots_hash to a populated v30 database without touching existing 
   const db=new Database(":memory:"); migrate(db);
   db.run("ALTER TABLE acceptance_cases DROP COLUMN slots_hash");
   db.run("ALTER TABLE acceptance_cases DROP COLUMN expected_surfaces_json");
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_manifest_json");
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_hash");
   db.run("PRAGMA user_version = 30");
   const at="2026-08-05T00:00:00.000Z";
   db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-slots','YpSlots',1,'yandex-pay','now','now')");
@@ -866,7 +870,7 @@ test("v31 adds slots_hash to a populated v30 database without touching existing 
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   // Backfill'а нет: обе до-миграционные строки видят NULL, остальные поля не тронуты.
   expect(db.query("SELECT case_id id,props_hash props,frame_fingerprint frame,verdict,slots_hash slots FROM acceptance_cases WHERE run_id='acc_slots' ORDER BY case_id").all())
     .toEqual([
@@ -907,7 +911,7 @@ test("откат образа: код v28 на БД v31 стартует, пиш
   const at="2026-08-04T12:00:00.000Z";
   // (1) Старт старого образа: миграций к применению нет, аудит FK проходит.
   expect(()=>migrate(db)).not.toThrow();
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
 
   db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-rollback','YpRollback',1,'yandex-pay','now','now')");
   db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('yp-rollback',1,'src','yandex-pay','now')");
@@ -960,6 +964,8 @@ test("откат образа: код v28 на БД v31 стартует, пиш
 test("v32 adds expected_surfaces_json to a populated v31 database without touching existing cases",()=>{
   const db=new Database(":memory:"); migrate(db);
   db.run("ALTER TABLE acceptance_cases DROP COLUMN expected_surfaces_json");
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_manifest_json");
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_hash");
   db.run("PRAGMA user_version = 31");
   const at="2026-08-07T00:00:00.000Z";
   db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-surf','YpSurf',1,'yandex-pay','now','now')");
@@ -978,7 +984,7 @@ test("v32 adds expected_surfaces_json to a populated v31 database without touchi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(32);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
   // Легаси-случай: `expectedGeometry` на месте, поверхности — NULL («не объявлял»), не нормализация.
   expect(db.query("SELECT expected_geometry_json geo,expected_surfaces_json surfaces,verdict FROM acceptance_cases WHERE case_id='alpha'").get())
     .toEqual({geo:JSON.stringify({width:480,height:88}),surfaces:null,verdict:"pass"});
@@ -987,6 +993,42 @@ test("v32 adds expected_surfaces_json to a populated v31 database without touchi
     (run_id,case_id,case_key,props_hash,case_fingerprint,case_policy_hash,status,gates_json,started_at,finished_at)
     VALUES ('acc_surf','beta','beta','props-2','fp_beta','ph_case','pending',NULL,NULL,NULL)`).run()).not.toThrow();
   expect(db.query("SELECT expected_surfaces_json surfaces FROM acceptance_cases WHERE case_id='beta'").get()).toEqual({surfaces:null});
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});
+
+/**
+ * v33 (план 2026-08-07 §W3): candidate dependency overlay рана. Проверяется на **populated** базе:
+ * доволновой ран обязан пережить миграцию с NULL в обеих колонках (backfill'а нет — overlay-ранов
+ * до неё не существовало), а состав INSERT'а v32 обязан продолжать работать: колонки nullable и
+ * без DEFAULT, иначе откат образа ронял бы постановку ранов.
+ */
+test("v33 adds overlay columns to a populated v32 database without touching existing runs",()=>{
+  const db=new Database(":memory:"); migrate(db);
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_manifest_json");
+  db.run("ALTER TABLE acceptance_runs DROP COLUMN overlay_hash");
+  db.run("PRAGMA user_version = 32");
+  const at="2026-08-07T00:00:00.000Z";
+  db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-ovl','YpOvl',1,'yandex-pay','now','now')");
+  db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('yp-ovl',1,'src','yandex-pay','now')");
+  db.query(`INSERT INTO component_candidates
+    (candidate_id,component_id,design_system,rev,source_hash,bundle_hash,host_abi_version,theme_version,build_fingerprint,
+     observed_catalog_revision,policy_profile_hash,status,created_by,created_at,expires_at)
+    VALUES ('cand_ovl','yp-ovl','yandex-pay',1,'src-hash','bundle-hash',4,NULL,'bf','cat','ph','validated','u',?,?)`).run(at,at);
+  db.query(`INSERT INTO acceptance_runs
+    (run_id,candidate_id,component_id,status,policy_profile_hash,policy_profile_id,progress_json,gates_json,created_by,created_at)
+    VALUES ('acc_ovl','cand_ovl','yp-ovl','pass','ph','default-v1','{}','{}','u',?)`).run(at);
+
+  migrate(db);
+
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(33);
+  expect(db.query("SELECT status,overlay_manifest_json manifest,overlay_hash hash FROM acceptance_runs WHERE run_id='acc_ovl'").get())
+    .toEqual({status:"pass",manifest:null,hash:null});
+  // Состав INSERT'а v32 (без новых колонок) продолжает проходить — откат образа переживается.
+  expect(()=>db.query(`INSERT INTO acceptance_runs
+    (run_id,candidate_id,component_id,status,policy_profile_hash,policy_profile_id,progress_json,gates_json,created_by,created_at)
+    VALUES ('acc_ovl2','cand_ovl','yp-ovl','queued','ph','default-v1','{}','{}','u',?)`).run(at)).not.toThrow();
+  expect(db.query("SELECT overlay_manifest_json manifest FROM acceptance_runs WHERE run_id='acc_ovl2'").get()).toEqual({manifest:null});
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
 });

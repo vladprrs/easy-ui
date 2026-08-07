@@ -1006,6 +1006,33 @@ export const migrations = [
     // rollback-window правило волны: в окне отката такие манифесты не публиковать (§3.6).
     db.run("ALTER TABLE acceptance_cases ADD COLUMN expected_surfaces_json TEXT");
   },
+  (db: Database) => {
+    // v33: candidate dependency overlay рана — `acceptance_runs.overlay_manifest_json`/`overlay_hash`
+    // (план `docs/plans/2026-08-07-migration-feedback-wave.md` §1.2/§W3, ретроспектива P0.3).
+    //
+    // Две аддитивные nullable-колонки на **ране**, а не на случае, и без backfill:
+    //
+    // 1. **Граф — свойство рана.** Overlay объявляется top-level полем манифеста набора и входит в
+    //    кадровый слой каждого случая целиком (принятая цена, триаж C-m10). Хранить его построчно
+    //    значило бы держать N копий одного факта и получить рассинхрон между случаями одного рана.
+    // 2. **Durable, потому что это пин GC.** `AcceptanceRepo.pinnedSourceHashes` джойнит эту
+    //    колонку `json_each`-ом: бандл кандидата, от которого зависит нетерминальный ран, нельзя
+    //    вытеснять, и in-memory лизы для этого непригодны — они не переживают рестарт (триаж C-M2).
+    //    Отсюда же требование к форме: массив объектов `{componentId,candidateId,rev,sourceHash,
+    //    bundleHash}`, где `sourceHash` адресует файловый кэш кандидатов.
+    // 3. **`overlay_hash` отдельной колонкой**, а не производной на чтении: мультиран-promote
+    //    сверяет графы шардов семьи (`422 overlay_hash_mismatch`) до всякого разбора кадров, и
+    //    считать хэш заново по чужому JSON'у означало бы зависеть от порядка ключей в строке.
+    // 4. **NULL = «ран без overlay»**, а не «неизвестно»: до этой миграции overlay-ранов не
+    //    существовало вовсе, поэтому backfill'ить нечего.
+    //
+    // Rollback-window (§1.2/§3.6): пока откат образа возможен, overlay-раны создавать нельзя —
+    // старый образ прочитает такой ран (`SELECT *` + именованные поля) и промоутит его **без**
+    // верификации графа зависимостей. После первого overlay-рана откат образа делается только
+    // вместе с восстановлением бэкапа тома (канон `docs/server-api.md#deployment`).
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN overlay_manifest_json TEXT");
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN overlay_hash TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

@@ -37,6 +37,43 @@ describe("render-status endpoint", () => {
     db.close();
   });
 
+  /**
+   * §W3 (план 2026-08-07), диагностическая поверхность: карта резолвится и уезжает **эхом**.
+   * Ни документ, ни пины, ни вердикт `renderable` она не трогает — приёмочная поверхность графа
+   * ровно одна (component case set), а prototype-путь остаётся swap-only.
+   */
+  test("echoes a diagnostic candidateOverlay resolution without touching the verdict", async () => {
+    const { db, handler } = await setup("dist");
+    expect((await handler(req("/prototypes", "POST", { doc: await helloDoc("rs-overlay") }))).status).toBe(201);
+    const screen = (await helloDoc("rs-overlay")).screens[0]!.id;
+    const candidateId = `cand_${"1".repeat(64)}`;
+    db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('pay-leaf','PayLeaf',1,'yandex-pay','now','now')");
+    db.query(`INSERT INTO component_candidates
+      (candidate_id,component_id,design_system,rev,source_hash,bundle_hash,host_abi_version,theme_version,build_fingerprint,
+       observed_catalog_revision,policy_profile_hash,status,created_by,created_at,expires_at)
+      VALUES (?,'pay-leaf','yandex-pay',1,'src-leaf','bh-leaf',4,NULL,'bf','cat','ph','validated','u','now',?)`)
+      .run(candidateId, new Date(Date.now() + 3600_000).toISOString());
+
+    const url = `/prototypes/rs-overlay/screens/${screen}/render-status?candidateOverlay=pay-leaf:${candidateId}`;
+    const body = await (await handler(req(url))).json() as {
+      renderable: boolean;
+      candidateOverlay: { componentId: string; candidateId: string; rev: number; sourceHash: string; bundleHash: string }[];
+    };
+    expect(body.renderable).toBe(true);
+    expect(body.candidateOverlay).toEqual([
+      { componentId: "pay-leaf", candidateId, rev: 1, sourceHash: "src-leaf", bundleHash: "bh-leaf" },
+    ]);
+    // Ничего не персистится: ни пинов ревизии, ни строк приёмки.
+    expect(db.query("SELECT COUNT(*) n FROM acceptance_runs").get()).toEqual({ n: 0 });
+
+    // Протухший кандидат отвечает тем же кодом, что и приёмочный путь.
+    db.run("UPDATE component_candidates SET expires_at='2026-01-01T00:00:00.000Z' WHERE candidate_id=?", [candidateId]);
+    const stale = await handler(req(url));
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: { code: "candidate_overlay_expired" } });
+    db.close();
+  });
+
   test("keeps a revision rendered green when its recorded builtin hash predates Overlay exposure", async () => {
     const { db, handler } = await setup("dist");
     const doc = await helloDoc("rs-old-builtin-hash");

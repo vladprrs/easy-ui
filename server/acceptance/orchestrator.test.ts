@@ -73,7 +73,7 @@ const READY_READINESS = {
 const imageBytes = (bytes: Uint8Array): ScreenshotResult => ({
   kind: "image-bytes",
   bytes, width: 10, height: 10, imageProduced: true,
-  consoleErrors: [], pageErrors: [], captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [],
+  consoleErrors: [], pageErrors: [], captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [], suppressedCount: 0,
   rendererBuild: null, browserVersion: "test/1",
   ...READY_READINESS,
 });
@@ -83,7 +83,7 @@ const paintResult = (bytes: Uint8Array): ScreenshotResult => ({
   kind: "paint", surface: "component", componentId: COMPONENT_ID, draftRev: 1, bundleHash: "bundle",
   designSystemMetaVersion: null, resolvedSpaceScale: {}, viewport: { width: 390, height: 844 }, dpr: 2,
   paintMargin: 64, bytes, width: 536, height: 448, imageProduced: true,
-  captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [],
+  captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [], suppressedCount: 0,
   consoleErrors: [], pageErrors: [], rendererBuild: null, browserVersion: "test/1",
   ...READY_READINESS,
   rects: [], truncated: false, total: 0,
@@ -818,7 +818,9 @@ const manifestShapeHash = (manifest: unknown): string =>
  * `frameFingerprint`/`comparisonFingerprint`/`verdict_policy_hash` при этом не добавлен.
  */
 // W2: значение пересчитано вместе со сменой readiness-политики профиля (см. evidence.test.ts).
-const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "2338be6519cd58ba680e25783c1f8e0c5547789dc382a90ffd363f4c82f058ad";
+// W10: пересчитано на аддитивный `suppressedCount` в geometry.json (bytes вырос); поля манифеста
+// не менялись, W3-overlay в slot-free ран ничего не добавляет (conditional spread по NULL).
+const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "a078ce7cbe8262f1933723ef69dd91c92288b2da743d89418a634288f76786da";
 
 test("evidence-манифест slot-free рана не меняется от появления слот-полей (golden §A7)", async () => {
   const harness = await setup();
@@ -933,5 +935,72 @@ test("§W4: отказ пересчёта при живом кадре проб�
   // Пересравнение вернуло сигнал, которого не хватало пересчёту.
   expect(visual.metrics!.edgeResidual).toBeDefined();
   expect(visual.metrics!.textAaBudget).toMatchObject({ preset: "live-text-v1" });
+  harness.db.close();
+});
+
+// ---------------- candidate dependency overlay: AC §5.1 e2e (§W3, план 2026-08-07)
+
+/**
+ * **Ровно тот сценарий, ради которого волна и делалась** (ретроспектива P0.3, AC §5.1):
+ * неопубликованный родитель + две никогда не публиковавшиеся зависимости (вложенным слотом) —
+ * **один** зелёный ран. До волны leaf пришлось бы опубликовать только ради приёмки родителя.
+ */
+test("§W3: неопубликованный родитель + 2 неопубликованные зависимости — один зелёный ран, квитанция с хешами узлов", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  // Компоненты каталога **без единой публикации** и их валидированные кандидаты.
+  for (const [id, name] of [["pay-leaf", "PayLeaf"], ["pay-mid", "PayMid"]] as const) {
+    harness.db.run("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at) VALUES (?,?,1,'yandex-pay',NULL,'now','now')", [id, name]);
+    harness.db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,message,created_at) VALUES (?,1,'src','yandex-pay',NULL,'now')", [id]);
+    harness.repo.createCandidate({
+      componentId: id, designSystem: "yandex-pay", rev: 1, sourceHash: `src-${id}`, bundleHash: `bundle-${id}`,
+      hostAbiVersion: 4, themeVersion: 1, observedCatalogRevision: "cat",
+      policyProfileHash: policyProfileHash(ACCEPTANCE_POLICIES["default-v1"]), createdBy: "user_a",
+    });
+    // Бандл зависимости обязан физически лежать в кандидатском кэше: постановка проверяет это
+    // до создания рана (`409 candidate_overlay_evicted`), иначе кадр снялся бы с пустым слотом.
+    await mkdir(resolve(harness.dir, ".candidates", `src-${id}`), { recursive: true });
+    await writeFile(resolve(harness.dir, ".candidates", `src-${id}`, "bundle.js"), "export default null;");
+    expect(harness.repo.latestCandidateFor(id)!.candidate_id).toMatch(/^cand_/);
+  }
+  const leafCandidate = harness.repo.latestCandidateFor("pay-leaf")!.candidate_id;
+  const midCandidate = harness.repo.latestCandidateFor("pay-mid")!.candidate_id;
+
+  const manifest = caseSetManifestSchema.parse({
+    manifestVersion: 1,
+    componentId: COMPONENT_ID,
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+    candidateOverlay: { "pay-leaf": leafCandidate, "pay-mid": midCandidate },
+    cases: [{
+      id: "graph", props: { label: "a" },
+      slotBindings: {
+        items: [{
+          overlay: "pay-mid", props: { tone: "accent" },
+          slotBindings: { items: [{ overlay: "pay-leaf", props: { label: "inner" } }] },
+        }],
+      },
+    }],
+  }) as CaseSetManifest;
+
+  const { run } = await runWith(harness, manifest);
+  expect(run.status).toBe("pass");
+
+  // Durable: граф лежит на ране и пинует бандлы зависимостей, пока ран нетерминален.
+  const overlay = [
+    { componentId: "pay-leaf", candidateId: leafCandidate, rev: 1, sourceHash: "src-pay-leaf", bundleHash: "bundle-pay-leaf" },
+    { componentId: "pay-mid", candidateId: midCandidate, rev: 1, sourceHash: "src-pay-mid", bundleHash: "bundle-pay-mid" },
+  ];
+  expect(harness.repo.runOverlay(run)).toEqual(overlay);
+  expect(run.overlay_hash).toMatch(/^[0-9a-f]{64}$/);
+
+  // Квитанция несёт граф с хешами узлов — без них она не отвечает, чем были набиты слоты кадра.
+  const receipt = (await readRunManifest(harness.dir, run.run_id))!;
+  expect(receipt.candidateOverlay).toEqual(overlay);
+  expect(receipt.overlayHash).toBe(run.overlay_hash ?? undefined);
+  const child = receipt.cases[0]!.slotBindings![0]!.children[0]!;
+  expect(child).toMatchObject({ componentId: "pay-mid", candidateId: midCandidate, bundleHash: "bundle-pay-mid" });
+  expect("version" in child).toBe(false);
+
+  // Каталог неизменен: ни одной публикации ради приёмки родителя.
+  expect(harness.db.query("SELECT COUNT(*) n FROM component_publishes").get()).toEqual({ n: 0 });
   harness.db.close();
 });

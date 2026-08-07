@@ -319,6 +319,9 @@ export class AcceptanceOrchestrator {
     const cases = manifest
       ? casesOfRun({
         db: this.deps.db,
+        // §W3: gating-режим проверяет по нему живость бандлов узлов overlay
+        // (`409 candidate_overlay_evicted`) — строки БД для этого мало.
+        dataDir: this.deps.dataDir,
         componentId: candidateRow.component_id,
         designSystem: candidateRow.design_system,
         candidateEntry: subject.entry,
@@ -360,6 +363,7 @@ export class AcceptanceOrchestrator {
     // D7: отпечатки случая считает одна функция — та же, что в раннере. Политика — эффективная
     // (с `requireVisual` набора), иначе слой вердикта разошёлся бы между постановкой и съёмкой.
     const runPolicy = effectivePolicy(policy, manifest);
+    const overlay = cases.find((item) => item.candidateOverlay !== undefined)?.candidateOverlay;
     const created = this.repo.createRun({
       candidateId: candidateRow.candidate_id,
       componentId: candidateRow.component_id,
@@ -372,6 +376,10 @@ export class AcceptanceOrchestrator {
       // входит в `frame_fingerprint` случаев. Multi-run promote сверяет его у всех ранов набора:
       // покрытие, снятое разными рендерерами, склеивать в одну доказательную базу нельзя.
       rendererFingerprint: rendererFingerprint(readinessPolicyHashOf(runPolicy.readiness)),
+      // v33 (§W3): резолвнутый граф неопубликованных зависимостей персистится **вместе** со
+      // строкой рана. Он общий на набор, поэтому берётся с любого случая — `casesOfRun` кладёт
+      // одну и ту же ссылку каждому (принятая цена C-m10). Отсюда же живёт пин GC.
+      ...(overlay === undefined ? {} : { overlay }),
       progress: progressOf([], cases.length, null),
       // Роли гейтов рана — по эффективной политике (W5a): `requireVisual` набора видно в
       // `gates_json` сразу на постановке, а не только в свёртке.
@@ -494,6 +502,7 @@ export class AcceptanceOrchestrator {
     // Набор восстановим и без памяти процесса, если ран стоит на case-set'е: манифест durable
     // (`component_case_sets`), поэтому props/эталоны/политики берутся из него, а не из examples.
     const storedManifest = run.case_set_id === null ? null : manifestOfRow(new CaseSetRepo(this.deps.db).require(run.case_set_id));
+    const storedOverlay = this.repo.runOverlay(run);
     const policy = effectivePolicy(profile, storedManifest);
     const surface = this.surfaces.get(run.run_id) ?? (storedManifest ? surfaceOfManifest(storedManifest) : DEFAULT_CASE_SURFACE);
     // Реконструкция набора (§A5): слот-пины разрешаются в режиме `"reconstruction"` — статус- и
@@ -511,6 +520,10 @@ export class AcceptanceOrchestrator {
             candidateEntry: subject.entry,
             manifest: storedManifest,
             mode: "reconstruction",
+            // §W3: граф берётся **из строки рана**, а не пересчитывается по манифесту: durable-
+            // манифест обязан дать те же кадровые отпечатки, что персистированы, даже если
+            // кандидат зависимости за это время протух (пин GC держит только бандл, не TTL).
+            ...(storedOverlay.length === 0 ? {} : { overlay: storedOverlay }),
           })
           : buildCases(subject.entry));
     } catch (error) {
@@ -801,6 +814,12 @@ export class AcceptanceOrchestrator {
       createdAt: run.created_at,
       finishedAt: new Date(this.now()).toISOString(),
       ...(subject.headDiverged ? { headDiverged: true } : {}),
+      // §W3: граф неопубликованных зависимостей — часть **доказательства**, а не украшение:
+      // без хешей узлов квитанция не отвечает, какими байтами были набиты слоты кадра.
+      ...(run.overlay_manifest_json === null ? {} : {
+        candidateOverlay: [...this.repo.runOverlay(run)],
+        ...(run.overlay_hash === null ? {} : { overlayHash: run.overlay_hash }),
+      }),
       cases,
     };
   }

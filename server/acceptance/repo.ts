@@ -28,13 +28,13 @@
  */
 import type { Database } from "bun:sqlite";
 import { ApiError } from "../http";
-import { buildFingerprint, candidateId as computeCandidateId, runId as newRunId } from "./ids";
+import { buildFingerprint, candidateId as computeCandidateId, overlayHashOf, runId as newRunId } from "./ids";
 import { acceptanceCandidateTtlHours } from "./policies";
 // Поверхность набора нужна GC-соседям только косвенно, а multi-run promote (W7) — прямо:
 // `runCoverage` обязан нормализовать (propsHash, slotsHash, surface) одной и той же функцией,
 // что и раннер.
 import { CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
-import { DEFAULT_CASE_SURFACE } from "./cases";
+import { DEFAULT_CASE_SURFACE, type RunOverlayNode } from "./cases";
 
 const now = (): string => new Date().toISOString();
 
@@ -103,6 +103,14 @@ export interface AcceptanceRunRow {
    * promote в этом случае пропускает сверку рендерера с warning).
    */
   renderer_fingerprint: string | null;
+  /**
+   * Резолвнутый candidate dependency overlay рана (v33, волна 2026-08-07 §W3):
+   * `[{componentId,candidateId,rev,sourceHash,bundleHash}]`, отсортированный по `componentId`.
+   * NULL — ран без overlay (а не «неизвестно»: до v33 overlay-ранов не существовало).
+   */
+  overlay_manifest_json: string | null;
+  /** sha256 того же списка (`overlayHashOf`); ключ сверки графов в мультиран-promote. */
+  overlay_hash: string | null;
   progress_json: string;
   impact_json: string | null;
   gates_json: string;
@@ -199,6 +207,11 @@ export interface CreateRunInput {
   refresh?: unknown;
   /** Объявленный рендерер рана (v30, W7); опущен — колонка остаётся NULL («неизвестно»). */
   rendererFingerprint?: string | null;
+  /**
+   * Резолвнутый overlay рана (v33, §W3). Опущен/пуст — колонки остаются NULL: overlay-free ран
+   * обязан быть побайтово тем же, чем был до волны.
+   */
+  overlay?: readonly RunOverlayNode[];
 }
 
 export interface NewCaseInput {
@@ -417,6 +430,7 @@ export class AcceptanceRepo {
    */
   createRun(input: CreateRunInput): { run: AcceptanceRunRow; cached: boolean } {
     const id = newRunId();
+    const overlay = input.overlay === undefined || input.overlay.length === 0 ? undefined : input.overlay;
     const createdAt = now();
     const key = input.idempotencyKey ?? null;
     try {
@@ -432,11 +446,16 @@ export class AcceptanceRepo {
         this.db.query(`INSERT INTO acceptance_runs
           (run_id,candidate_id,component_id,idempotency_key,status,policy_profile_hash,case_set_id,policy_profile_id,
            progress_json,impact_json,gates_json,evidence_manifest_hash,started_at,finished_at,created_by,created_at,refresh_json,
-           renderer_fingerprint)
-          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?,?,?)`)
+           renderer_fingerprint,overlay_manifest_json,overlay_hash)
+          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?,?,?,?,?)`)
           .run(id, input.candidateId, input.componentId, key, input.policyProfileHash, input.caseSetId ?? null,
             input.policyProfileId, json(input.progress ?? {}), json(input.gates ?? {}), input.createdBy, createdAt,
-            jsonOrNull(input.refresh), input.rendererFingerprint ?? null);
+            jsonOrNull(input.refresh), input.rendererFingerprint ?? null,
+            // §W3: durable-граф и его хэш пишутся **одной** записью с раном — пин GC обязан
+            // существовать с первого мгновения жизни рана, иначе окно между INSERT и апдейтом
+            // остаётся временем, в которое `gcCandidates` законно вытеснит бандл зависимости.
+            overlay === undefined ? null : JSON.stringify(overlay),
+            overlay === undefined ? null : overlayHashOf(overlay));
         for (const item of input.cases ?? []) this.insertCase(id, item);
         this.attachRun(input.candidateId, id);
         return { run: this.requireRun(id), cached: false };
@@ -676,8 +695,28 @@ export class AcceptanceRepo {
   pinnedSourceHashes(): Set<string> {
     const rows = this.db.query(`SELECT DISTINCT c.source_hash hash FROM acceptance_runs r
       JOIN component_candidates c ON c.candidate_id = r.candidate_id
-      WHERE r.status IN ('queued','running')`).all() as { hash: string }[];
-    return new Set(rows.map((row) => row.hash));
+      WHERE r.status IN ('queued','running')
+      UNION
+      SELECT DISTINCT json_extract(j.value, '$.sourceHash') hash FROM acceptance_runs r, json_each(r.overlay_manifest_json) j
+      WHERE r.status IN ('queued','running') AND r.overlay_manifest_json IS NOT NULL
+        AND json_valid(r.overlay_manifest_json)`).all() as { hash: string | null }[];
+    return new Set(rows.map((row) => row.hash).filter((hash): hash is string => typeof hash === "string" && hash !== ""));
+  }
+
+  /**
+   * Резолвнутый overlay рана (v33, §W3) — durable-граф, которым ран был поставлен.
+   *
+   * Читается из колонки, а не пересчитывается по манифесту набора: кандидат зависимости живёт
+   * 24 часа, а ран и его доказательства — вечно, поэтому «пересчитать» граф спустя сутки означало
+   * бы получить `409 candidate_overlay_evicted` там, где вопрос стоит про прошлое. Битый JSON —
+   * пустой граф: колонка отчётно-верификационная, и ронять на ней чтение рана нельзя.
+   */
+  runOverlay(run: AcceptanceRunRow): readonly RunOverlayNode[] {
+    if (run.overlay_manifest_json === null || run.overlay_manifest_json === "") return [];
+    try {
+      const parsed = JSON.parse(run.overlay_manifest_json) as unknown;
+      return Array.isArray(parsed) ? parsed as RunOverlayNode[] : [];
+    } catch { return []; }
   }
 
   touchCaseResult(caseFingerprint: string, at = now()): void {
