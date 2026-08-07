@@ -318,6 +318,12 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // `EASYUI_MIGRATION_COMMIT_DISABLED=1`; false — набор ручек отвечает 404. Честная граница:
       // сервер закрывает серверный хвост, агентские контрольные документы координатора он не пишет.
       migrationCommit: options.acceptanceMatrix === true && migrationCommitEnabled(),
+      // §W6b: версия схемы агентской квитанции драйвера (`envelope: {schemaVersion, command, ok,
+      // summary, items, artifacts, warnings, nextActions}`) — число, а не булев флаг: конверт
+      // печатается всегда, и клиенту нужна его **форма**, а не факт существования. Растёт только
+      // при несовместимом изменении конверта; поля внутри `summary` добавляются аддитивно.
+      // Контракт per-verb `summary` описан в `.claude/skills/author/SKILL.md`.
+      receiptEnvelopeVersion: 1,
     },
     // W4: именованные пресеты live-text AA-бюджета — значения объявляет сервер, автор манифеста
     // выбирает только имя (`cases[].textAaBudget`). Пороги видны для воспроизводимости вердикта.

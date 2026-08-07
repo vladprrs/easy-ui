@@ -718,6 +718,76 @@ node driver.mjs diff my-flow 1 3 --json   # rev 3 против rev 1, полны
 
 Discovery: `GET /api/openapi.json` (полный OpenAPI 3.1), `GET /api/capabilities` (actions/директивы/лимиты/фичи/системы), `GET /api/schemas/prototype-document.json` и `.../component-definition.json` — источник истины, когда этого файла недостаточно. Опционально к компоненту/прототипу можно прикладывать Figma-происхождение: поле `figma: {fileKey, nodeIds[], sources?: [{fileKey, nodeIds[], role?}], referenceScreenshots?: [assetId], lastSyncedAt?}` рядом с `doc`/`source` в POST/PUT (верхний `fileKey`/`nodeIds` — primary-документ, `sources` — 1..8 дополнительных документов lineage, дубликат `fileKey` → `422`) — сохраняется на ревизии, отдаётся в read-back; отдельная правка без новой ревизии/версии — `PUT /api/components/:id/provenance` (верб `provenance`).
 
+## Миграционный коммит: `migration-commit`
+
+Перевод одного компонента из «кандидат принят» в «версия опубликована, экран галереи сохранён, регрессия спланирована, каталог отревизован» — шесть мутаций подряд. Их последовательность живёт **на сервере** (`capabilities.features.migrationCommit`, нужен `EASYUI_ACCEPTANCE_MATRIX=1`), а драйвер — poller над ней: он ничего не компенсирует и ничего не переигрывает сам.
+
+```bash
+node driver.mjs migration-commit start pay-payment-card --dry-run --json          # план: фазы и мутации, ноль записей
+node driver.mjs migration-commit start pay-payment-card \
+  --gallery pay-gallery --screen fragment.json --candidate cand_… --acceptance-run acc_… \
+  --receipt receipts/pay-payment-card.json                                        # сага до complete или до первого needs-*
+node driver.mjs migration-commit --status mig_…                                   # чтение состояния (watchdog идёт на каждом запросе)
+node driver.mjs migration-commit --advance mig_… --json                           # продолжить из needs-<фаза>
+node driver.mjs migration-commit --cancel mig_… --reason "миграция отменена"       # выйти из needs-* в cancelled
+```
+
+- **Фазы:** `preflight → promote → gallery-save → verify → impacted-regression → audit → complete`. Провал фазы — **не** ошибка HTTP: сага встаёт в `needs-<фаза>`, драйвер печатает журнал фаз и выходит с кодом `2`. Дальше — либо `--advance` (после устранения причины), либо `--cancel`. Компенсаций нет: promote необратим, и «откат» означал бы депубликацию живой версии.
+- **Идемпотентность.** Ключ по умолчанию детерминирован — `driver-<componentId>-r<headRev>-<sourceHash[0:12]>`: повтор той же команды после обрыва возвращает **ту же** сагу (`idempotent replay`, ноль мутаций), а не начинает вторую. Свой ключ — `--idempotency-key <key>`.
+- **`--dry-run`** не пишет ничего: префлайт исполняется по-настоящему (он read-only), в ответе — список фаз, список мутаций, которые сага бы сделала, и превью плана регрессии. Это предмет ревью человеком.
+- **Галерея** — отдельный ресурс с отдельным владельцем: `--gallery <prototypeId>` (+ `--screen <fragment.json>` — фрагмент экрана, вставляется по `id`), поверхность плана регрессии задают `--viewport/--theme/--dsf`, барьер ресурсов включён по умолчанию (`--no-barrier` — откат). Без `--gallery` фаза регрессии честно рапортует `regressionMode: "full"`: доказать, что какие-то экраны можно не снимать, нечем.
+- **`--receipt <file.json|file.txt>`** — та самая «1 агентская запись» KPI: единственный файл, который харнес пишет сам. Серверные документы координатора (`WORKFLOW_STATE.md` и прочее) сервер не пишет и писать не будет.
+- Сервер без саги (старая сборка, выключенный kill-switch `EASYUI_MIGRATION_COMMIT_DISABLED=1`) — понятный отказ до всякой мутации, а не серия 404 по ручкам.
+
+## Квитанция агента: `envelope` и `--summary-json`
+
+Любой `--json`-вывод несёт **один** дополнительный ключ `envelope` — стабильную квитанцию верба. Форма не зависит от глагола, поэтому агент читает результат, не изучая payload конкретной команды:
+
+```json
+{
+  "envelope": {
+    "schemaVersion": 1,
+    "command": "snap",
+    "ok": true,
+    "summary": { "captured": 3, "reused": 5, "cleanScreens": 3, "failedScreens": 0, "suppressedNoise": 2 },
+    "items": [],
+    "artifacts": ["./shots/home.png"],
+    "warnings": [],
+    "nextActions": []
+  }
+}
+```
+
+- `ok === (exit code === 0)` — всегда; конверт не считает успех сам, он его публикует. Отказ запроса (любой 4xx/5xx) в `--json` тоже приезжает конвертом: `ok: false`, `command` — верб из командной строки, `nextActions` — шаги из ответа сервера.
+- `items` — строки результата (экраны, случаи, кандидаты, фазы), `artifacts` — пути к тому, что верб записал на диск, `warnings` — то, что читатель обязан увидеть, `nextActions` — команды, которые имеет смысл выполнить дальше.
+- Версия схемы конверта — `GET /api/capabilities` → `features.receiptEnvelopeVersion` (сейчас `1`). Растёт только при **несовместимом** изменении самого конверта; новые ключи внутри `summary` версию не двигают.
+- **Конверт живёт только в json-режимах.** Человекочитаемый вывод не изменился ни на строку.
+
+**`--summary-json`** — глобальный флаг любого верба: stdout получает **ровно** объект `envelope` и ничего больше (ни payload, ни блока `cache`). Это симметрия к `--json`, где тот же объект лежит вложенным ключом, и способ не выяснять форму ответа каждой команды:
+
+```bash
+node driver.mjs snap my-flow ./shots --all-screens --summary-json | jq '.summary.failedScreens'
+node driver.mjs accept pay-payment-card --case-set cset_… --summary-json | jq '.summary.topCauses'
+```
+
+**Контракт `summary` по вербам** (минимум; поля добавляются аддитивно):
+
+| Verb | Поля `summary` |
+|---|---|
+| `accept` / `accept-status` | `runId`, `verdict`, `casesTotal`, `casesFailed`, `casesReused`, `topCauses[{code,cases}]`, `revision` |
+| `snap` | `captured`, `reused`, `cleanScreens`, `failedScreens`, `suppressedNoise` |
+| `promote` | `version`, `rev`, `catalogRevision`, `candidateId`, `runsLinked` |
+| `status` | `screensTotal`, `renderable`, `blocked[]` |
+| `geometry` | `verdict` (`clean\|warn\|error`), `divergingSurfaces`, `gaps` |
+| `audit` | `exitCode`, `deprecatedInUse`, `unused` |
+| `migration-commit` | `commitId`, `phase`, `phasesDone[]`, `regressionMode` |
+
+Честные `null` в этих полях — не пробел, а отсутствие факта, и подставлять вместо них догадку драйвер не будет: `accept-status` не знает ревизию кандидата (вид рана её не содержит, а голова компонента могла уйти вперёд), `accept-status --case` не знает счётчиков рана (читался один случай), а `geometry` не считает пер-поверхностные вердикты — `divergingSurfaces` там всегда `null`, потому что поверхности (`root`/`layoutUnion`/`paint`/`referenceExport`) живут в приёмке случая, и `[]` читалось бы как «поверхности сошлись».
+
+**Правило файлов: `.json` — всегда JSON, текст — `.txt`.** Расширение — единственное, что видно до открытия файла, поэтому формат выводится из него, а незнакомое расширение отвергается **до** работы (`--receipt r.receipt` — ошибка аргументов, а не потерянная съёмка). У `migration-commit --receipt` оба формата законны: `.json` — квитанция сервера как есть, `.txt` — те же строки, что напечатаны человеку; у `snap`/`preview --receipt` — только `.json` (это документ capture receipt).
+
+**Миграция существующих путей.** Квитанции прошлых волн, записанные текстом в файл с расширением `.json` (рабочие журналы координатора миграции, «receipt» из ручных прогонов), переименовать в `.txt` — их содержимое не JSON, и любой машинный шаг над каталогом квитанций на них спотыкается. Ничего конвертировать не нужно: правило про имя, а не про содержимое. Новые записи харнес пишет уже по правилу.
+
 ## Gotchas
 
 - Прототип **обновляется, а не создаётся заново**: `doc.id` — ключ. Не занимайте чужие id — `get prototypes` покажет, что уже есть.

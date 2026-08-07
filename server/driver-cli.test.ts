@@ -37,6 +37,7 @@ import {
   candidateOverlayIssues,
   resourceBarrierLine,
   suppressedNoiseLine,
+  receiptFileFormat,
   previewDraftOutputPath,
   previewOutputPath,
   DEFAULT_EXPECT_TOLERANCE,
@@ -1678,7 +1679,7 @@ interface StubCall { method: string; path: string; search: string; body: Record<
 type StubReply = { status?: number; json: unknown };
 
 async function stubApi(routes: Record<string, (body: Record<string, unknown> | null, url: URL) => StubReply>) {
-  await testDirectory();
+  const directory = await testDirectory();
   const calls: StubCall[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -1700,7 +1701,7 @@ async function stubApi(routes: Record<string, (body: Record<string, unknown> | n
     },
   });
   servers.push(server);
-  return { api: `http://127.0.0.1:${server.port}/api`, calls, promotes: () => calls.filter((call) => call.path.endsWith("/promote")) };
+  return { api: `http://127.0.0.1:${server.port}/api`, directory, calls, promotes: () => calls.filter((call) => call.path.endsWith("/promote")) };
 }
 
 const SOURCE_HASH = "a".repeat(64);
@@ -2913,6 +2914,296 @@ describe("author driver receipt envelope (W6a)", () => {
     expect(human.exitCode).toBe(0);
     expect(human.stdout).not.toContain("envelope");
     expect(human.stdout).not.toContain("schemaVersion");
+  });
+});
+
+
+/**
+ * W6b (план `docs/plans/2026-08-07-migration-feedback-wave.md` §1.4): контракты `summary` в
+ * конверте, глобальный `--summary-json` и верб `migration-commit` — poller серверной саги W4.
+ *
+ * Проверяется именно **контракт квитанции**: набор полей `summary` по таблице §1.4 сценарно на
+ * каждый верб, симметрия `--summary-json` (тот же объект, что `--json` кладёт под `envelope`) и
+ * сохранность инварианта W6a `ok === (exit === 0)`.
+ */
+describe("author driver envelope summary contracts (W6b)", () => {
+  const summaryOf = (stdout: string) => (JSON.parse(stdout) as { envelope: { summary: Record<string, unknown> } }).envelope.summary;
+
+  test("snap: captured/reused/cleanScreens/failedScreens/suppressedNoise", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await twoScreenDoc("w6b-snap"));
+    const result = await run(api, ["snap", "w6b-snap", `${directory}/shots`, "--all-screens", "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(summaryOf(result.stdout)).toEqual({
+      captured: 2, reused: 0, cleanScreens: 2, failedScreens: 0, suppressedNoise: 0,
+    });
+  }, 30_000);
+
+  test("status: screensTotal/renderable/blocked — blocked names the screens, not their count", async () => {
+    const { api } = await setup();
+    await saveDoc(api, await twoScreenDoc("w6b-status"));
+    const result = await run(api, ["status", "w6b-status", "--all-screens", "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(summaryOf(result.stdout)).toEqual({ screensTotal: 2, renderable: 2, blocked: [] });
+  }, 30_000);
+
+  test("audit: exitCode/deprecatedInUse/unused", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "w6b-audit-card", "W6bAuditCard");
+    const result = await run(api, ["audit", "--design-system", "yandex-pay", "--json"]);
+    expect(result.exitCode).toBe(0);
+    const summary = summaryOf(result.stdout) as { exitCode: number; deprecatedInUse: number; unused: number };
+    expect(summary.exitCode).toBe(0);
+    expect(summary.deprecatedInUse).toBe(0);
+    // Свежий компонент никем не пинуется — он и есть «без головных использований».
+    expect(summary.unused).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
+  test("geometry: verdict/divergingSurfaces/gaps — verdict сводит issues замера", async () => {
+    const geometryJob: RunJob = async () => ({
+      ok: true,
+      geometry: {
+        rects: [
+          { key: "stack", instance: 0, domIndex: 0, x: 0, y: 0, width: 328, height: 56, layoutContext: { display: "flex", flexDirection: "row", flexWrap: "nowrap", rowGap: "8px", columnGap: "8px" } },
+        ],
+        truncated: false, total: 1,
+        safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+        roleRects: {},
+        frame: { x: 0, y: 0, width: 390, height: 844, source: "surface" as const },
+        content: { x: 0, y: 0, width: 390, height: 844 },
+        scroll: { width: 390, height: 844 },
+        viewportOwnership: { frame: { width: 390, height: 844 }, content: { width: 390, height: 844 }, scroll: { width: 390, height: 844 }, scrollable: false, owners: [], unownedPct: 0 },
+        issues: [{ severity: "warning", code: "unowned_viewport", message: "43% of the viewport has no owner" }],
+      },
+      consoleErrors: [], pageErrors: [], browserVersion: "test/geometry",
+    } as never);
+    const { api } = await setup(undefined, geometryJob);
+    const doc = await fixture("w6b-geometry");
+    await saveDoc(api, doc);
+    const result = await run(api, ["geometry", "w6b-geometry", doc.screens[0]!.id, "--json"]);
+    expect(result.exitCode).toBe(0);
+    // `divergingSurfaces` — честный `null`: пер-поверхностных вердиктов у прототипного замера нет.
+    expect(summaryOf(result.stdout)).toEqual({ verdict: "warn", divergingSurfaces: null, gaps: 0 });
+  }, 30_000);
+
+  test("promote: version/rev/catalogRevision/candidateId/runsLinked", async () => {
+    const { api } = await stubApi(promoteStubRoutes());
+    const result = await run(api, ["promote", "linked", "--candidate", CANDIDATE, "--acceptance-run", RUN, "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(summaryOf(result.stdout)).toEqual({
+      version: 3, rev: 2, catalogRevision: "cat-1", candidateId: CANDIDATE, runsLinked: 1,
+    });
+  }, 30_000);
+
+  /** Провалившийся ран: топ причин считается по группам ремедиаций, ревизия — от кандидата. */
+  const failedAcceptRoutes = () => ({
+    "GET /api/capabilities": () => ({ json: { features: { acceptanceMatrix: true } } }),
+    "GET /api/components/summed": () => ({ json: { id: "summed", headRev: 4, designSystem: "yandex-pay" } }),
+    "POST /api/components/summed/candidates": () => ({ json: { candidateId: CANDIDATE, rev: 4, warnings: [] } }),
+    "POST /api/acceptance-runs": () => ({ status: 202, json: { runId: RUN, cases: 6 } }),
+    [`GET /api/acceptance-runs/${RUN}`]: () => ({
+      json: {
+        runId: RUN, candidateId: CANDIDATE, componentId: "summed", status: "fail",
+        progress: { total: 6, completed: 6, reused: 2, failed: 2 },
+        remediationGroups: [
+          { key: "k".repeat(64), cause: { code: "surface-tint", confidence: 0.9, detail: "surface tinted" }, cases: ["alpha"], caseCount: 1 },
+          { key: "m".repeat(64), cause: { code: "geometry-shift", confidence: 0.8, detail: "shifted" }, cases: ["beta", "gamma"], caseCount: 2 },
+        ],
+        failedCases: [
+          { caseId: "alpha", status: "done", verdict: "fail", causes: [{ code: "surface-tint", confidence: 0.9, detail: "tint" }], failedGates: [{ gate: "visual", status: "fail" }] },
+          { caseId: "beta", status: "done", verdict: "fail", causes: [{ code: "geometry-shift", confidence: 0.8, detail: "shift" }], failedGates: [{ gate: "geometry", status: "fail" }] },
+        ],
+      },
+    }),
+  } as Record<string, (body: Record<string, unknown> | null) => StubReply>);
+
+  test("accept: runId/verdict/casesTotal/casesFailed/casesReused/topCauses/revision", async () => {
+    const { api } = await stubApi(failedAcceptRoutes());
+    const result = await run(api, ["accept", "summed", "--json"]);
+    // Провал приёмки — продуктовый исход: exit 2 и `ok: false` в том же конверте.
+    expect(result.exitCode).toBe(2);
+    expect(summaryOf(result.stdout)).toEqual({
+      runId: RUN, verdict: "fail", casesTotal: 6, casesFailed: 2, casesReused: 2,
+      // Группы отсортированы по числу случаев: одна правка чинит больше всего.
+      topCauses: [{ code: "geometry-shift", cases: 2 }, { code: "surface-tint", cases: 1 }],
+      revision: 4,
+    });
+  }, 30_000);
+
+  test("accept-status: та же форма, но revision честно null — вид рана ревизии не содержит", async () => {
+    const { api } = await stubApi(failedAcceptRoutes());
+    const result = await run(api, ["accept-status", RUN, "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(summaryOf(result.stdout)).toMatchObject({ runId: RUN, verdict: "fail", revision: null, casesTotal: 6 });
+  }, 30_000);
+
+  test("--summary-json печатает ровно конверт: тот же объект, что --json кладёт под envelope", async () => {
+    const { api } = await setup();
+    await saveDoc(api, await twoScreenDoc("w6b-only"));
+    const asJson = await run(api, ["status", "w6b-only", "--all-screens", "--json"]);
+    const summaryJson = await run(api, ["status", "w6b-only", "--all-screens", "--summary-json"]);
+    expect(summaryJson.exitCode).toBe(asJson.exitCode);
+    const envelope = (JSON.parse(asJson.stdout) as { envelope: unknown }).envelope;
+    const printed = JSON.parse(summaryJson.stdout) as Record<string, unknown>;
+    expect(printed).toEqual(envelope as Record<string, unknown>);
+    // Ровно конверт: ни payload'а верба, ни блока `cache`.
+    expect(Object.keys(printed).sort()).toEqual(["artifacts", "command", "items", "nextActions", "ok", "schemaVersion", "summary", "warnings"]);
+    expect(printed).not.toHaveProperty("cache");
+    expect(printed).not.toHaveProperty("screens");
+    // Человекочитаемых строк в этом режиме нет вовсе — stdout принадлежит документу.
+    expect(summaryJson.stdout.trimStart().startsWith("{")).toBe(true);
+  }, 30_000);
+
+  test("--summary-json на отказе несёт ok:false и верб из argv", async () => {
+    const { api } = await setup();
+    const result = await run(api, ["get", "components", "w6b-missing", "--summary-json"]);
+    expect(result.exitCode).not.toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ schemaVersion: 1, command: "get", ok: false });
+  }, 30_000);
+
+  test("правило файлов: .json — JSON, .txt — текст, прочее отвергается до работы", () => {
+    expect(receiptFileFormat("receipts/a.json")).toBe("json");
+    expect(receiptFileFormat("receipts/a.txt")).toBe("text");
+    expect(() => receiptFileFormat("receipts/a.receipt")).toThrow(/\.json .* or \.txt/);
+    expect(() => parseArgs(["snap", "flow", "out", "--receipt", "r.receipt"])).toThrow(/\.json/);
+    expect(parseArgs(["snap", "flow", "out", "--receipt", "r.json"])).toMatchObject({ flags: { receipt: "r.json" } });
+  });
+});
+
+/**
+ * W6b: верб `migration-commit` — poller серверной саги W4. Драйвер состоянием не владеет:
+ * он создаёт сагу идемпотентно, читает квитанцию и двигает её `advance`/`cancel`.
+ */
+describe("author driver migration-commit verb (W6b)", () => {
+  const COMMIT = "mig_00000000-0000-0000-0000-0000000000cc";
+  const phase = (name: string, status = "done") => ({ phase: name, startedAt: "2026-08-07T10:00:00.000Z", endedAt: "2026-08-07T10:00:01.000Z", status });
+  const receipt = (overrides: Record<string, unknown> = {}) => ({
+    commitId: COMMIT, componentId: "mig-comp", designSystem: "yandex-pay", candidateId: null,
+    galleryPrototypeId: null, phase: "complete",
+    phasesDone: ["preflight", "promote", "gallery-save", "verify", "impacted-regression", "audit"],
+    regressionMode: "full",
+    createdAt: "2026-08-07T10:00:00.000Z", updatedAt: "2026-08-07T10:00:06.000Z", phaseStartedAt: "2026-08-07T10:00:05.000Z",
+    request: { idempotencyKey: "driver-mig-comp-r2-aaaaaaaaaaaa", componentId: "mig-comp", baseRev: 2, sourceHash: SOURCE_HASH },
+    phases: [phase("preflight"), phase("promote"), phase("gallery-save", "skipped"), phase("verify"), phase("impacted-regression"), phase("audit")],
+    result: {
+      promote: { version: 3, rev: 2, catalogRevision: "cat-1", superseded: [], candidateId: null, acceptanceRunIds: [], cached: false, warnings: [] },
+      audit: { catalogRevision: "cat-1", dataFingerprint: "d", designSystem: "yandex-pay", artifacts: 12, duplicateGroups: 0, planEntries: 0 },
+    },
+    ...overrides,
+  });
+  const commitRoutes = (overrides: {
+    features?: Record<string, unknown>;
+    create?: () => StubReply;
+    status?: () => StubReply;
+    advance?: () => StubReply;
+    cancel?: () => StubReply;
+  } = {}) => ({
+    "GET /api/capabilities": () => ({ json: { features: { acceptanceMatrix: true, migrationCommit: true, ...overrides.features } } }),
+    "GET /api/components/mig-comp": () => ({ json: { id: "mig-comp", headRev: 2, designSystem: "yandex-pay" } }),
+    "POST /api/components/mig-comp/validate": () => ({ json: { sourceHash: SOURCE_HASH, bundleHash: "bundle", catalogRevision: "cat-1", warnings: [] } }),
+    "POST /api/migration-commits": overrides.create ?? (() => ({ status: 201, json: receipt() })),
+    [`GET /api/migration-commits/${COMMIT}`]: overrides.status ?? (() => ({ json: receipt() })),
+    [`POST /api/migration-commits/${COMMIT}/advance`]: overrides.advance ?? (() => ({ json: receipt() })),
+    [`POST /api/migration-commits/${COMMIT}/cancel`]: overrides.cancel ?? (() => ({ json: receipt({ phase: "cancelled", error: { code: "cancelled", message: "closed by hand" } }) })),
+  } as Record<string, (body: Record<string, unknown> | null) => StubReply>);
+
+  test("start доводит сагу до complete: детерминированный ключ идемпотентности, квитанция и summary", async () => {
+    const { api, calls, directory } = await stubApi(commitRoutes());
+    const receiptPath = resolve(directory, "receipts/mig.json");
+    const result = await run(api, ["migration-commit", "start", "mig-comp", "--receipt", receiptPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    // Ключ выводится из (компонент, ревизия, sourceHash): повтор команды вернёт ту же сагу.
+    expect(calls.find((call) => call.path === "/api/migration-commits")?.body).toMatchObject({
+      idempotencyKey: "driver-mig-comp-r2-aaaaaaaaaaaa", componentId: "mig-comp", baseRev: 2, sourceHash: SOURCE_HASH,
+    });
+    const envelope = (JSON.parse(result.stdout) as { envelope: Record<string, unknown> }).envelope;
+    expect(envelope).toMatchObject({
+      command: "migration-commit", ok: true,
+      summary: { commitId: COMMIT, phase: "complete", regressionMode: "full" },
+    });
+    expect((envelope.summary as { phasesDone: string[] }).phasesDone).toContain("promote");
+    expect(envelope.artifacts).toEqual([receiptPath]);
+    // Единственная агентская запись волны — файл квитанции (KPI §1.3).
+    expect(await Bun.file(receiptPath).json()).toMatchObject({ command: "migration-commit", exitCode: 0, receipt: { commitId: COMMIT } });
+  }, 30_000);
+
+  test("needs-<фаза> — не ошибка HTTP: exit 2, журнал фаз и nextActions с advance/cancel", async () => {
+    const stalled = receipt({
+      phase: "needs-verify", phasesDone: ["preflight", "promote", "gallery-save"],
+      phases: [phase("preflight"), phase("promote"), phase("gallery-save"), { ...phase("verify", "failed"), error: { code: "phase_failed", message: "screen home is not renderable" } }],
+      error: { code: "phase_failed", message: "screen home is not renderable" },
+    });
+    const { api } = await stubApi(commitRoutes({ create: () => ({ status: 201, json: stalled }) }));
+    const human = await run(api, ["migration-commit", "start", "mig-comp"]);
+    expect(human.exitCode).toBe(2);
+    expect(human.stdout).toContain("phase=needs-verify");
+    expect(human.stdout).toContain("verify: failed — phase_failed: screen home is not renderable");
+    expect(human.stdout).toContain(`--advance ${COMMIT}`);
+
+    const asJson = await run(api, ["migration-commit", "start", "mig-comp", "--json"]);
+    const envelope = (JSON.parse(asJson.stdout) as { envelope: Record<string, unknown> }).envelope;
+    expect(envelope).toMatchObject({ ok: false, summary: { phase: "needs-verify", regressionMode: "full" } });
+    expect(envelope.nextActions).toEqual([
+      `driver.mjs migration-commit --advance ${COMMIT}`,
+      `driver.mjs migration-commit --cancel ${COMMIT} --reason <text>`,
+    ]);
+  }, 30_000);
+
+  test("--status / --advance / --cancel адресуются commitId; cancel несёт причину и exit 2", async () => {
+    const { api, calls } = await stubApi(commitRoutes());
+    const status = await run(api, ["migration-commit", "--status", COMMIT, "--summary-json"]);
+    expect(status.exitCode).toBe(0);
+    expect(JSON.parse(status.stdout)).toMatchObject({ command: "migration-commit", ok: true, summary: { phase: "complete" } });
+
+    const advanced = await run(api, ["migration-commit", "--advance", COMMIT, "--json"]);
+    expect(advanced.exitCode).toBe(0);
+    expect(calls.some((call) => call.path === `/api/migration-commits/${COMMIT}/advance` && call.method === "POST")).toBe(true);
+
+    const cancelled = await run(api, ["migration-commit", "--cancel", COMMIT, "--reason", "closed by hand"]);
+    expect(cancelled.exitCode).toBe(2);
+    expect(cancelled.stdout).toContain("phase=cancelled");
+    expect(calls.find((call) => call.path === `/api/migration-commits/${COMMIT}/cancel`)?.body).toEqual({ reason: "closed by hand" });
+  }, 30_000);
+
+  test("--dry-run ничего не мутирует: план фаз, список мутаций и текстовая квитанция .txt", async () => {
+    const plan = {
+      dryRun: true, componentId: "mig-comp", designSystem: "yandex-pay", galleryPrototypeId: "mig-gallery",
+      phases: ["preflight", "promote", "gallery-save", "verify", "impacted-regression", "audit"],
+      regressionMode: "impacted",
+      mutations: [{ phase: "promote", kind: "component.promote", target: "mig-comp", description: "Promote head rev 2 to a new active version" }],
+      preflight: { ok: true },
+      regressionPreview: { rev: 5, summary: { capture: 1, reuse: 4, total: 5 }, screens: [] },
+    };
+    const { api, calls, directory } = await stubApi(commitRoutes({ create: () => ({ status: 200, json: plan }) }));
+    const textReceipt = resolve(directory, "mig.txt");
+    const result = await run(api, ["migration-commit", "start", "mig-comp", "--gallery", "mig-gallery", "--dry-run", "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(calls.find((call) => call.path === "/api/migration-commits")?.body).toMatchObject({ dryRun: true, gallery: { prototypeId: "mig-gallery", readiness: "barrier" } });
+    expect((JSON.parse(result.stdout) as { envelope: { summary: Record<string, unknown> } }).envelope.summary)
+      .toEqual({ commitId: null, phase: "dry-run", phasesDone: [], regressionMode: "impacted" });
+
+    // `.txt` — те же строки, что видит человек (правило файлов W6b).
+    const withText = await run(api, ["migration-commit", "--status", COMMIT, "--receipt", textReceipt]);
+    expect(withText.exitCode).toBe(0);
+    expect(await Bun.file(textReceipt).text()).toContain(`migration-commit ${COMMIT} mig-comp phase=complete`);
+  }, 30_000);
+
+  test("новый драйвер × старый сервер: features.migrationCommit=false — отказ до всякой мутации", async () => {
+    const { api, calls } = await stubApi(commitRoutes({ features: { migrationCommit: false } }));
+    const result = await run(api, ["migration-commit", "start", "mig-comp"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("features.migrationCommit is off");
+    expect(calls.some((call) => call.path === "/api/migration-commits")).toBe(false);
+  }, 30_000);
+
+  test("формы верба взаимоисключающи и проверяются до сети", () => {
+    expect(parseArgs(["migration-commit", "start", "pay-card"])).toMatchObject({ cmd: "migration-commit", args: ["start", "pay-card"] });
+    expect(parseArgs(["migration-commit", "--status", "mig_x"])).toMatchObject({ flags: { status: "mig_x" } });
+    expect(() => parseArgs(["migration-commit", "start", "pay-card", "--advance", "mig_x"])).toThrow(/usage: migration-commit --advance/);
+    expect(() => parseArgs(["migration-commit", "--status", "mig_x", "--cancel", "mig_y"])).toThrow(/exactly one/);
+    expect(() => parseArgs(["migration-commit", "--status", "mig_x", "--dry-run"])).toThrow(/--dry-run applies to 'start'/);
+    expect(() => parseArgs(["migration-commit", "pay-card"])).toThrow(/usage: migration-commit start/);
   });
 });
 

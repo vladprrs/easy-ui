@@ -20,7 +20,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... [--no-barrier] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> [--overlay <json|file>] | case-set validate <manifest.json> [--overlay <json|file>] | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap asks the server for the deterministic resource barrier (readiness: \"barrier\") by default because driver captures are SERVICE captures — --no-barrier is the rollback to the pre-wave v1 readiness; with --receipt snap/preview also print the barrier block (decoded/expected, fonts, stable frames, late resources, ms) and one summary line of suppressed console noise; case-set put/validate --overlay <json|file> merges the candidateOverlay map {\"<componentId>\": \"cand_...\"} into the manifest (accept has no --overlay: the graph belongs to the manifest); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... [--no-barrier] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> [--overlay <json|file>] | case-set validate <manifest.json> [--overlay <json|file>] | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | migration-commit start <componentId> [--gallery <prototypeId>] [--screen <fragment.json>] [--candidate <candidateId>] [--acceptance-run <runId>]... [--expected-cases N] [--supersede auto|none] [--message <text>] [--audit-design-system <id>] [--idempotency-key <key>] [--receipt <file.json|file.txt>] [--timeout-sec N] [--dry-run] | migration-commit --status <commitId> | migration-commit --advance <commitId> | migration-commit --cancel <commitId> [--reason <text>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json, --summary-json (stdout carries ONLY the envelope receipt {schemaVersion, command, ok, summary, items, artifacts, warnings, nextActions} — the same object --json nests under `envelope`) and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap asks the server for the deterministic resource barrier (readiness: \"barrier\") by default because driver captures are SERVICE captures — --no-barrier is the rollback to the pre-wave v1 readiness; with --receipt snap/preview also print the barrier block (decoded/expected, fonts, stable frames, late resources, ms) and one summary line of suppressed console noise; case-set put/validate --overlay <json|file> merges the candidateOverlay map {\"<componentId>\": \"cand_...\"} into the manifest (accept has no --overlay: the graph belongs to the manifest); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure; migration-commit polls the SERVER-side saga (preflight \u2192 promote \u2192 gallery-save \u2192 verify \u2192 impacted-regression \u2192 audit): the idempotency key defaults to (component, headRev, sourceHash) so a repeat returns the same saga, a saga stopped in needs-<phase> exits 2 and is resumed with --advance or closed with --cancel, and --receipt writes the single agent record (.json = machine receipt, .txt = the printed lines)";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -36,6 +36,14 @@ class CliError extends Error {
 }
 
 let jsonMode = false;
+/**
+ * `--summary-json` (план 2026-08-07 §1.4, W6b): stdout получает **ровно** объект `envelope` и
+ * ничего больше. Симметрия к `--json`, где тот же объект лежит вложенным ключом: агенту, которому
+ * нужна только квитанция, не приходится ни знать форму payload'а конкретного верба, ни вычитывать
+ * из него ключ. Режим включает `jsonMode` (человекочитаемые строки принадлежат stdout и должны
+ * замолчать), но печатает другой документ.
+ */
+let summaryJsonMode = false;
 /**
  * Клиентский кэш ответов (план 2026-08-03 §5 W7). До разбора флагов — no-op: команда без
  * `--cache-dir`/`EASYUI_CACHE_DIR` работает ровно как раньше.
@@ -83,12 +91,15 @@ export function buildEnvelope(envelope) {
  * читатель обязан видеть, пришла цифра с сервера или с диска. В человекочитаемом режиме — та же
  * строка в stderr (stdout принадлежит отчёту).
  *
- * `envelope` обязателен (W6a) и печатается **только** в `--json`: человекочитаемый вывод
- * остаётся байт-в-байт прежним.
+ * `envelope` обязателен (W6a) и печатается **только** в json-режимах: человекочитаемый вывод
+ * остаётся байт-в-байт прежним. `--summary-json` (W6b) печатает тот же объект **один**, без
+ * payload'а и без блока `cache`: статус кэша — свойство запроса, а не квитанции верба, и в
+ * сводке его место занимает `summary`.
  */
 function report(lines, payload, envelope) {
   const receipt = buildEnvelope(envelope);
-  if (jsonMode) process.stdout.write(`${JSON.stringify({ ...payload, envelope: receipt, cache: cache.summary() }, null, 2)}\n`);
+  if (summaryJsonMode) process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
+  else if (jsonMode) process.stdout.write(`${JSON.stringify({ ...payload, envelope: receipt, cache: cache.summary() }, null, 2)}\n`);
   else {
     for (const line of [lines].flat()) console.log(line);
     if (cache.enabled) process.stderr.write(`${cache.line()}\n`);
@@ -128,6 +139,15 @@ export const CACHE_FLAGS = Object.freeze({
   "--cache-refresh": { value: false, key: "cacheRefresh" },
 });
 const CACHE_VALUE_FLAGS = Object.keys(CACHE_FLAGS).filter((flag) => CACHE_FLAGS[flag].value);
+/**
+ * Глобальная квитанция (план 2026-08-07 §1.4, W6b). Как и кэш-флаги, разбирается для **любой**
+ * команды и не входит в `flagSpecs`: `--summary-json` — не контракт конкретного верба, а способ
+ * прочитать общий конверт, и требовать его объявления у каждого глагола значило бы гарантировать
+ * расхождение списков.
+ */
+export const ENVELOPE_FLAGS = Object.freeze({
+  "--summary-json": { value: false, key: "summaryJson" },
+});
 const allScreensFlag = { "--all-screens": { value: false, key: "allScreens" } };
 /**
  * `--receipt <file.json>` (план renderer-contract-2 §5 **R8b**): скачать capture receipt снятой
@@ -339,6 +359,46 @@ export const flagSpecs = Object.freeze({
   // «разотклонить» нет ни в драйвере, ни на сервере; выход — новая ревизия компонента.
   reject: { ...jsonFlag, "--reason": { value: true, key: "reason" } },
   // План 2026-08-03 §5 W6: dry-run импакта кандидата к baseline-рану (ничего не снимает).
+  /**
+   * `migration-commit` (план 2026-08-07 §W4): один верб на весь набор ручек саги. Режим —
+   * подкоманда `start` либо ровно один из `--status`/`--advance`/`--cancel`: сага адресуется
+   * либо компонентом (её ещё нет), либо `commitId` (она уже есть), и смешивать эти адреса в
+   * одном позиционале значило бы гадать, что имел в виду агент.
+   */
+  "migration-commit": {
+    ...jsonFlag, ...surfaceFlags, ...receiptFlag, ...noBarrierFlag,
+    "--status": { value: true, key: "status" },
+    "--advance": { value: true, key: "advance" },
+    "--cancel": { value: true, key: "cancel" },
+    "--dry-run": { value: false, key: "dryRun" },
+    "--gallery": { value: true, key: "gallery" },
+    "--screen": { value: true, key: "screen" },
+    "--candidate": { value: true, key: "candidate" },
+    "--acceptance-run": { value: true, key: "acceptanceRun", repeat: true },
+    "--expected-cases": {
+      value: true,
+      key: "expectedCases",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 1) invalid("--expected-cases must be a positive integer");
+        return number;
+      },
+    },
+    "--supersede": { value: true, key: "supersede", enum: ["auto", "none"] },
+    "--message": { value: true, key: "message" },
+    "--audit-design-system": { value: true, key: "auditDesignSystem" },
+    "--idempotency-key": { value: true, key: "idempotencyKey" },
+    "--reason": { value: true, key: "reason" },
+    "--timeout-sec": {
+      value: true,
+      key: "timeoutSec",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 1 || number > 7200) invalid("--timeout-sec must be an integer from 1 to 7200");
+        return number;
+      },
+    },
+  },
   impact: {
     ...jsonFlag,
     "--candidate": { value: true, key: "candidate" },
@@ -421,6 +481,8 @@ const ranges = Object.freeze({
   "accept-status": [1, 1],
   reject: [1, 1],
   impact: [1, 1],
+  // `migration-commit start <componentId>` (2) | `migration-commit --status|--advance|--cancel <id>` (0).
+  "migration-commit": [0, 2],
   // `case-set put <componentId> <manifest.json>` (3) | `case-set get|coverage <caseSetId>` (2).
   "case-set": [2, 3],
   // 0 — каталожный sweep `audit --design-system`, 1 — подкоманда `audit reuse`.
@@ -453,7 +515,7 @@ export function parseArgs(argv) {
     : compositionSubcommand ? "composition publish"
     : auditSubcommand ? "audit reuse"
     : command;
-  const specs = { ...CACHE_FLAGS, ...(flagSpecs[commandForm] ?? {}) };
+  const specs = { ...CACHE_FLAGS, ...ENVELOPE_FLAGS, ...(flagSpecs[commandForm] ?? {}) };
   const positionals = [];
   const flags = {};
   const seen = new Set();
@@ -526,6 +588,25 @@ export function parseArgs(argv) {
     invalid("accept has no --overlay: the dependency graph belongs to the case-set manifest, not to the run —"
       + " publish it with 'case-set put <componentId> <manifest.json> --overlay <json|file>' and accept that caseSetId");
   }
+  // `migration-commit` — либо `start <componentId>`, либо ровно одна ручка над существующей
+  // сагой. Смешение форм отвергается до сети: `--advance` со `start` читался бы как «создай и
+  // продолжи», а сага, которую только что создали, продолжения не требует.
+  if (command === "migration-commit") {
+    const targets = ["status", "advance", "cancel"].filter((key) => flags[key] !== undefined);
+    if (targets.length > 1) invalid("migration-commit takes exactly one of --status <id> | --advance <id> | --cancel <id>");
+    if (targets.length === 1) {
+      if (positionals.length !== 0) invalid(`usage: migration-commit --${targets[0]} <commitId>`);
+      if (flags.dryRun) invalid("migration-commit --dry-run applies to 'start' only: an existing saga is not a plan");
+    } else {
+      if (positionals[0] !== "start" || positionals.length !== 2) {
+        invalid("usage: migration-commit start <componentId> [--gallery <prototypeId> [--screen <fragment.json>]] [--candidate <id>] [--acceptance-run <runId>]... [--dry-run]");
+      }
+      if (flags.reason !== undefined) invalid("migration-commit --reason applies to --cancel only");
+    }
+  }
+  // W6b: формат квитанции выводится из расширения (`.json` — JSON, `.txt` — текст), и проверять
+  // его надо **до** работы: узнать о неверном имени файла после съёмки — значит потерять её.
+  if (flags.receipt !== undefined) receiptFileFormat(flags.receipt);
   // `impact` — dry-run отчёт (W6): обе стороны сравнения обязаны быть названы явно, иначе
   // «импакт компонента» ничего не значит.
   if (command === "impact" && (flags.candidate === undefined || flags.baselineRun === undefined)) {
@@ -1118,6 +1199,18 @@ async function runGeometry(args) {
     report(null, { command: "geometry", prototypeId: id, screenId, ...state.result, gaps: gapRows }, {
       command: "geometry", ok: true, items: state.result.rects ?? [],
       warnings: (state.result.issues ?? []).map((issue) => `${issue.severity} ${issue.code}: ${issue.message}`),
+      // W6b, контракт §1.4. `verdict` — свод по `issues` замера (ошибка > предупреждение >
+      // чисто). `divergingSurfaces` — **null**, а не пустой массив: пер-поверхностные вердикты
+      // (`root`/`layoutUnion`/`paint`/`referenceExport`) живут в приёмке случая (§W1a), у
+      // прототипного замера их нет вовсе, и `[]` читалось бы как «поверхности сошлись».
+      // `gaps` — сколько зазоров удалось измерить (строки с `reason` — те, где замер невозможен).
+      summary: {
+        verdict: (state.result.issues ?? []).some((issue) => issue.severity === "error")
+          ? "error"
+          : (state.result.issues ?? []).length ? "warn" : "clean",
+        divergingSurfaces: null,
+        gaps: gapRows.filter((row) => row.reason === null).length,
+      },
     });
   }
 }
@@ -1486,9 +1579,31 @@ async function captureEvidence(jobId, state, wantDocument) {
   return { ...captureReceiptEvidence(state, document), document };
 }
 
+/**
+ * Правило файлов квитанций (план 2026-08-07 §1.4, W6b): **`.json` — всегда JSON, текст — `.txt`**.
+ *
+ * Расширение — единственное, что читатель файла видит до его открытия, и «текстовая квитанция с
+ * расширением .json» ломает всякий машинный конвейер (jq, импорт, валидация схемой) молча.
+ * Поэтому формат выводится из имени, а незнакомое расширение — ошибка аргументов, а не тихая
+ * запись «во что-нибудь».
+ */
+export function receiptFileFormat(path, flag = "--receipt") {
+  if (path.endsWith(".json")) return "json";
+  if (path.endsWith(".txt")) return "text";
+  return invalid(`${flag} must name a .json (machine receipt) or .txt (human receipt) file: ${path}`);
+}
+
 async function writeReceiptFile(path, payload) {
+  // Существующие вызовы пишут документ — расширение обязано это подтверждать.
+  receiptFileFormat(path);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+/** Текстовая квитанция (`.txt`): те же строки, что печатает верб человеку. */
+async function writeTextReceiptFile(path, lines) {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${[lines].flat().join("\n")}\n`);
 }
 
 /**
@@ -1820,6 +1935,19 @@ async function runSnap(args, flags, command = "snap") {
     }, {
       command, ok: exitCode === EXIT.ok, items: rows,
       artifacts: [...rows.map((row) => row.path).filter(Boolean), ...(wantReceipt ? [flags.receipt] : [])],
+      // W6b, контракт §1.4. Счётчики берутся только по **снятым** экранам (кроме `reused`):
+      // переиспользованный кадр не производил ни PNG, ни консоли, и складывать его в «чистые»
+      // значило бы отчитываться о работе, которой не было.
+      summary: {
+        captured: captured.length,
+        reused: rows.length - captured.length,
+        cleanScreens: captured.filter((row) => row.path && !row.failure && row.productErrors.length === 0).length,
+        failedScreens: captured.filter((row) => row.failure || !row.path).length,
+        suppressedNoise: captured.reduce(
+          (total, row) => total + (Number.isInteger(row.suppressedCount) ? row.suppressedCount : (row.infraNoise?.length ?? 0)),
+          0,
+        ),
+      },
       // §W5: откат на полную пересъёмку — предупреждение конверта, а не деталь лога: агент,
       // просивший план, обязан увидеть в квитанции, что плана не было.
       warnings: [...captured.flatMap((row) => row.productErrors), ...(impacted.fallback ? [impacted.fallback] : [])],
@@ -2054,6 +2182,9 @@ async function runStatus(args, flags) {
     report(null, { command: "status", prototypeId: id, screens: rows }, {
       command: "status", ok: broken.length === 0, items: rows,
       warnings: broken.map((screen) => `screen ${screen} is not renderable`),
+      // W6b, контракт §1.4: `blocked` — именно список экранов, а не их число: следующий шаг
+      // агента адресуется экрану.
+      summary: { screensTotal: rows.length, renderable: rows.filter((row) => row.renderable).length, blocked: broken },
     });
   }
   if (broken.length) throw new CliError(`prototype screen is not renderable: ${broken.join(", ")}`);
@@ -2524,6 +2655,9 @@ async function runAudit(flags) {
   report(auditLines(flags.designSystem, rows, findings), { command: "audit", designSystem: flags.designSystem, exitCode, components: rows, findings }, {
     command: "audit", ok: exitCode === EXIT.ok, items: rows,
     warnings: findings.deprecatedInUse.map((componentId) => `deprecated component still in use: ${componentId}`),
+    // W6b, контракт §1.4: `exitCode` в квитанции — не дубль `ok`, а различение «чисто» (0) и
+    // «есть deprecated в использовании» (2) без чтения payload'а.
+    summary: { exitCode, deprecatedInUse: findings.deprecatedInUse.length, unused: findings.unused.length },
   });
   if (exitCode !== EXIT.ok) throw new CliError(`deprecated components are still used by head revisions: ${findings.deprecatedInUse.join(", ")}`, { exitCode });
 }
@@ -2804,7 +2938,18 @@ async function runPromote(args, flags) {
     // `acceptanceLinkSource` отвечает на вопрос «откуда взялась доказательная база версии»:
     // флаги агента, автовыбор по runs[] кандидата или её нет вовсе (W2b).
     { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId, acceptanceRunIds, acceptanceLinkSource: link ? (link.auto ? "auto" : "flags") : "none", ...existenceReport() },
-    { command: "promote", ok: true, warnings: result.warnings ?? [] },
+    {
+      command: "promote", ok: true, warnings: result.warnings ?? [],
+      // W6b, контракт §1.4: `runsLinked` — сколько ранов приписано версии (0 — публикация без
+      // доказательной базы, законный исход `acceptanceLinkSource: "none"`).
+      summary: {
+        version: result.version ?? null,
+        rev: result.rev ?? null,
+        catalogRevision: result.catalogRevision ?? null,
+        candidateId,
+        runsLinked: acceptanceRunIds.length,
+      },
+    },
   );
 }
 
@@ -3056,7 +3201,68 @@ async function pollAcceptanceRun(runId, { deadlineMs }) {
  * навигация «кандидат → ран → случаи» осталась бы без вердиктов случаев ровно в том сценарии,
  * ради которого сводка и заводилась.
  */
-async function reportAcceptance(run, { command, componentId, candidateId, flags, summary = null }) {
+/**
+ * Топ причин провала рана (контракт `summary` §1.4, W6b).
+ *
+ * Источник — тот же документ, что уехал в payload: у полного рана это `remediationGroups`
+ * (сервер уже сгруппировал и отсортировал их по числу случаев — одна правка чинит группу),
+ * у сводки групп нет в машинном виде, и причины считаются по `failedCases`. Форма одна
+ * (`{code, cases}`) в обоих случаях: читатель квитанции не обязан знать, каким видом рана его
+ * снабдили.
+ */
+export function topCauses(document, limit = 5) {
+  const groups = Array.isArray(document?.remediationGroups) ? document.remediationGroups : null;
+  if (groups?.length) {
+    return groups
+      .map((group) => ({
+        code: typeof group?.cause?.code === "string" ? group.cause.code : "unclassified",
+        cases: Number.isInteger(group?.caseCount) ? group.caseCount : (group?.cases?.length ?? 0),
+      }))
+      .sort((a, b) => b.cases - a.cases)
+      .slice(0, limit);
+  }
+  const counts = new Map();
+  for (const item of document?.failedCases ?? []) {
+    // Полный ран несёт классифицированные причины объектами; сводка — строкой `code: detail`;
+    // случай без причины называется своим гейтом, а не «unclassified»-затычкой.
+    const code = typeof item?.causes?.[0]?.code === "string"
+      ? item.causes[0].code
+      : typeof item?.cause === "string"
+        ? (item.cause.split(":")[0] ?? "").trim() || "unclassified"
+        : typeof item?.gate === "string" ? item.gate : "unclassified";
+    counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([code, cases]) => ({ code, cases }))
+    .sort((a, b) => b.cases - a.cases)
+    .slice(0, limit);
+}
+
+/**
+ * Контракт `summary` вербов приёмки (§1.4): `runId, verdict, casesTotal, casesFailed,
+ * casesReused, topCauses[], revision`.
+ *
+ * `revision` — ревизия компонента, по которой собран кандидат. Она известна `accept` (кандидат
+ * создаётся тут же и несёт `rev`) и **не** известна `accept-status`: вид рана ревизии не
+ * содержит вовсе, и подставлять голову компонента было бы враньём — ран мог быть снят по
+ * прошлой. Поэтому там честный `null`, а не догадка.
+ */
+export function acceptanceSummaryFields(document, { revision = null } = {}) {
+  const progress = document?.progress ?? {};
+  const failedCases = document?.failedCases ?? [];
+  const count = (value) => (Number.isInteger(value) ? value : null);
+  return {
+    runId: document?.runId ?? null,
+    verdict: document?.status ?? null,
+    casesTotal: count(progress.total),
+    casesFailed: count(progress.failed) ?? failedCases.length,
+    casesReused: count(progress.reused),
+    topCauses: topCauses(document),
+    revision,
+  };
+}
+
+async function reportAcceptance(run, { command, componentId, candidateId, flags, summary = null, revision = null }) {
   const evidencePath = flags.evidence === undefined ? null : await downloadEvidence(run.runId, flags.evidence);
   const exitCode = acceptExitCode(run.status);
   // Квитанция и связи (W7): candidate → run → cases → artifacts → report. Кэш хранит навигацию
@@ -3084,6 +3290,10 @@ async function reportAcceptance(run, { command, componentId, candidateId, flags,
       // Источник `items` — тот же документ, что и payload: под `--summary` в отчёт не должны
       // просачиваться полные метрики гейтов, ради компактности сводка и заводилась (W8).
       command, ok: exitCode === EXIT.ok, items: (summary ?? run).failedCases ?? [],
+      // W6b: контракт квитанции считается по **полному** рану — сводка теряет прогресс не
+      // всегда, но `casesReused` в ней уже производное, а квитанция обязана быть одинаковой
+      // независимо от того, просили ли `--summary`.
+      summary: acceptanceSummaryFields(run, { revision }),
       artifacts: evidencePath ? [evidencePath] : [],
       warnings: ((summary ?? run).failedCases ?? []).map((item) => `case ${item.caseId}: ${item.verdict ?? item.status ?? item.gate}`),
     },
@@ -3807,7 +4017,11 @@ async function runAccept(args, flags) {
   const run = await pollAcceptanceRun(queued.runId, { deadlineMs: (flags.timeoutSec ?? ACCEPT_DEFAULT_TIMEOUT_SEC) * 1000 });
   // Полный ран уже получен опросом — он и уезжает в link/receipt; `--summary` меняет только вывод.
   const summary = flags.summary ? await acceptanceSummary(run, capabilities) : null;
-  await reportAcceptance(run, { command: "accept", componentId: id, candidateId: candidate.candidateId, flags, summary });
+  await reportAcceptance(run, {
+    command: "accept", componentId: id, candidateId: candidate.candidateId, flags, summary,
+    // Ревизия кандидата известна ровно здесь (ответ `POST /components/:id/candidates`).
+    revision: Number.isInteger(candidate.rev) ? candidate.rev : null,
+  });
 }
 
 /**
@@ -3878,6 +4092,18 @@ async function reportAcceptanceCase(runId, caseId) {
     command: "accept-status", ok: exitCode === EXIT.ok, items: item.gates ?? [],
     artifacts: (item.artifacts ?? []).map((artifact) => artifact.name),
     warnings: (item.causes ?? []).map((cause) => `${cause.code} (${cause.confidence}): ${cause.detail}`),
+    // W6b: drill-down — тот же набор ключей контракта плюс `caseId`. Счётчики рана здесь
+    // недоступны по построению (ручка отдаёт один случай), и вместо выдуманных единиц стоит
+    // честный `null`: `casesFailed` — про этот случай, `casesTotal` — про ран, которого не читали.
+    summary: {
+      runId, caseId, verdict: item.verdict ?? item.status ?? null,
+      casesTotal: null, casesFailed: exitCode === EXIT.ok ? 0 : 1, casesReused: null,
+      topCauses: (item.causes ?? [])
+        .filter((cause) => typeof cause?.code === "string")
+        .slice(0, 5)
+        .map((cause) => ({ code: cause.code, cases: 1 })),
+      revision: null,
+    },
   });
   if (exitCode !== EXIT.ok) throw new CliError(`case ${caseId} of run ${runId} is ${item.verdict ?? item.status}`, { exitCode });
 }
@@ -3899,7 +4125,9 @@ async function runAcceptStatus(args, flags) {
         ? [`acceptance run ${run.runId} is ${run.status} ${run.progress?.completed ?? 0}/${run.progress?.total ?? 0} reused=${run.progress?.reused ?? 0}`]
         : summaryLines(summary, { componentId: run.componentId, evidencePath: null }),
       { command: "accept-status", exitCode: EXIT.ok, ...(summary ?? run) },
-      { command: "accept-status", ok: true },
+      // W6b: у бегущего рана та же форма квитанции — `verdict` называет нетерминальный статус
+      // (`queued`/`running`), а не притворяется вердиктом.
+      { command: "accept-status", ok: true, summary: acceptanceSummaryFields(run) },
     );
     return;
   }
@@ -3939,6 +4167,226 @@ async function runReject(args, flags) {
     `reason: ${rejected.decision?.reason ?? "-"}`,
     `terminal: promote of rev ${rejected.rev} now fails with 409 candidate_rejected; save a new revision to move on`,
   ], { command: "reject", ...rejected }, { command: "reject", ok: true });
+}
+
+// --- migration-commit: poller серверной саги миграционного коммита (§W4/§W6b) ---
+
+/**
+ * Позитивный список **активных** фаз саги — зеркало `MIGRATION_COMMIT_PHASES` сервера
+ * (`server/migration/commit.ts`). Драйвер поллит ровно по нему: всё, что не активная фаза, —
+ * это `complete`, `cancelled` или `needs-<фаза>`, то есть состояние, в котором ждать нечего.
+ */
+export const MIGRATION_COMMIT_PHASES = Object.freeze([
+  "preflight", "promote", "gallery-save", "verify", "impacted-regression", "audit",
+]);
+const MIGRATION_COMMIT_POLL_INTERVAL_MS = 5_000;
+export const MIGRATION_COMMIT_DEFAULT_TIMEOUT_SEC = 1800;
+
+const migrationCommitActive = (phase) => MIGRATION_COMMIT_PHASES.includes(phase);
+export const migrationCommitNeeds = (phase) => typeof phase === "string" && phase.startsWith("needs-");
+
+/**
+ * Exit-код саги. `complete` — ноль; `needs-*` и `cancelled` — **продуктовый** отказ (2): работа
+ * встала на конкретной фазе, и это состояние предметной области, а не сбой транспорта. Активная
+ * фаза после исчерпания клиентского таймаута — тоже 2: сага на сервере продолжает идти, её
+ * добирают `--status`.
+ */
+export const migrationCommitExitCode = (phase) => (phase === "complete" ? EXIT.ok : EXIT.productErrors);
+
+/** Человекочитаемая квитанция саги: где стоит, что уже сделано и чем это доказано. */
+export function migrationCommitLines(receipt) {
+  const lines = [
+    `migration-commit ${receipt.commitId} ${receipt.componentId} phase=${receipt.phase} regression=${receipt.regressionMode}`
+      + (receipt.idempotentReplay ? " (idempotent replay: nothing was mutated)" : ""),
+    `phases done: ${receipt.phasesDone?.length ? receipt.phasesDone.join(", ") : "-"}`,
+  ];
+  for (const entry of receipt.phases ?? []) {
+    lines.push(`  ${entry.phase}: ${entry.status}${entry.idempotentReplay ? " (replay)" : ""}`
+      + (entry.error ? ` — ${entry.error.code}: ${entry.error.message}` : ""));
+  }
+  const result = receipt.result ?? {};
+  if (result.promote) {
+    lines.push(`promote: version ${result.promote.version} (rev ${result.promote.rev}) catalogRevision=${result.promote.catalogRevision}`
+      + (result.promote.superseded?.length ? ` superseded=${result.promote.superseded.map((version) => `v${version}`).join(",")}` : ""));
+  }
+  if (result.gallery) {
+    lines.push(`gallery: ${result.gallery.prototypeId} rev ${result.gallery.beforeRev} → ${result.gallery.afterRev}${result.gallery.changed ? "" : " (unchanged)"}`);
+  }
+  if (result.verify) {
+    const screens = result.verify.screens ?? [];
+    lines.push(`verify: ${screens.filter((screen) => screen.renderable).length}/${screens.length} screens renderable, readiness publishable=${result.verify.readiness?.publishable}`
+      + (result.verify.readiness?.blocking?.length ? ` blocking=${result.verify.readiness.blocking.join(",")}` : ""));
+  }
+  if (result.regression) {
+    const plan = result.regression.plan;
+    lines.push(`regression: mode ${result.regression.mode}`
+      + (plan ? ` — ${plan.summary.capture} capture, ${plan.summary.reuse} reuse of ${plan.summary.total}` : " — no plan (capture every screen)"));
+  }
+  if (result.audit) lines.push(`audit: ${result.audit.designSystem} artifacts=${result.audit.artifacts} duplicateGroups=${result.audit.duplicateGroups}`);
+  if (receipt.error) lines.push(`error: ${receipt.error.code}: ${receipt.error.message}`);
+  if (migrationCommitNeeds(receipt.phase)) {
+    lines.push(`stopped at ${receipt.phase}: fix the cause, then 'driver.mjs migration-commit --advance ${receipt.commitId}' (or --cancel ${receipt.commitId})`);
+  }
+  return lines;
+}
+
+/** Строки dry-run: список фаз и **список мутаций**, которые сага бы сделала. Это предмет ревью. */
+function migrationCommitPlanLines(plan) {
+  const lines = [
+    `migration-commit dry-run ${plan.componentId} (${plan.designSystem}) regression=${plan.regressionMode} gallery=${plan.galleryPrototypeId ?? "-"}`,
+    `phases: ${plan.phases.join(" → ")}`,
+    `preflight: ${plan.preflight.ok ? "ok" : `FAILED ${plan.preflight.error?.code}: ${plan.preflight.error?.message}`}`,
+  ];
+  for (const mutation of plan.mutations ?? []) lines.push(`  would ${mutation.kind} ${mutation.target}: ${mutation.description}`);
+  const preview = plan.regressionPreview;
+  lines.push(preview
+    ? `regression preview: rev ${preview.rev} — ${preview.summary.capture} capture, ${preview.summary.reuse} reuse of ${preview.summary.total}`
+    : "regression preview: none (no gallery, impacted snap disabled, or preflight failed)");
+  return lines;
+}
+
+const migrationCommitPath = (id, tail = "") => `/migration-commits/${encodeURIComponent(id)}${tail}`;
+
+/**
+ * Poll до состояния, в котором ждать больше нечего. Сервер доводит сагу сам (POST/advance
+ * возвращают уже терминальное состояние), но фаза может остаться активной — её двигает другой
+ * процесс, — и тогда poller обязан дождаться, а не отчитаться об «идущей» саге как о результате.
+ */
+async function pollMigrationCommit(receipt, { deadlineMs }) {
+  const deadline = Date.now() + deadlineMs;
+  let current = receipt;
+  let last = null;
+  while (migrationCommitActive(current.phase)) {
+    const line = `commit ${current.commitId} ${current.phase}`;
+    if (line !== last) { progress(line); last = line; }
+    if (Date.now() >= deadline) {
+      progress(`commit ${current.commitId} is still in phase ${current.phase} after the client timeout; the saga keeps running on the server — poll it with 'driver.mjs migration-commit --status ${current.commitId}'`);
+      return current;
+    }
+    await delay(Math.min(MIGRATION_COMMIT_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
+    current = await requireOk("migration commit", await call("GET", migrationCommitPath(current.commitId)));
+  }
+  return current;
+}
+
+/** Отчёт по квитанции саги: одна форма на `start`/`--status`/`--advance`/`--cancel`. */
+async function reportMigrationCommit(receipt, flags, command) {
+  const exitCode = migrationCommitExitCode(receipt.phase);
+  const lines = migrationCommitLines(receipt);
+  const artifacts = [];
+  if (flags.receipt !== undefined) {
+    // «1 агентская запись» KPI §1.3: единственный файл, который харнес пишет сам. Формат — из
+    // расширения (W6b): `.json` — квитанция сервера как есть, `.txt` — те же строки, что видит
+    // человек.
+    if (receiptFileFormat(flags.receipt) === "json") {
+      await writeReceiptFile(flags.receipt, { command: "migration-commit", exitCode, receipt });
+    } else await writeTextReceiptFile(flags.receipt, lines);
+    artifacts.push(flags.receipt);
+    lines.push(flags.receipt);
+  }
+  report(lines, { command: "migration-commit", exitCode, ...receipt }, {
+    command: "migration-commit", ok: exitCode === EXIT.ok, items: receipt.phases ?? [], artifacts,
+    warnings: receipt.error ? [`${receipt.error.code}: ${receipt.error.message}`] : [],
+    nextActions: migrationCommitNeeds(receipt.phase)
+      ? [`driver.mjs migration-commit --advance ${receipt.commitId}`, `driver.mjs migration-commit --cancel ${receipt.commitId} --reason <text>`]
+      : [],
+    // W6b, контракт §1.4.
+    summary: {
+      commitId: receipt.commitId,
+      phase: receipt.phase,
+      phasesDone: receipt.phasesDone ?? [],
+      regressionMode: receipt.regressionMode ?? null,
+    },
+  });
+  if (exitCode !== EXIT.ok) {
+    throw new CliError(`migration commit ${receipt.commitId} is ${receipt.phase}${receipt.error ? `: ${receipt.error.code}` : ""} (${command})`, { exitCode });
+  }
+}
+
+/**
+ * `migration-commit` (план 2026-08-07 §W4/§W6b) — poller серверной саги: `start` создаёт её
+ * идемпотентно и доводит до `complete` или до первого `needs-*`, `--status`/`--advance`/`--cancel`
+ * читают и двигают существующую. Состоянием владеет сервер: драйвер ничего не компенсирует и
+ * ничего не переигрывает сам.
+ */
+async function runMigrationCommit(args, flags) {
+  const capabilities = await requireOk("capabilities", await call("GET", "/capabilities"));
+  if (capabilities.features?.migrationCommit !== true) {
+    throw new CliError("server does not support the migration commit saga (features.migrationCommit is off; needs EASYUI_ACCEPTANCE_MATRIX=1 and no EASYUI_MIGRATION_COMMIT_DISABLED); drive promote/prototype/snap/audit by hand instead");
+  }
+  const deadlineMs = (flags.timeoutSec ?? MIGRATION_COMMIT_DEFAULT_TIMEOUT_SEC) * 1000;
+  if (flags.status !== undefined) {
+    const receipt = await requireOk("migration commit", await call("GET", migrationCommitPath(flags.status)));
+    await reportMigrationCommit(receipt, flags, "status");
+    return;
+  }
+  if (flags.cancel !== undefined) {
+    const cancelled = await requireOk("migration commit cancel", await call("POST", migrationCommitPath(flags.cancel, "/cancel"), {
+      ...(flags.reason === undefined ? {} : { reason: flags.reason }),
+    }));
+    await reportMigrationCommit(cancelled, flags, "cancel");
+    return;
+  }
+  if (flags.advance !== undefined) {
+    const advanced = await requireOk("migration commit advance", await call("POST", migrationCommitPath(flags.advance, "/advance"), {}));
+    await reportMigrationCommit(await pollMigrationCommit(advanced, { deadlineMs }), flags, "advance");
+    return;
+  }
+
+  const id = args[1];
+  const encoded = encodeURIComponent(id);
+  const meta = await getMeta("components", id, { mutating: true });
+  if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
+  // `sourceHash` головы — из того же validate-префлайта, что у promote: сага сверяет им, что
+  // публикует ровно ту сборку, которую видел агент.
+  const validated = await requireOk("validate", await call("POST", `/components/${encoded}/validate`));
+  for (const warning of validated.warnings ?? []) out(`warning: ${warning}`);
+  // Ключ идемпотентности **детерминирован** по (компонент, ревизия, исходник): повтор той же
+  // команды после обрыва обязан вернуть ту же сагу, а не начать вторую. Явный ключ — для
+  // координатора, который ведёт собственную нумерацию.
+  const idempotencyKey = flags.idempotencyKey ?? `driver-${id}-r${meta.headRev}-${validated.sourceHash.slice(0, 12)}`;
+  const gallery = flags.gallery === undefined ? undefined : {
+    prototypeId: flags.gallery,
+    ...(flags.screen === undefined ? {} : { screenFragment: JSON.parse(await readFile(flags.screen, "utf8")) }),
+    ...(flags.message === undefined ? {} : { message: flags.message }),
+    ...(flags.viewport === undefined ? {} : { viewport: flags.viewport }),
+    ...(flags.dsf === undefined ? {} : { deviceScaleFactor: flags.dsf }),
+    ...(flags.theme === undefined ? {} : { theme: flags.theme }),
+    // Тот же opt-in барьера, что у `snap`: план регрессии обязан считаться по той поверхности,
+    // которой галерею потом снимут.
+    ...(flags.noBarrier ? {} : { readiness: SNAP_READINESS }),
+  };
+  const body = {
+    idempotencyKey, componentId: id, baseRev: meta.headRev, sourceHash: validated.sourceHash,
+    ...(flags.candidate === undefined ? {} : { candidateId: flags.candidate }),
+    ...(flags.acceptanceRun === undefined ? {} : { acceptanceRunIds: flags.acceptanceRun }),
+    ...(flags.expectedCases === undefined ? {} : { expectedCases: flags.expectedCases }),
+    ...(flags.supersede === undefined ? {} : { supersede: flags.supersede }),
+    ...(flags.message === undefined ? {} : { message: flags.message }),
+    ...(gallery === undefined ? {} : { gallery }),
+    ...(flags.auditDesignSystem === undefined ? {} : { auditDesignSystem: flags.auditDesignSystem }),
+    ...(flags.dryRun ? { dryRun: true } : {}),
+  };
+  const response = await call("POST", "/migration-commits", body);
+  if (response.status === 409 && errorCode(response) === "migration_commit_in_flight") {
+    const commitId = response.json?.error?.commitId;
+    throw new CliError(`component ${id} already has a migration commit in an active phase${commitId ? ` (${commitId}); poll it with 'driver.mjs migration-commit --status ${commitId}'` : ""}`, { exitCode: EXIT.productErrors });
+  }
+  const created = await requireOk("migration commit", response, [200, 201]);
+  if (flags.dryRun) {
+    // Dry-run — план, а не квитанция: у него нет ни `commitId`, ни фаз в журнале. Единственное
+    // поле контракта, которое у плана есть по-настоящему, — `regressionMode`.
+    report(migrationCommitPlanLines(created), { command: "migration-commit", dryRun: true, ...created }, {
+      command: "migration-commit", ok: created.preflight?.ok === true, items: created.mutations ?? [],
+      warnings: created.preflight?.ok === true ? [] : [`preflight ${created.preflight?.error?.code}: ${created.preflight?.error?.message}`],
+      summary: {
+        commitId: null, phase: "dry-run", phasesDone: [], regressionMode: created.regressionMode ?? null,
+      },
+    });
+    if (created.preflight?.ok !== true) throw new CliError(`migration commit dry-run refused at preflight: ${created.preflight?.error?.message}`, { exitCode: EXIT.productErrors });
+    return;
+  }
+  await reportMigrationCommit(await pollMigrationCommit(created, { deadlineMs }), flags, "start");
 }
 
 /**
@@ -4037,6 +4485,12 @@ async function runVersionsAudit(flags) {
   report(versionAuditLines(scope, rows, findings), { command: "audit versions", ...(flags.designSystem === undefined ? {} : { designSystem: flags.designSystem }), exitCode, components: rows, findings }, {
     command: "audit versions", ok: exitCode === EXIT.ok, items: rows,
     warnings: findings.noActiveVersion.map((componentId) => `component without an active version: ${componentId}`),
+    // W6b: KPI-срез — не каталожный sweep, `deprecatedInUse`/`unused` он не считает вовсе.
+    // Общий с ним ключ ровно один — `exitCode`; остальное — метрика самого среза.
+    summary: {
+      exitCode, components: findings.components, published: findings.published,
+      versionsPerComponent: findings.versionsPerComponent, noActiveVersion: findings.noActiveVersion.length,
+    },
   });
   if (exitCode !== EXIT.ok) throw new CliError(`components without an active version: ${findings.noActiveVersion.join(", ")}`, { exitCode });
 }
@@ -4151,7 +4605,9 @@ async function configureCache(flags) {
 
 export async function main(argv = process.argv.slice(2)) {
   const { cmd, args, flags } = parseArgs(argv);
-  jsonMode = flags.json === true;
+  // W6b: `--summary-json` — тот же json-режим (stdout принадлежит документу), другой документ.
+  summaryJsonMode = flags.summaryJson === true;
+  jsonMode = flags.json === true || summaryJsonMode;
   // Верб квитанции — как его набрали (§1.4): общий обработчик отказа не знает контекста команды.
   currentCommand = cmd ?? null;
   await configureCache(flags);
@@ -4295,6 +4751,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "accept-status") await runAcceptStatus(args, flags);
   else if (cmd === "reject") await runReject(args, flags);
   else if (cmd === "impact") await runImpact(args, flags);
+  else if (cmd === "migration-commit") await runMigrationCommit(args, flags);
   else if (cmd === "case-set") await runCaseSet(args, flags);
   else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : flags.versions ? runVersionsAudit(flags) : runAudit(flags));
 }

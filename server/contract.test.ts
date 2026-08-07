@@ -803,6 +803,9 @@ describe("route contracts", () => {
       surfacesWrite: process.env.EASYUI_SURFACES === "1",
       // Write-политика композиций v3 — kill-switch EASYUI_COMPOSITION_V3 (D9, план 2026-08-03).
       compositionV3: process.env.EASYUI_COMPOSITION_V3 === "1",
+      // План 2026-08-07 §W6b: версия схемы агентской квитанции драйвера (`envelope`) — число,
+      // а не булев флаг: конверт печатается всегда, клиенту нужна его форма. Kill-switch'а нет.
+      receiptEnvelopeVersion: 1,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

@@ -58,6 +58,31 @@ declare module "*/author/driver.mjs" {
   }
   export const ENVELOPE_SCHEMA_VERSION: number;
   export function buildEnvelope(envelope: DriverEnvelopeInput): DriverEnvelope;
+  /** Глобальный `--summary-json`: stdout несёт ровно `envelope` (план 2026-08-07 §1.4, W6b). */
+  export const ENVELOPE_FLAGS: Readonly<Record<string, DriverFlagSpec>>;
+  /** Топ причин провала рана для `summary` вербов приёмки (W6b). */
+  export function topCauses(document: unknown, limit?: number): { code: string; cases: number }[];
+  /** Контракт `summary` у `accept`/`accept-status` (§1.4). */
+  export function acceptanceSummaryFields(
+    document: unknown,
+    options?: { revision?: number | null },
+  ): {
+    runId: string | null;
+    verdict: string | null;
+    casesTotal: number | null;
+    casesFailed: number | null;
+    casesReused: number | null;
+    topCauses: { code: string; cases: number }[];
+    revision: number | null;
+  };
+  /** Правило файлов квитанций (W6b): `.json` — JSON, `.txt` — текст, прочее — ошибка аргументов. */
+  export function receiptFileFormat(path: string, flag?: string): "json" | "text";
+  /** Активные фазы саги миграционного коммита — зеркало `MIGRATION_COMMIT_PHASES` сервера (§W4). */
+  export const MIGRATION_COMMIT_PHASES: readonly string[];
+  export const MIGRATION_COMMIT_DEFAULT_TIMEOUT_SEC: number;
+  export function migrationCommitNeeds(phase: unknown): boolean;
+  export function migrationCommitExitCode(phase: string): number;
+  export function migrationCommitLines(receipt: Record<string, unknown>): string[];
   export function parseArgs(argv: readonly string[]): DriverParsedArgs;
   export function rendererPreflightWarning(capabilities: unknown): string | null;
   export interface DriverViewport { width: number; height: number }
