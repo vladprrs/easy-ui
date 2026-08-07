@@ -47,6 +47,7 @@ import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { TEXT_AA_PRESETS } from "../acceptance/gates/visual";
 import { prototypeCandidateOverlayMax } from "./screenshots";
 import { impactedSnapEnabled, SNAP_PLAN_MAX_SCREENS } from "../prototypes/screenFrames";
+import { MIGRATION_COMMIT_PHASE_TIMEOUT_MS, migrationCommitEnabled } from "../migration/commit";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -160,6 +161,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // план стоит раскрытия композиций и резолва темы на каждый экран; 256 — с шестикратным
       // запасом к крупнейшей известной галерее миграции YP v2 (43 экрана).
       snapPlanMaxScreens: SNAP_PLAN_MAX_SCREENS,
+      // Потолок жизни одной фазы саги миграционного коммита (план 2026-08-07 §W4). Периодических
+      // таймеров в сервере нет: фаза, простоявшая дольше, переводится в `needs-<фаза>` sweep'ом на
+      // старте процесса и на каждом запросе к `/api/migration-commits*`. Драйвер-poller обязан
+      // знать этот срок, чтобы отличать «фаза ещё идёт» от «сага зависла».
+      migrationCommitPhaseTimeoutMs: MIGRATION_COMMIT_PHASE_TIMEOUT_MS,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,
@@ -306,6 +312,12 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // гейтится: галерея к ней не относится. false — при `EASYUI_IMPACTED_SNAP_DISABLED=1`, и
       // тогда ручка отвечает 404, а кадры не пишутся вовсе (потолок плана — `limits.snapPlanMaxScreens`).
       impactedSnap: impactedSnapEnabled(),
+      // §W4: `POST /api/migration-commits` — resumable серверная сага миграционного коммита
+      // (preflight → promote → gallery-save → verify → impacted-regression → audit). Гейтится
+      // матричной приёмкой (как остальная приёмка) **и** собственным kill-switch'ем
+      // `EASYUI_MIGRATION_COMMIT_DISABLED=1`; false — набор ручек отвечает 404. Честная граница:
+      // сервер закрывает серверный хвост, агентские контрольные документы координатора он не пишет.
+      migrationCommit: options.acceptanceMatrix === true && migrationCommitEnabled(),
     },
     // W4: именованные пресеты live-text AA-бюджета — значения объявляет сервер, автор манифеста
     // выбирает только имя (`cases[].textAaBudget`). Пороги видны для воспроизводимости вердикта.

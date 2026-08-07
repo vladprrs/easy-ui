@@ -1065,6 +1065,58 @@ export const migrations = [
       FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev) ON DELETE CASCADE)`);
     db.run("CREATE INDEX prototype_screen_frames_fingerprint ON prototype_screen_frames (prototype_id, screen_frame_fingerprint)");
   },
+  (db: Database) => {
+    // v35: сага миграционного коммита — `migration_commits` (план
+    // `docs/plans/2026-08-07-migration-feedback-wave.md` §1.3/§W4, ретроспектива P0.4).
+    //
+    // Строка — **всё** состояние саги: фаза, журнал фаз, исходный запрос и накопленная квитанция.
+    // Драйвер к ней poller, а не владелец состояния. Решения формы:
+    //
+    // 1. **`idempotency_key NOT NULL` + `UNIQUE (component_id, idempotency_key)`** (триаж O-M8).
+    //    Nullable-ключ в SQLite ничего не ограничивает (NULL≠NULL), поэтому ключ обязателен в API
+    //    и в схеме. Скоуп — компонент, а не глобальный: прецедент
+    //    `UNIQUE (candidate_id, idempotency_key)` у `acceptance_runs`; повтор запроса с тем же
+    //    ключом обязан вернуть **ту же** сагу, а не столкнуться с чужим ключом.
+    // 2. **Partial unique index по позитивному списку активных фаз** (раунд 2, N10; прецедент
+    //    `acceptance_runs_one_in_flight … WHERE status IN ('queued','running')`). Именно позитивный
+    //    список, а не `NOT IN (терминальные)`: новая `needs-*`-фаза, добавленная будущей волной,
+    //    не должна автоматически начать блокировать новые саги. Состояния `needs-*` **вне** списка
+    //    намеренно — сага в них resumable через `advance`, но она не держит компонент: миграцию
+    //    можно начать заново, пока предыдущая ждёт человека.
+    // 3. **Per-component lock, а не `maintenance_locks`** (триаж O-M7): у той таблицы одна
+    //    глобальная строка, и параллельная миграция *другого* компонента была бы запрещена.
+    // 4. **Мягкие ссылки без FK** на `component_id`/`candidate_id`/`gallery_prototype_id`:
+    //    кандидаты вымываются GC, а прототип может быть удалён — сага обязана честно отвечать
+    //    отказом *в фазе*, а не падать на чтении строки или каскадно исчезать.
+    // 5. **`phase_started_at` отдельной колонкой** — вход watchdog'а (`limits.migrationCommitPhaseTimeoutMs`).
+    //    Периодических таймеров в сервере нет, поэтому sweep зависших фаз исполняется на старте и
+    //    на каждом запросе к `/api/migration-commits*`; без этой колонки «висит ли фаза» пришлось
+    //    бы выводить из журнала фаз, то есть парсить JSON на каждом запросе.
+    //
+    // Rollback-window (§3.6): пока откат образа возможен без восстановления тома — **саги не
+    // запускать**. Старый образ о таблице не знает и незавершённую сагу никем не продвинет:
+    // компонент останется промоученным, а галерея — несохранённой, и разбирать это придётся
+    // руками. Уже завершённые (`complete`/`cancelled`) строки откату не мешают.
+    db.run(`CREATE TABLE migration_commits (
+      commit_id TEXT PRIMARY KEY,
+      component_id TEXT NOT NULL,
+      candidate_id TEXT,
+      design_system TEXT NOT NULL,
+      gallery_prototype_id TEXT,
+      phase TEXT NOT NULL,
+      phases_json TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      receipt_json TEXT,
+      idempotency_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      phase_started_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (component_id, idempotency_key))`);
+    db.run(`CREATE UNIQUE INDEX migration_commits_one_in_flight ON migration_commits (component_id)
+      WHERE phase IN ('preflight','promote','gallery-save','verify','impacted-regression','audit')`);
+    db.run("CREATE INDEX migration_commits_component ON migration_commits (component_id, created_at)");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

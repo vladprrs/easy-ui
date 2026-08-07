@@ -1879,6 +1879,78 @@ previousPngSha256, provenAt}`.
 `features.impactedSnap` становится `false`, кадры не пишутся. Миграция v34 безопасна к откату
 образа: таблица аддитивна, старый код о ней не знает.
 
+### Migration commit transaction — сага миграционного коммита (волна W4, план 2026-08-07)
+
+Перевод одного компонента миграции из «кандидат принят» в «в галерее лежит сохранённый экран,
+регрессия спланирована, каталог отревизован» — это шесть чужих мутаций подряд. Ретроспектива
+миграции YP v2 показала, что координатор исполнял их руками и терял половину прогресса на любом
+обрыве. Волна делает последовательность **durable и resumable**: состояние живёт в строке
+`migration_commits` (схема v35), а харнес к ней — poller, а не владелец состояния.
+
+```
+POST /api/migration-commits             — создать сагу (идемпотентно по ключу) и довести её
+                                          до `complete` или до первого `needs-*`
+GET  /api/migration-commits/:commitId   — статус + квитанция
+POST /api/migration-commits/:commitId/advance — продолжить из `needs-*`
+POST /api/migration-commits/:commitId/cancel  — выйти из любого `needs-*` в `cancelled`
+```
+
+**Фазы:** `preflight → promote → gallery-save → verify → impacted-regression → audit → complete`.
+Каждая — вызов **существующей** мутации, ни одна из них волной не менялась:
+
+| Фаза | Что делает | Чем |
+|---|---|---|
+| `preflight` | CAS головы компонента и галереи, существование кандидата, слияние фрагмента экрана «на сухую» | `ComponentRepo`/`PrototypeRepo`, схема документа |
+| `promote` | публикует версию компонента | `promoteComponent` (`POST /api/components/:id/promote`) |
+| `gallery-save` | сохраняет новую ревизию галереи со слитым экраном | `updatePrototypeFromDoc` (тот же путь, что `PUT /api/prototypes/:id`) |
+| `verify` | render-status затронутых экранов + readiness-гейты галереи (геометрия) | `screenRenderStatus`, `computeReadiness` |
+| `impacted-regression` | план съёмки: что снимать и что переиспользуется с доказательством | `buildSnapPlan` (§W5) |
+| `audit` | ревизия каталога дизайн-системы | `auditCatalog` |
+
+**Компенсаций нет.** Провал фазы не откатывает предыдущие: promote необратим по построению, и
+«откат» означал бы депубликацию живой версии. Вместо отката — типизованное `needs-<фаза>`: сага
+ждёт человека и продолжается с той же фазы через `advance`. **Провал фазы — не ошибка HTTP**: ответ
+остаётся `201`/`200` с квитанцией, потому что вызывающему нужно прочитать, где именно она встала.
+
+**Идемпотентность.** `idempotencyKey` **обязателен** (nullable UNIQUE в SQLite ничего не
+ограничивает) и уникален в пределах компонента. Повтор с тем же ключом возвращает существующую сагу
+как есть — `200` с `idempotentReplay: true`, ноль мутаций. Внутри саги идемпотентна и каждая фаза:
+уже записанный в квитанцию promote при `advance` **не переигрывается** (вторая версия компонента
+была бы удвоением каталога), а `gallery-save` с байт-идентичным документом не создаёт ревизию.
+
+**Per-component lock.** Partial unique index `migration_commits_one_in_flight` держит **позитивный
+список активных фаз** (`preflight`, `promote`, `gallery-save`, `verify`, `impacted-regression`,
+`audit`). Второй коммит того же компонента в активной фазе — `409 migration_commit_in_flight`;
+коммиты **других** компонентов не блокируются никогда (`maintenance_locks` для этого непригоден —
+там одна глобальная строка). Состояния `needs-*` в список **не** входят намеренно: пока одна сага
+ждёт человека, новую миграцию того же компонента начать можно.
+
+**Watchdog.** Периодических таймеров в сервере нет, поэтому фаза, простоявшая дольше
+`limits.migrationCommitPhaseTimeoutMs` (10 минут), переводится в `needs-<фаза>` sweep'ом **на старте
+процесса** и **на каждом запросе** к `/api/migration-commits*` — включая `GET`. Зависшая фаза =
+процесс, который её двигал, умер (redeploy, SIGKILL); после sweep'а сага resumable через `advance`.
+
+**Квитанция** несёт `commitId`, `phase`, `phasesDone[]`, `regressionMode` (`impacted` — план §W5
+доказал, какие экраны переиспользуются; `full` — планирование недоступно, `EASYUI_IMPACTED_SNAP_DISABLED=1`
+или галереи в запросе нет, и затронутыми обязаны считаться **все** экраны), журнал фаз
+`phases[{phase, startedAt, endedAt, status, idempotentReplay?, detail?, error?}]` и результаты фаз
+`result.{promote,gallery,verify,regression,audit}`.
+
+**`dryRun: true`** не пишет ничего: read-only префлайт исполняется по-настоящему, ответ несёт
+список фаз, список мутаций, которые сага бы сделала, и превью плана регрессии.
+
+**Честная граница.** Сага закрывает **серверный хвост** миграции. Агентские контрольные документы
+координатора (`WORKFLOW_STATE.md`, `BUILD_ORDER.md` его рабочего пространства) сервер не пишет и
+писать не будет — у него нет ни этого пространства, ни права в него писать; харнес по-прежнему
+сохраняет свой receipt-файл. KPI формулируется как «1 resumable server workflow + 1 агентская
+запись receipt», а не «ноль ручных действий».
+
+**Гейты.** Набор ручек живёт только при `EASYUI_ACCEPTANCE_MATRIX=1` (как остальная приёмка) и
+гасится kill-switch'ем `EASYUI_MIGRATION_COMMIT_DISABLED=1` — оба выключенных состояния дают `404`,
+`capabilities.features.migrationCommit` рапортует ровно это. Rollback-window миграции v35: пока
+откат образа возможен без восстановления тома — **саги не запускать**; старый образ незавершённую
+сагу никем не продвинет, и разбирать половину миграции придётся руками.
+
 ### Минимальный визуальный гейт приёмки (волна W5a, план 2026-08-03 §2 A5)
 
 Эталон приезжает из **case-set-манифеста** (`cases[].referenceAssetId`, ассет реестра) и привязан к
@@ -2256,7 +2328,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "caseSetManifestVersion": 1, "caseSetMaxCases": 512, "caseSetMaxDimensions": 8, "caseSetMaxDimensionValues": 64, "caseSetMaxExpectedTuples": 4096,
     "caseSetMaxSlotChildren": 12, "caseSetMaxSlotsPerCase": 8, "caseSetMaxSlotDepth": 3, "caseSetMaxSlotNodes": 96,
     "caseSetMaxCaseSizeDeltaPx": 64, "caseSetMaxCaseOverflowBudgetPx": 256,
-    "prototypeCandidateOverlayMax": 2,
+    "prototypeCandidateOverlayMax": 2, "caseSetMaxOverlayNodes": 8, "snapPlanMaxScreens": 256, "migrationCommitPhaseTimeoutMs": 600000,
     "validateUserConcurrent": 1, "validateGlobalConcurrent": 2, "validateCacheTtlHours": 24, "validateCacheMiB": 32 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
@@ -2268,7 +2340,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "caseSetValidate": false, "acceptanceMultiRunPromote": false, "acceptanceSummaryView": false,
     "caseSetSlotBindings": false, "prototypeCandidateOverlay": false,
     "figmaMultiSource": true, "geometryContractV2": true, "overlayScrollOwnership": true,
-    "geometryCaseTolerances": false, "comparisonMatte": false, "nestedSlotBindings": false, "captureViewportSurface": false },
+    "geometryCaseTolerances": false, "comparisonMatte": false, "nestedSlotBindings": false, "captureViewportSurface": false,
+    "impactedSnap": true, "migrationCommit": false },
   "textAaPresets": { "live-text-v1": { "maxRawDiffPct": 0.75, "minEdgeResidualPct": 95 } },
   "acceptance": { "policyProfiles": ["default-v1", "pixel-strict-v1"], "defaultPolicyProfile": "default-v1", "promotionPolicyProfiles": ["default-v1", "pixel-strict-v1"], "geometryContractVersion": 2,
     "comparisonSurfaces": ["root", "layoutUnion", "paint", "referenceExport"] },

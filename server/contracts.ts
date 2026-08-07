@@ -1214,6 +1214,113 @@ export const snapPlanContract = registerContract({
   ],
 });
 
+// --- Сага миграционного коммита (план 2026-08-07 §1.3/§W4, миграция v35) ---
+
+const MIGRATION_COMMIT_PHASE_IDS = ["preflight", "promote", "gallery-save", "verify", "impacted-regression", "audit"] as const;
+const migrationCommitStateSchema = z.enum([
+  ...MIGRATION_COMMIT_PHASE_IDS,
+  ...MIGRATION_COMMIT_PHASE_IDS.map((phase) => `needs-${phase}` as const),
+  "complete", "cancelled",
+]);
+
+const migrationCommitGallerySchema = z.object({
+  prototypeId: z.string().min(1),
+  baseRev: positiveInt.optional(),
+  /** Экран или массив экранов галереи; вставка по `id`, существующий с тем же id заменяется. */
+  screenFragment: z.unknown().optional(),
+  message: z.string().optional(),
+  viewport: viewportSchema.optional(),
+  deviceScaleFactor: z.number().int().optional(),
+  theme: z.enum(["light", "dark"]).optional(),
+  readiness: z.literal("barrier").optional(),
+});
+
+const migrationCommitRequestSchema = z.object({
+  idempotencyKey: z.string().min(1).max(200),
+  componentId: z.string().min(1),
+  baseRev: positiveInt,
+  sourceHash: z.string().regex(/^[0-9a-f]{64}$/),
+  candidateId: z.string().optional(),
+  acceptanceRunIds: z.array(z.string()).min(1).optional(),
+  expectedCases: positiveInt.optional(),
+  supersede: z.enum(["auto", "none"]).optional(),
+  message: z.string().optional(),
+  gallery: migrationCommitGallerySchema.optional(),
+  auditDesignSystem: z.string().optional(),
+  dryRun: z.boolean().optional(),
+});
+
+const migrationCommitPhaseEntrySchema = z.strictObject({
+  phase: z.enum(MIGRATION_COMMIT_PHASE_IDS),
+  startedAt: isoDate,
+  endedAt: isoDate.nullable(),
+  status: z.enum(["done", "failed", "timeout", "skipped"]),
+  idempotentReplay: z.boolean().optional(),
+  detail: z.unknown().optional(),
+  error: z.strictObject({ code: z.string(), message: z.string() }).optional(),
+});
+
+export const migrationCommitReceiptSchema = z.object({
+  commitId: z.string(),
+  componentId: z.string(),
+  designSystem: z.string(),
+  candidateId: z.string().nullable(),
+  galleryPrototypeId: z.string().nullable(),
+  phase: migrationCommitStateSchema,
+  phasesDone: z.array(z.enum(MIGRATION_COMMIT_PHASE_IDS)),
+  regressionMode: z.enum(["impacted", "full"]),
+  createdAt: isoDate,
+  updatedAt: isoDate,
+  phaseStartedAt: isoDate,
+  request: z.unknown(),
+  phases: z.array(migrationCommitPhaseEntrySchema),
+  result: z.unknown(),
+  error: z.strictObject({ code: z.string(), message: z.string() }).optional(),
+  /** true — повтор запроса с тем же `idempotencyKey`: строка возвращена как есть, ничего не двигалось. */
+  idempotentReplay: z.boolean().optional(),
+});
+
+const migrationCommitErrors = [
+  errorCatalog.invalidRequest,
+  { status: 403, code: "forbidden" },
+  { status: 404, code: "not_found", description: "no such commit, or the saga is disabled (EASYUI_ACCEPTANCE_MATRIX unset / EASYUI_MIGRATION_COMMIT_DISABLED=1)" },
+  { status: 409, code: "migration_commit_in_flight", description: "another commit of the SAME component is in an active phase; `needs-*` states never block" },
+] as const;
+
+export const createMigrationCommitContract = registerContract({
+  method: "POST", path: "/api/migration-commits",
+  summary: "Start (or replay) the migration commit saga for one component (plan 2026-08-07 §1.3/§W4, `capabilities.features.migrationCommit`, migration v35). The saga is DURABLE SERVER STATE and the driver is a poller over it: phases run `preflight → promote → gallery-save → verify → impacted-regression → audit → complete`, and the request drives them until the saga completes or a phase fails. A FAILED PHASE IS NOT AN HTTP ERROR: the saga moves to `needs-<phase>` and the response still carries the receipt, because the caller needs to read WHERE it stopped. There are NO compensations — promote is irreversible by construction, so a later failure never un-publishes it; `needs-*` waits for a human and resumes from the same phase via `advance`. Idempotency is `(componentId, idempotencyKey)` and the key is REQUIRED: repeating it returns the existing saga untouched with `idempotentReplay: true` (200, not 201). A second commit of the same component is refused `409 migration_commit_in_flight` ONLY while a phase is active — `needs-*` states deliberately do not block, so a stuck saga never holds the component hostage; commits of OTHER components are never blocked (the lock is per-component). `dryRun: true` writes NOTHING: it runs the read-only preflight for real and returns the phase list, the mutations the saga would make and a snap-plan preview. Phases orchestrate the EXISTING mutations (`promote`, prototype save, snap-plan, catalog audit) and change none of them. HONEST BOUNDARY: the server closes the server-side tail only — the coordinator's own control documents (WORKFLOW_STATE.md, BUILD_ORDER.md) are never written by the server, the driver still records one receipt of its own. A phase that outlives `limits.migrationCommitPhaseTimeoutMs` is swept into `needs-<phase>` on process start and on every request to this route set (the server runs no periodic timers).",
+  requestSchema: migrationCommitRequestSchema,
+  responseSchema: migrationCommitReceiptSchema,
+  status: 201,
+  errors: [...migrationCommitErrors, errorCatalog.validationFailed, errorCatalog.revConflict,
+    { status: 409, code: "rev_mismatch", description: "component or gallery head moved away from the declared baseRev" },
+    { status: 422, code: "invalid_viewport" },
+  ],
+});
+
+export const getMigrationCommitContract = registerContract({
+  method: "GET", path: "/api/migration-commits/{commitId}",
+  summary: "Status and receipt of one migration commit saga: current `phase`, `phasesDone`, `regressionMode` (`impacted` when the W5 snap plan proved which screens can be reused, `full` when planning was unavailable and every screen must be treated as impacted), the per-phase journal and the accumulated per-phase results. Polling this route also runs the stale-phase watchdog.",
+  responseSchema: migrationCommitReceiptSchema,
+  errors: [...migrationCommitErrors],
+});
+
+export const advanceMigrationCommitContract = registerContract({
+  method: "POST", path: "/api/migration-commits/{commitId}/advance",
+  summary: "Resume a saga that sits in `needs-<phase>`: the stored request is replayed from that phase onwards. Phases already recorded in the receipt are NOT re-executed — a replayed `promote` would mint a second version, so it returns `idempotentReplay: true` instead. Only `needs-*` states are resumable: an active phase answers `409 migration_commit_in_flight`, `complete`/`cancelled` answer `409 migration_commit_not_resumable`.",
+  responseSchema: migrationCommitReceiptSchema,
+  errors: [...migrationCommitErrors, { status: 409, code: "migration_commit_not_resumable", description: "the saga is complete or cancelled" }],
+});
+
+export const cancelMigrationCommitContract = registerContract({
+  method: "POST", path: "/api/migration-commits/{commitId}/cancel",
+  summary: "Terminal exit from ANY `needs-*` state into `cancelled`. Nothing is rolled back — the phases that already ran stay done (a promoted version stays published); cancelling only says that nobody will resume this saga. An active phase answers `409 migration_commit_in_flight`; `complete` answers `409 migration_commit_not_cancellable`; cancelling an already cancelled saga is a no-op.",
+  requestSchema: z.object({ reason: z.string().optional() }),
+  responseSchema: migrationCommitReceiptSchema,
+  errors: [...migrationCommitErrors, { status: 409, code: "migration_commit_not_cancellable", description: "the saga is complete" }],
+});
+
 export const getPrototypeReadinessContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/readiness",
   summary: "Ready-to-publish report for the head revision: one row per gate, plus the blocking set. Read-only — it never enqueues screenshot or visual jobs.",

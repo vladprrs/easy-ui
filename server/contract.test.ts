@@ -118,6 +118,8 @@ async function flowDoc(id: string, screenIds = ["home", "a", "b"]): Promise<Prot
 const componentSource = await Bun.file("server/fixtures/rating-stars.tsx").text();
 /** Валидный по форме, но несуществующий `runId` приёмки (`acc_` + uuid — regex `isRunId`). */
 const MISSING_RUN_ID = "acc_00000000-0000-0000-0000-000000000000";
+/** Валидный по форме, но несуществующий `commitId` саги (`mig_` + uuid — regex `isCommitId`). */
+const MISSING_COMMIT_ID = "mig_00000000-0000-4000-8000-000000000000";
 
 /**
  * Манифест case-set'а для контракта (план §5 W2). Две координаты одного измерения — достаточно,
@@ -291,6 +293,13 @@ function orderedCases(): [string, Case][] {
     ["GET /api/acceptance-runs/{runId}/cases", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/cases`), expected: err(404, "not_found") }],
     ["GET /api/acceptance-runs/{runId}/evidence", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/evidence`), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs/{runId}/cancel", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/cancel`, {}), expected: err(404, "not_found") }],
+    // Сага миграционного коммита (план 2026-08-07 §W4). Покрытие — по отказу, как у соседей:
+    // happy path саги (все шесть фаз поверх реальных мутаций, идемпотентность, watchdog, cancel)
+    // живёт в `server/migration-commit.test.ts`, а здесь проверяется форма ручек и 404-конверт.
+    ["POST /api/migration-commits", { run: () => call("POST", "/api/migration-commits", { idempotencyKey: "contract-probe", componentId: "contract-missing", baseRev: 1, sourceHash: "0".repeat(64) }), expected: err(404, "not_found") }],
+    ["GET /api/migration-commits/{commitId}", { run: () => call("GET", `/api/migration-commits/${MISSING_COMMIT_ID}`), expected: err(404, "not_found") }],
+    ["POST /api/migration-commits/{commitId}/advance", { run: () => call("POST", `/api/migration-commits/${MISSING_COMMIT_ID}/advance`, {}), expected: err(404, "not_found") }],
+    ["POST /api/migration-commits/{commitId}/cancel", { run: () => call("POST", `/api/migration-commits/${MISSING_COMMIT_ID}/cancel`, {}), expected: err(404, "not_found") }],
     // W6: импакт-анализ. Как и у соседей, покрытие — по отказу: несуществующий кандидат отвечает
     // 404 до чтения baseline-рана (адрес кандидата не должен работать оракулом).
     ["POST /api/components/{id}/impact", { run: () => call("POST", "/api/components/contract-stars/impact", { candidateId: `cand_${"0".repeat(64)}`, baselineRunId: MISSING_RUN_ID }), expected: err(404, "not_found") }],

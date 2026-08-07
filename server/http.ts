@@ -19,6 +19,8 @@ export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRe
    * срок жизни кандидата в отказе по протуханию.
    */
   componentId?: string; expiresAt?: string;
+  /** План 2026-08-07 §W4: id саги в `409 migration_commit_in_flight`. */
+  commitId?: string;
   /** `422 overlay_hash_mismatch` мультиран-promote: какие графы разошлись. */
   overlayHashes?: (string | null)[];
   /**

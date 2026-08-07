@@ -22054,6 +22054,1188 @@
         "x-easyui-validated": false
       }
     },
+    "/api/migration-commits": {
+      "post": {
+        "operationId": "post_migration_commits",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "__schema1": {
+                    "type": "string"
+                  }
+                },
+                "properties": {
+                  "acceptanceRunIds": {
+                    "items": {
+                      "$ref": "#/$defs/__schema1"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "auditDesignSystem": {
+                    "type": "string"
+                  },
+                  "baseRev": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "candidateId": {
+                    "type": "string"
+                  },
+                  "componentId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "dryRun": {
+                    "type": "boolean"
+                  },
+                  "expectedCases": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "gallery": {
+                    "properties": {
+                      "baseRev": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "deviceScaleFactor": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "prototypeId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "readiness": {
+                        "const": "barrier",
+                        "type": "string"
+                      },
+                      "screenFragment": {},
+                      "theme": {
+                        "enum": [
+                          "light",
+                          "dark"
+                        ],
+                        "type": "string"
+                      },
+                      "viewport": {
+                        "properties": {
+                          "height": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "width": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "prototypeId"
+                    ],
+                    "type": "object"
+                  },
+                  "idempotencyKey": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "sourceHash": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "supersede": {
+                    "enum": [
+                      "auto",
+                      "none"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "idempotencyKey",
+                  "componentId",
+                  "baseRev",
+                  "sourceHash"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidateId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "commitId": {
+                      "type": "string"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "galleryPrototypeId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "idempotentReplay": {
+                      "type": "boolean"
+                    },
+                    "phase": {
+                      "enum": [
+                        "preflight",
+                        "promote",
+                        "gallery-save",
+                        "verify",
+                        "impacted-regression",
+                        "audit",
+                        "needs-preflight",
+                        "needs-promote",
+                        "needs-gallery-save",
+                        "needs-verify",
+                        "needs-impacted-regression",
+                        "needs-audit",
+                        "complete",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    "phaseStartedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "phases": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "detail": {},
+                          "endedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "idempotentReplay": {
+                            "type": "boolean"
+                          },
+                          "phase": {
+                            "enum": [
+                              "preflight",
+                              "promote",
+                              "gallery-save",
+                              "verify",
+                              "impacted-regression",
+                              "audit"
+                            ],
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "status": {
+                            "enum": [
+                              "done",
+                              "failed",
+                              "timeout",
+                              "skipped"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "phase",
+                          "startedAt",
+                          "endedAt",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "phasesDone": {
+                      "items": {
+                        "enum": [
+                          "preflight",
+                          "promote",
+                          "gallery-save",
+                          "verify",
+                          "impacted-regression",
+                          "audit"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "regressionMode": {
+                      "enum": [
+                        "impacted",
+                        "full"
+                      ],
+                      "type": "string"
+                    },
+                    "request": {},
+                    "result": {},
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "required": [
+                    "commitId",
+                    "componentId",
+                    "designSystem",
+                    "candidateId",
+                    "galleryPrototypeId",
+                    "phase",
+                    "phasesDone",
+                    "regressionMode",
+                    "createdAt",
+                    "updatedAt",
+                    "phaseStartedAt",
+                    "request",
+                    "phases",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found (no such commit, or the saga is disabled (EASYUI_ACCEPTANCE_MATRIX unset / EASYUI_MIGRATION_COMMIT_DISABLED=1))"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "migration_commit_in_flight (another commit of the SAME component is in an active phase; `needs-*` states never block) | revision_conflict | rev_mismatch (component or gallery head moved away from the declared baseRev)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | invalid_viewport"
+          }
+        },
+        "summary": "Start (or replay) the migration commit saga for one component (plan 2026-08-07 §1.3/§W4, `capabilities.features.migrationCommit`, migration v35). The saga is DURABLE SERVER STATE and the driver is a poller over it: phases run `preflight → promote → gallery-save → verify → impacted-regression → audit → complete`, and the request drives them until the saga completes or a phase fails. A FAILED PHASE IS NOT AN HTTP ERROR: the saga moves to `needs-<phase>` and the response still carries the receipt, because the caller needs to read WHERE it stopped. There are NO compensations — promote is irreversible by construction, so a later failure never un-publishes it; `needs-*` waits for a human and resumes from the same phase via `advance`. Idempotency is `(componentId, idempotencyKey)` and the key is REQUIRED: repeating it returns the existing saga untouched with `idempotentReplay: true` (200, not 201). A second commit of the same component is refused `409 migration_commit_in_flight` ONLY while a phase is active — `needs-*` states deliberately do not block, so a stuck saga never holds the component hostage; commits of OTHER components are never blocked (the lock is per-component). `dryRun: true` writes NOTHING: it runs the read-only preflight for real and returns the phase list, the mutations the saga would make and a snap-plan preview. Phases orchestrate the EXISTING mutations (`promote`, prototype save, snap-plan, catalog audit) and change none of them. HONEST BOUNDARY: the server closes the server-side tail only — the coordinator's own control documents (WORKFLOW_STATE.md, BUILD_ORDER.md) are never written by the server, the driver still records one receipt of its own. A phase that outlives `limits.migrationCommitPhaseTimeoutMs` is swept into `needs-<phase>` on process start and on every request to this route set (the server runs no periodic timers).",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/migration-commits/{commitId}": {
+      "get": {
+        "operationId": "get_migration_commits_commitId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "commitId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidateId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "commitId": {
+                      "type": "string"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "galleryPrototypeId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "idempotentReplay": {
+                      "type": "boolean"
+                    },
+                    "phase": {
+                      "enum": [
+                        "preflight",
+                        "promote",
+                        "gallery-save",
+                        "verify",
+                        "impacted-regression",
+                        "audit",
+                        "needs-preflight",
+                        "needs-promote",
+                        "needs-gallery-save",
+                        "needs-verify",
+                        "needs-impacted-regression",
+                        "needs-audit",
+                        "complete",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    "phaseStartedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "phases": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "detail": {},
+                          "endedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "idempotentReplay": {
+                            "type": "boolean"
+                          },
+                          "phase": {
+                            "enum": [
+                              "preflight",
+                              "promote",
+                              "gallery-save",
+                              "verify",
+                              "impacted-regression",
+                              "audit"
+                            ],
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "status": {
+                            "enum": [
+                              "done",
+                              "failed",
+                              "timeout",
+                              "skipped"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "phase",
+                          "startedAt",
+                          "endedAt",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "phasesDone": {
+                      "items": {
+                        "enum": [
+                          "preflight",
+                          "promote",
+                          "gallery-save",
+                          "verify",
+                          "impacted-regression",
+                          "audit"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "regressionMode": {
+                      "enum": [
+                        "impacted",
+                        "full"
+                      ],
+                      "type": "string"
+                    },
+                    "request": {},
+                    "result": {},
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "required": [
+                    "commitId",
+                    "componentId",
+                    "designSystem",
+                    "candidateId",
+                    "galleryPrototypeId",
+                    "phase",
+                    "phasesDone",
+                    "regressionMode",
+                    "createdAt",
+                    "updatedAt",
+                    "phaseStartedAt",
+                    "request",
+                    "phases",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found (no such commit, or the saga is disabled (EASYUI_ACCEPTANCE_MATRIX unset / EASYUI_MIGRATION_COMMIT_DISABLED=1))"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "migration_commit_in_flight (another commit of the SAME component is in an active phase; `needs-*` states never block)"
+          }
+        },
+        "summary": "Status and receipt of one migration commit saga: current `phase`, `phasesDone`, `regressionMode` (`impacted` when the W5 snap plan proved which screens can be reused, `full` when planning was unavailable and every screen must be treated as impacted), the per-phase journal and the accumulated per-phase results. Polling this route also runs the stale-phase watchdog.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/migration-commits/{commitId}/advance": {
+      "post": {
+        "operationId": "post_migration_commits_commitId_advance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "commitId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidateId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "commitId": {
+                      "type": "string"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "galleryPrototypeId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "idempotentReplay": {
+                      "type": "boolean"
+                    },
+                    "phase": {
+                      "enum": [
+                        "preflight",
+                        "promote",
+                        "gallery-save",
+                        "verify",
+                        "impacted-regression",
+                        "audit",
+                        "needs-preflight",
+                        "needs-promote",
+                        "needs-gallery-save",
+                        "needs-verify",
+                        "needs-impacted-regression",
+                        "needs-audit",
+                        "complete",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    "phaseStartedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "phases": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "detail": {},
+                          "endedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "idempotentReplay": {
+                            "type": "boolean"
+                          },
+                          "phase": {
+                            "enum": [
+                              "preflight",
+                              "promote",
+                              "gallery-save",
+                              "verify",
+                              "impacted-regression",
+                              "audit"
+                            ],
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "status": {
+                            "enum": [
+                              "done",
+                              "failed",
+                              "timeout",
+                              "skipped"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "phase",
+                          "startedAt",
+                          "endedAt",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "phasesDone": {
+                      "items": {
+                        "enum": [
+                          "preflight",
+                          "promote",
+                          "gallery-save",
+                          "verify",
+                          "impacted-regression",
+                          "audit"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "regressionMode": {
+                      "enum": [
+                        "impacted",
+                        "full"
+                      ],
+                      "type": "string"
+                    },
+                    "request": {},
+                    "result": {},
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "required": [
+                    "commitId",
+                    "componentId",
+                    "designSystem",
+                    "candidateId",
+                    "galleryPrototypeId",
+                    "phase",
+                    "phasesDone",
+                    "regressionMode",
+                    "createdAt",
+                    "updatedAt",
+                    "phaseStartedAt",
+                    "request",
+                    "phases",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found (no such commit, or the saga is disabled (EASYUI_ACCEPTANCE_MATRIX unset / EASYUI_MIGRATION_COMMIT_DISABLED=1))"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "migration_commit_in_flight (another commit of the SAME component is in an active phase; `needs-*` states never block) | migration_commit_not_resumable (the saga is complete or cancelled)"
+          }
+        },
+        "summary": "Resume a saga that sits in `needs-<phase>`: the stored request is replayed from that phase onwards. Phases already recorded in the receipt are NOT re-executed — a replayed `promote` would mint a second version, so it returns `idempotentReplay: true` instead. Only `needs-*` states are resumable: an active phase answers `409 migration_commit_in_flight`, `complete`/`cancelled` answer `409 migration_commit_not_resumable`.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/migration-commits/{commitId}/cancel": {
+      "post": {
+        "operationId": "post_migration_commits_commitId_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "commitId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidateId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "commitId": {
+                      "type": "string"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "galleryPrototypeId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "idempotentReplay": {
+                      "type": "boolean"
+                    },
+                    "phase": {
+                      "enum": [
+                        "preflight",
+                        "promote",
+                        "gallery-save",
+                        "verify",
+                        "impacted-regression",
+                        "audit",
+                        "needs-preflight",
+                        "needs-promote",
+                        "needs-gallery-save",
+                        "needs-verify",
+                        "needs-impacted-regression",
+                        "needs-audit",
+                        "complete",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    "phaseStartedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "phases": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "detail": {},
+                          "endedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "idempotentReplay": {
+                            "type": "boolean"
+                          },
+                          "phase": {
+                            "enum": [
+                              "preflight",
+                              "promote",
+                              "gallery-save",
+                              "verify",
+                              "impacted-regression",
+                              "audit"
+                            ],
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "status": {
+                            "enum": [
+                              "done",
+                              "failed",
+                              "timeout",
+                              "skipped"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "phase",
+                          "startedAt",
+                          "endedAt",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "phasesDone": {
+                      "items": {
+                        "enum": [
+                          "preflight",
+                          "promote",
+                          "gallery-save",
+                          "verify",
+                          "impacted-regression",
+                          "audit"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "regressionMode": {
+                      "enum": [
+                        "impacted",
+                        "full"
+                      ],
+                      "type": "string"
+                    },
+                    "request": {},
+                    "result": {},
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "required": [
+                    "commitId",
+                    "componentId",
+                    "designSystem",
+                    "candidateId",
+                    "galleryPrototypeId",
+                    "phase",
+                    "phasesDone",
+                    "regressionMode",
+                    "createdAt",
+                    "updatedAt",
+                    "phaseStartedAt",
+                    "request",
+                    "phases",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found (no such commit, or the saga is disabled (EASYUI_ACCEPTANCE_MATRIX unset / EASYUI_MIGRATION_COMMIT_DISABLED=1))"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "migration_commit_in_flight (another commit of the SAME component is in an active phase; `needs-*` states never block) | migration_commit_not_cancellable (the saga is complete)"
+          }
+        },
+        "summary": "Terminal exit from ANY `needs-*` state into `cancelled`. Nothing is rolled back — the phases that already ran stay done (a promoted version stays published); cancelling only says that nobody will resume this saga. An active phase answers `409 migration_commit_in_flight`; `complete` answers `409 migration_commit_not_cancellable`; cancelling an already cancelled saga is a no-op.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "operationId": "get_openapi_json",

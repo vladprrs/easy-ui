@@ -47,6 +47,8 @@ import { routeCaseSets } from "./routes/caseSets";
 import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
+import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
+import { routeMigrationCommits } from "./routes/migrationCommits";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -212,6 +214,10 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         // причине: `PUT /api/components/:id/case-sets` живёт в компонентном namespace, а владеет
         // им acceptance-модуль; без `options.acceptance` весь набор отвечает 404.
         const caseSets=await routeCaseSets(request,db,segments.slice(1),principal,options.acceptance); if(caseSets) return finish(caseSets);
+        // Сага миграционного коммита (план 2026-08-07 §W4). Гейт набора — тот же оркестратор
+        // (`EASYUI_ACCEPTANCE_MATRIX=1`), плюс собственный kill-switch волны; watchdog зависших
+        // фаз исполняется внутри роута, на каждом запросе к набору.
+        const migrationCommits=await routeMigrationCommits(request,db,segments.slice(1),principal,{dataDir:options.dataDir??process.env.DATA_DIR??"data",mode:options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,...(options.acceptance?{acceptance:options.acceptance}:{}),...(options.serveDist===undefined?{}:{serveDist:options.serveDist})}); if(migrationCommits) return finish(migrationCommits);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
         if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true,matrix:options.acceptance!==undefined,...(options.acceptance?{repo:options.acceptance.repo}:{})}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
@@ -272,6 +278,14 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // таблицу v34 при откате образа некуда. Уже записанные кадры не трогаются: включение обратно
     // просто снова начинает их доказывать.
     if(!impactedSnapEnabled()) console.warn("[capture] EASYUI_IMPACTED_SNAP_DISABLED=1: impacted snap planning off, POST /api/prototypes/:id/snap-plan answers 404 and screen frames are not recorded");
+    // W4 (план 2026-08-07 §1.3/§W4): kill-switch саги миграционного коммита. Гасит весь набор
+    // `/api/migration-commits*` (404) и `features.migrationCommit`. Уже существующие строки саги
+    // не трогаются: включение обратно продолжает их с той же фазы через `advance`.
+    if(!migrationCommitEnabled()) console.warn("[migration] EASYUI_MIGRATION_COMMIT_DISABLED=1: migration commit saga off, /api/migration-commits* answers 404");
+    // Watchdog фаз саги (триаж O-M7, R7): периодических таймеров в сервере нет, поэтому зависшая
+    // фаза подметается на старте процесса — рядом с `failStagingPublishes` — и на каждом запросе
+    // к набору. Сага, чей процесс умер в активной фазе, встаёт в `needs-<фаза>` и resumable.
+    { const swept=sweepStaleMigrationCommits(db); if(swept) console.warn(`[migration] swept ${swept} stale migration commit phase(s) into needs-*`); }
     const dataDir=process.env.DATA_DIR??"data";
     // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,
     // а DATA_DIR в проде — постоянный том (план 2026-07-31 §3.5).
