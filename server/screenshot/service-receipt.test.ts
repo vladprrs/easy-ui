@@ -60,7 +60,23 @@ const workerOk: RunJob = async () => ({
   },
 });
 
-async function setup(now?: () => number) {
+/**
+ * Тот же воркер, но с шумной консолью (W10): два одинаковых favicon-сообщения, один
+ * ResizeObserver и одна настоящая ошибка прототипа — чтобы было видно, что агрегат сворачивает
+ * ровно подавленное, а продуктовая ошибка остаётся продуктовой.
+ */
+const workerNoisy: RunJob = async (job, deadlineMs) => ({
+  ...await workerOk(job, deadlineMs),
+  consoleErrors: [
+    "Failed to load resource: 404 (http://127.0.0.1:8787/favicon.ico?v=1)",
+    "Failed to load resource: 404 (http://127.0.0.1:8787/favicon.ico?v=2)",
+    "ResizeObserver loop completed with undelivered notifications.",
+    "Blocked script (https://cdn.example.com/tracker.js)",
+  ],
+  pageErrors: ["boom in prototype code"],
+} as never);
+
+async function setup(now?: () => number, runJob: RunJob = workerOk) {
   const dir = await mkdtemp(resolve(process.cwd(), ".receipt-service-test-"));
   dirs.push(dir);
   const db: Database = openDatabase(":memory:");
@@ -72,7 +88,7 @@ async function setup(now?: () => number) {
   expect(created.status).toBe(201);
   const service = new ScreenshotService({
     db, dataDir: dir, serveDist: "dist", captureOrigin: "http://127.0.0.1:8787",
-    chromiumAvailable: true, runJob: workerOk, ...(now ? { now } : {}),
+    chromiumAvailable: true, runJob, ...(now ? { now } : {}),
   });
   // Ручка receipt'а идёт через тот же handler, что и все остальные роуты.
   const api = createTestHandler(db, { dataDir: dir, screenshots: service });
@@ -136,6 +152,36 @@ describe("capture receipt on the asset delivery channel (R5)", () => {
     const response = await api(req(`/screenshot-jobs/${jobId}/receipt`));
     expect(response.status).toBe(200);
     expect((await response.json() as { receipt: { receiptVersion: number } }).receipt.receiptVersion).toBe(1);
+  });
+
+  /**
+   * W10 (план 2026-08-07 §W10, P2.2): подавленный шум перестаёт быть невидимым. `suppressedCount`
+   * результата и агрегат `console.suppressed` receipt'а — одно и то же множество сообщений,
+   * поэтому сумма счётчиков обязана совпадать со счётчиком.
+   */
+  test("подавленный шум едет сигнатурами в receipt, а его счётчик — в результате джобы", async () => {
+    const { service, api } = await setup(undefined, workerNoisy);
+    const { jobId } = await service.enqueueComponentDraft(COMPONENT_ID, BOOTSTRAP_ADMIN_ID, { viewport: { width: 320, height: 200 } });
+    const status = await waitDone(service, jobId);
+    expect(status.status).toBe("done");
+    const result = status.result as { suppressedCount: number; infraNoise: string[]; productErrors: string[]; consoleErrors: string[] };
+    // Продуктовая ошибка остаётся продуктовой: агрегат сворачивает только подавленное.
+    expect(result.productErrors).toEqual(["boom in prototype code"]);
+    expect(result.suppressedCount).toBe(result.infraNoise.length);
+    expect(result.suppressedCount).toBe(4);
+
+    const body = await (await api(req(`/screenshot-jobs/${jobId}/receipt`))).json() as {
+      receipt: { console: { errors: string[]; suppressed: { signature: string; count: number }[] } };
+    };
+    // Два favicon-сообщения различались только query — одна сигнатура со счётчиком 2.
+    expect(body.receipt.console.suppressed).toEqual([
+      { signature: "Failed to load resource: 404 (http://127.0.0.1:8787/favicon.ico)", count: 2 },
+      { signature: "Blocked script (https://cdn.example.com/tracker.js)", count: 1 },
+      { signature: "ResizeObserver loop completed with undelivered notifications.", count: 1 },
+    ]);
+    expect(body.receipt.console.suppressed.reduce((sum, item) => sum + item.count, 0)).toBe(result.suppressedCount);
+    // Аддитивность: сырой список консоли остаётся дословным.
+    expect(body.receipt.console.errors).toEqual(result.consoleErrors);
   });
 
   test("kill-switch: с EASYUI_CAPTURE_RECEIPTS_DISABLED=1 receipt не пишется, кадр не страдает", async () => {

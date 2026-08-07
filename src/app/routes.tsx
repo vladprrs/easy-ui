@@ -38,15 +38,32 @@ const presentChildren = (): RouteObject[] => [
   { path: "s/:screenId", element: null },
 ];
 
-// AuthProvider — в корне дерева: /login и Layout делят один контекст пользователя,
-// поэтому setUser после логина виден гвардам (/users) без повторного getMe.
-export const routeObjects: RouteObject[] = [{
-  element: <AuthProvider><Outlet /></AuthProvider>,
-  children: [
-  { path: "login", element: <LoginPage /> },
+/**
+ * Сервисная съёмка (план 2026-08-07 §W10, P2.2) — **вне** `AuthProvider`.
+ *
+ * У капчур-принципала сессии нет по построению, но провайдер всё равно дёргал `GET /api/auth/me`
+ * на каждом кадре: отказ песочницы превращался в сетевую ошибку и консольное сообщение, которое
+ * приходилось глушить allowlist'ом шума (`server/screenshot/noise.ts`). Ни одна из capture-
+ * поверхностей auth-контекст не читает (`useAuth` живёт только в `Layout`, `GalleryPage`,
+ * `UsersPage`, `LoginPage` — все под второй веткой), поэтому вынос сужает дерево кадра,
+ * не меняя ни одного пользовательского маршрута.
+ */
+export const captureRouteObjects: RouteObject[] = [
   { path: "capture/:protoId/s/:screenId", element: <CapturePrototype /> },
   { path: "capture/component/:id/draft", element: <CaptureComponentDraft /> },
   { path: "capture/component/:id/:version", element: <CaptureComponent /> },
+];
+
+// Второй top-level RouteObject: AuthProvider — в корне пользовательской ветки, /login и Layout
+// делят один контекст пользователя, поэтому setUser после логина виден гвардам (/users) без
+// повторного getMe. Матчинг react-router ранжирует маршруты по специфичности, а не по порядку
+// веток, и `capture/*` путей во второй ветке нет — пересечься им нечем.
+export const routeObjects: RouteObject[] = [{
+  children: captureRouteObjects,
+}, {
+  element: <AuthProvider><Outlet /></AuthProvider>,
+  children: [
+  { path: "login", element: <LoginPage /> },
   // Презентация (W1-2): вне Layout и вне PrototypeChrome — как capture.
   { path: "p/:protoId/present", element: <PresentShell />, children: presentChildren() },
   { path: "p/:protoId/v/:version/present", element: <PresentShell />, children: presentChildren() },

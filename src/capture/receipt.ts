@@ -32,6 +32,10 @@ export const RECEIPT_FONT_FACES_LIMIT = 64;
 export const RECEIPT_IMAGES_LIMIT = 64;
 export const RECEIPT_CONSOLE_LIMIT = 100;
 export const RECEIPT_THEME_RESOURCES_LIMIT = 200;
+/** Сколько **различных** сигнатур подавленного шума едет в receipt (W10); счётчики точны. */
+export const RECEIPT_SUPPRESSED_SIGNATURES_LIMIT = 32;
+/** Потолок длины одной сигнатуры: она — ключ агрегации, а не сообщение целиком. */
+export const RECEIPT_SIGNATURE_LENGTH_LIMIT = 200;
 
 /**
  * Структурная проекция `RendererDeclaration` (`server/capture/renderer.ts`). Дублируется здесь
@@ -133,10 +137,26 @@ export interface CaptureReceiptResources {
   resourceBarrier: CaptureReceiptResourceBarrier | null;
 }
 
+/**
+ * Свёрнутая сигнатура подавленного сообщения (W10). `count` — сколько раз сигнатура встретилась
+ * в **этом** капчуре: сотня одинаковых `favicon.ico 404` в логе неотличима от одной, а разница
+ * между «один раз» и «сто раз» — как раз то, что человек и агент читают в регрессионном логе.
+ */
+export interface CaptureReceiptSuppressedSignature {
+  signature: string;
+  count: number;
+}
+
 export interface CaptureReceiptConsole {
   errors: string[];
   warnings: string[];
   pageErrors: string[];
+  /**
+   * W10 (P2.2): консольный шум, **подавленный** классификацией капчура (`infraNoise`), свёрнутый
+   * в `{signature, count}`. Пустой массив — либо шума не было, либо доказательство не приехало;
+   * различать эти случаи receipt не берётся (подавленное не влияет на вердикт).
+   */
+  suppressed: CaptureReceiptSuppressedSignature[];
 }
 
 export interface CaptureReceiptOutput {
@@ -214,7 +234,13 @@ export interface CaptureReceiptInput {
   target: Partial<CaptureReceiptTarget> & { kind: CaptureReceiptTarget["kind"] };
   fontManifestHash?: string | null;
   readiness?: ReceiptReadinessInput | null;
-  console?: { errors?: readonly string[]; warnings?: readonly string[]; pageErrors?: readonly string[] };
+  console?: {
+    errors?: readonly string[];
+    warnings?: readonly string[];
+    pageErrors?: readonly string[];
+    /** W10: сырые подавленные сообщения (`infraNoise`); сворачиваются в сигнатуры здесь. */
+    suppressed?: readonly string[];
+  };
   output?: CaptureReceiptOutput | null;
   timings?: Partial<CaptureReceiptTimings>;
   captureClean: boolean;
@@ -225,6 +251,50 @@ const num = (value: unknown): number | null => (typeof value === "number" && Num
 const bool = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
 const strings = (value: unknown, limit: number): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, limit) : [];
+
+/**
+ * Сигнатура консольного сообщения (W10): ключ, по которому повторы сворачиваются в один пункт.
+ *
+ * Нормализуются ровно те части, которые меняются от капчура к капчуру и при этом не несут
+ * смысла для читателя лога: хвост многострочного сообщения (стек), query/hash абсолютных URL,
+ * длинные hex-последовательности (sha ассетов, id) и длинные числа (таймстемпы, счётчики).
+ * Коды вроде `404` и порты остаются как есть — по ним шум и опознают.
+ */
+export function consoleSignature(message: string): string {
+  const firstLine = message.split("\n", 1)[0] ?? "";
+  return firstLine
+    .replace(/\bhttps?:\/\/[^\s)"'<>]+/gi, (url) => {
+      try {
+        const parsed = new URL(url);
+        return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+      } catch { return url.replace(/[?#].*$/, ""); }
+    })
+    // Числа — раньше hex: длинный таймстемп состоит из hex-цифр и иначе стал бы «хешем».
+    // Границы — лукахеды, а не `\b`: `asset_<sha>` не даёт границы слова после подчёркивания.
+    .replace(/(?<![0-9a-z])\d{6,}(?![0-9a-z])/gi, "<n>")
+    .replace(/(?<![0-9a-z])[0-9a-f]{8,}(?![0-9a-z])/gi, "<hash>")
+    .trim()
+    .slice(0, RECEIPT_SIGNATURE_LENGTH_LIMIT);
+}
+
+/**
+ * Агрегат подавленного шума. Порядок детерминирован (частота убыв., затем сигнатура возр.) —
+ * receipt сравнивают побайтово; обрезается **число различных** сигнатур, а не счётчики.
+ */
+function suppressedOf(messages: readonly string[] | undefined): CaptureReceiptSuppressedSignature[] {
+  if (!Array.isArray(messages)) return [];
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    if (typeof message !== "string") continue;
+    const signature = consoleSignature(message);
+    if (signature.length === 0) continue;
+    counts.set(signature, (counts.get(signature) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([signature, count]) => ({ signature, count }))
+    .sort((left, right) => (right.count - left.count) || (left.signature < right.signature ? -1 : left.signature > right.signature ? 1 : 0))
+    .slice(0, RECEIPT_SUPPRESSED_SIGNATURES_LIMIT);
+}
 
 /** Порядок faces не должен зависеть от порядка обхода DOM — receipt сравнивают побайтово. */
 function faceKey(face: CaptureReceiptFontFace): string {
@@ -370,6 +440,7 @@ export function buildCaptureReceipt(input: CaptureReceiptInput): CaptureReceipt 
       errors: strings(input.console?.errors, RECEIPT_CONSOLE_LIMIT),
       warnings: strings(input.console?.warnings, RECEIPT_CONSOLE_LIMIT),
       pageErrors: strings(input.console?.pageErrors, RECEIPT_CONSOLE_LIMIT),
+      suppressed: suppressedOf(input.console?.suppressed),
     },
     output: input.output ?? null,
     timings: timingsOf(input.timings, evidence, resourceBarrier),

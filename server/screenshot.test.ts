@@ -240,6 +240,8 @@ describe("screenshot job API", () => {
     expect(result.captureClean).toBe(false);
     expect(result.productErrors).toEqual(["Uncaught TypeError: props.items is not iterable (http://127.0.0.1:8787/api/components/x/versions/1/bundle.js)", "boom in prototype code"]);
     expect(result.infraNoise).toHaveLength(5);
+    // W10: сводный счётчик подавленного — то же множество, что `infraNoise`, одним числом.
+    expect(result.suppressedCount).toBe(5);
     expect(result.runtimeWarnings).toEqual(["[overlay] warning"]);
     // Legacy fields stay verbatim for older clients.
     expect(result.consoleErrors).toEqual(consoleErrors);

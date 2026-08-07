@@ -65,13 +65,34 @@ export interface CaptureSlotBinding {
   index: number;
   componentId: string;
   name: string;
-  version: number;
+  /** Отсутствует у overlay-ребёнка (волна 2026-08-07 §W3): кандидат ещё не опубликован. */
+  version?: number;
+  /**
+   * Candidate dependency overlay (§W3): ребёнок берётся из кандидата, а бандл — content-addressed
+   * путь `/draft/<sourceHash>/bundle.js`, тот же, что у подменённого пина прототипа (§B2.2).
+   */
+  candidate?: { candidateId: string; rev: number; sourceHash: string };
   bundleHash: string;
   props: Record<string, unknown>;
   propsHash: string;
   /** Собственные слоты ребёнка (план 2026-08-06 §W6): дерево, а не список. Отсутствует у листа. */
   children?: CaptureSlotBinding[];
 }
+/** Overlay-дети дерева слотов (§W3), плоско и по всем уровням — вход резолва их бандлов/ассетов. */
+function collectOverlayChildren(
+  bindings: CaptureSlotBinding[] | undefined,
+): { componentId: string; candidate: { candidateId: string; rev: number; sourceHash: string } }[] {
+  const out: { componentId: string; candidate: { candidateId: string; rev: number; sourceHash: string } }[] = [];
+  const visit = (level: CaptureSlotBinding[] | undefined): void => {
+    for (const binding of level ?? []) {
+      if (binding.candidate !== undefined) out.push({ componentId: binding.componentId, candidate: binding.candidate });
+      visit(binding.children);
+    }
+  };
+  visit(bindings);
+  return out;
+}
+
 /**
  * Additive capture-quality contract (wave 7.1): `consoleErrors`/`pageErrors`
  * stay populated verbatim for backward compatibility, while `productErrors` /
@@ -82,6 +103,12 @@ export interface CaptureQuality {
   productErrors: string[];
   infraNoise: string[];
   runtimeWarnings: string[];
+  /**
+   * W10 (P2.2): сколько сообщений капчур подавил как инфраструктурный шум — `infraNoise.length`
+   * одним числом, чтобы сводку («подавлено N») можно было напечатать, не таща список. Разбивка
+   * по сигнатурам живёт в receipt'е (`console.suppressed`).
+   */
+  suppressedCount: number;
 }
 /**
  * Исход **джобы** (амендмент A3): крэш chromium, таймаут и отказ очереди до классификации
@@ -810,9 +837,24 @@ export class ScreenshotService {
     this.guardQueue(lane);
     const draft = await getCandidateForRev(this.deps.db, this.deps.dataDir, id, candidate.rev, candidate.sourceHash);
     this.guardQueue(lane);
+    // §W3: бандлы overlay-детей достаются тем же путём, что и голова кандидата, — по явной паре
+    // `{rev, sourceHash}` и без пересборки. Выселенный бандл ребёнка обязан отказать **до**
+    // постановки джобы (`409 candidate_evicted`), иначе кадр снялся бы с пустым слотом.
+    const overlayAssetIds: Record<string, string[]> = {};
+    for (const child of collectOverlayChildren(opts.slotBindings)) {
+      if (overlayAssetIds[child.componentId] !== undefined) continue;
+      const childDraft = await getCandidateForRev(
+        this.deps.db, this.deps.dataDir, child.componentId, child.candidate.rev, child.candidate.sourceHash);
+      overlayAssetIds[child.componentId] = childDraft.assetIds;
+    }
+    this.guardQueue(lane);
     // Acceptance-путь **всегда** пинует политику readiness явно: её хэш входит в `case_fingerprint`,
     // поэтому «политика по умолчанию у поверхности» и «политика рана» обязаны быть одним объектом.
-    return this.pushDraftCapture(id, draft, viewport, dsf, { ...opts, readinessPolicy: opts.readinessPolicy ?? resolveCaptureMode("acceptance").readiness });
+    return this.pushDraftCapture(id, draft, viewport, dsf, {
+      ...opts,
+      readinessPolicy: opts.readinessPolicy ?? resolveCaptureMode("acceptance").readiness,
+      ...(Object.keys(overlayAssetIds).length === 0 ? {} : { overlayAssetIds }),
+    });
   }
 
   /** Общее тело draft/candidate-постановки: bootstrap, allowlist и handshake строятся от `draft`. */
@@ -827,6 +869,8 @@ export class ScreenshotService {
       readinessPolicy?: ReadinessPolicy;
       slotBindings?: CaptureSlotBinding[];
       slotsHash?: string;
+      /** Ассеты исходников overlay-кандидатов (§W3), по `componentId` — вход allowlist'а. */
+      overlayAssetIds?: Record<string, string[]>;
     },
   ): FrozenEnqueue {
     const repo = new ComponentRepo(this.deps.db);
@@ -846,7 +890,7 @@ export class ScreenshotService {
     const slots = this.slotCaptureOf(opts.slotBindings);
     const expected: CaptureExpected = { kind: "component-draft", componentId: id, rev: draft.rev, sourceHash: draft.sourceHash, bundleHash: draft.entry.bundleHash!, propsHash, dsMetaVersion: themeContent.latestMetaVersion, rendererBuild: this.rendererBuild, ...(opts.slotsHash === undefined ? {} : { slotsHash: opts.slotsHash }) };
     const bundleUrl = `/api/components/${encodeURIComponent(id)}/draft/${draft.sourceHash}/bundle.js`;
-    const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem, slots?.children);
+    const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem, slots?.children, opts.overlayAssetIds);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/draft?${query}`;
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
@@ -904,14 +948,30 @@ export class ScreenshotService {
             `Slot "${binding.slot}" child ${binding.name} declares $- or __eui-prefixed props;`
             + " slot children take plain JSON data, not renderer directives");
         }
-        const key = `${binding.componentId}@${binding.version}`;
+        // §W3: overlay-ребёнок дедуплицируется по кандидату, а не по версии (её у него нет), и
+        // отдаётся поверхности `status:"candidate"` — тем же признаком, по которому клиент
+        // прототипного overlay отличает применённую подмену (§B2.3).
+        const key = binding.candidate === undefined
+          ? `${binding.componentId}@${binding.version}`
+          : `${binding.componentId}@${binding.candidate.candidateId}`;
         if (!children.has(key)) {
-          children.set(key, {
-            id: binding.componentId, name: binding.name, version: binding.version,
-            bundleUrl: `/api/components/${binding.componentId}/versions/${binding.version}/bundle.js`,
-            bundleHash: binding.bundleHash,
-            status: this.publishStatusOf(binding.componentId, binding.version),
-          });
+          children.set(key, binding.candidate === undefined
+            ? {
+              id: binding.componentId, name: binding.name, version: binding.version!,
+              bundleUrl: `/api/components/${binding.componentId}/versions/${binding.version}/bundle.js`,
+              bundleHash: binding.bundleHash,
+              status: this.publishStatusOf(binding.componentId, binding.version!),
+            }
+            : {
+              // Версии у кандидата нет; поверхность читает её только как ярлык, поэтому `0` —
+              // не сентинел идентичности (в отпечатки и в `slotsHash` это число не входит вовсе,
+              // там на месте версии стоит `candidateId`), а признак «публикации ещё не было».
+              id: binding.componentId, name: binding.name, version: 0,
+              bundleUrl: `/api/components/${encodeURIComponent(binding.componentId)}/draft/${binding.candidate.sourceHash}/bundle.js`,
+              bundleHash: binding.bundleHash,
+              status: "candidate",
+              candidate: binding.candidate,
+            });
         }
         // Дефолтный слот — канонически **без** ключа `slot` (§A2a): `runtimeSpec` схлопывает обе
         // формы в `slotIndices.default`, и одна форма в протоколе избавляет от выбора у поверхности.
@@ -1022,7 +1082,7 @@ export class ScreenshotService {
    * `{name, bundleUrl, bundleHash}` (meta едет в bootstrap), а `/versions/:v` отдал бы поверхности
    * опубликованный `source` — расширение поверхности утечки ради удобства, которого нет.
    */
-  private draftComponentAllowedUrls(id: string, sourceHash: string, assetIds: string[], designSystem: string, slotChildren?: CapturePin[]): string[] {
+  private draftComponentAllowedUrls(id: string, sourceHash: string, assetIds: string[], designSystem: string, slotChildren?: CapturePin[], overlayAssetIds?: Record<string, string[]>): string[] {
     const set = new Set<string>();
     set.add(`/capture/component/${id}/draft`);
     set.add(`/api/design-systems/${designSystem}`);
@@ -1036,7 +1096,14 @@ export class ScreenshotService {
       const componentRepo = new ComponentRepo(this.deps.db);
       for (const child of slotChildren) {
         set.add(child.bundleUrl);
-        for (const asset of componentRepo.assets(child.id, child.version)) set.add(`/api/assets/${asset.id}`);
+        // §W3: у overlay-ребёнка публикации нет вовсе, поэтому ассеты берутся из **исходника
+        // кандидата** (тот же принцип, что у `ResolvedCandidateOverride.assetIds`), а не из
+        // `component_publish_assets` несуществующей версии.
+        if (child.candidate === undefined) {
+          for (const asset of componentRepo.assets(child.id, child.version)) set.add(`/api/assets/${asset.id}`);
+        } else {
+          for (const assetId of overlayAssetIds?.[child.id] ?? []) set.add(`/api/assets/${assetId}`);
+        }
       }
     }
     set.add("/api/shims/");
@@ -1384,7 +1451,12 @@ export class ScreenshotService {
           elapsedMs: result.readiness?.elapsedMs ?? null,
           evidence: readiness.readinessEvidence,
         },
-        console: { errors: result.consoleErrors ?? [], warnings: result.consoleWarnings ?? [], pageErrors: result.pageErrors ?? [] },
+        // W10: сырые списки остаются как были (аддитивность), плюс агрегат подавленного шума —
+        // тот же `infraNoise`, что дал `suppressedCount`, свёрнутый в сигнатуры.
+        console: {
+          errors: result.consoleErrors ?? [], warnings: result.consoleWarnings ?? [], pageErrors: result.pageErrors ?? [],
+          suppressed: quality.infraNoise,
+        },
         output,
         timings: { ...(result.timings ?? {}), readinessMs: result.readiness?.elapsedMs ?? null },
         captureClean: quality.captureClean,
@@ -1451,7 +1523,11 @@ export class ScreenshotService {
   private qualityOf(result: WorkerOk): CaptureQuality {
     const messages = [...(result.consoleErrors ?? []), ...(result.pageErrors ?? [])];
     const { productErrors, infraNoise } = classifyCaptureErrors(messages, { captureOrigin: this.deps.captureOrigin });
-    return { captureClean: productErrors.length === 0, productErrors, infraNoise, runtimeWarnings: [...(result.consoleWarnings ?? [])] };
+    return {
+      captureClean: productErrors.length === 0, productErrors, infraNoise,
+      runtimeWarnings: [...(result.consoleWarnings ?? [])],
+      suppressedCount: infraNoise.length,
+    };
   }
 
   private targetOf(job: InternalJob): Record<string, unknown> {

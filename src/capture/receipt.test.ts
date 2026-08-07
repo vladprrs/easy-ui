@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildCaptureReceipt, canonicalReceiptJson, stableReceiptView,
+  buildCaptureReceipt, canonicalReceiptJson, consoleSignature, stableReceiptView,
+  RECEIPT_SIGNATURE_LENGTH_LIMIT, RECEIPT_SUPPRESSED_SIGNATURES_LIMIT,
   type CaptureReceiptInput, type ReceiptRendererDeclaration,
 } from "./receipt";
 
@@ -140,6 +141,80 @@ describe("capture receipt (R5)", () => {
     }));
     expect(broken.resources.resourceBarrier).toBeNull();
     expect(broken.timings.barrierMs).toBeNull();
+  });
+
+  /**
+   * W10 (план 2026-08-07 §W10, P2.2). Подавленный шум перестаёт быть невидимым: сотня одинаковых
+   * сообщений сворачивается в один пункт со счётчиком, а сумма счётчиков — тот же `suppressedCount`,
+   * который капчур печатает сводной строкой.
+   */
+  describe("подавленный консольный шум (W10)", () => {
+    it("сворачивает повторы в {signature, count} и не трогает сырые списки", () => {
+      const receipt = buildCaptureReceipt(input({
+        console: {
+          errors: ["TypeError: boom"], warnings: ["slow"], pageErrors: [],
+          suppressed: [
+            "Failed to load resource: http://127.0.0.1:8787/favicon.ico 404",
+            "Failed to load resource: http://127.0.0.1:8787/favicon.ico 404",
+            "Failed to load resource: http://127.0.0.1:8787/favicon.ico 404",
+            "ResizeObserver loop completed with undelivered notifications",
+          ],
+        },
+      }));
+      expect(receipt.console.suppressed).toEqual([
+        { signature: "Failed to load resource: http://127.0.0.1:8787/favicon.ico 404", count: 3 },
+        { signature: "ResizeObserver loop completed with undelivered notifications", count: 1 },
+      ]);
+      // Аддитивность: существующие ключи не двигаются и не фильтруются агрегатом.
+      expect(receipt.console.errors).toEqual(["TypeError: boom"]);
+      expect(receipt.console.warnings).toEqual(["slow"]);
+      // Сумма счётчиков — ровно число подавленных сообщений (`CaptureQuality.suppressedCount`).
+      expect(receipt.console.suppressed.reduce((sum, item) => sum + item.count, 0)).toBe(4);
+    });
+
+    it("нормализует волатильные части сообщения: query, sha и таймстемпы", () => {
+      const receipt = buildCaptureReceipt(input({
+        console: {
+          suppressed: [
+            "GET http://127.0.0.1:8787/api/assets/asset_" + "a".repeat(64) + "?v=1 net::ERR_FAILED",
+            "GET http://127.0.0.1:8787/api/assets/asset_" + "b".repeat(64) + "?v=2 net::ERR_FAILED",
+            "aborted at 1754558400123\n    at Object.<anonymous> (bundle.js:1:1)",
+            "aborted at 1754558411999\n    at Object.<anonymous> (bundle.js:2:2)",
+          ],
+        },
+      }));
+      expect(receipt.console.suppressed).toEqual([
+        { signature: "GET http://127.0.0.1:8787/api/assets/asset_<hash> net::ERR_FAILED", count: 2 },
+        { signature: "aborted at <n>", count: 2 },
+      ]);
+    });
+
+    it("детерминирован по порядку сообщений и пуст без доказательства", () => {
+      const messages = ["b noise", "a noise", "b noise", "c noise"];
+      const direct = buildCaptureReceipt(input({ console: { suppressed: messages } }));
+      const shuffled = buildCaptureReceipt(input({ console: { suppressed: [...messages].reverse() } }));
+      expect(canonicalReceiptJson(shuffled)).toBe(canonicalReceiptJson(direct));
+      // Частота убыв., затем сигнатура возр. — иначе receipt не сравнить побайтово.
+      expect(direct.console.suppressed).toEqual([
+        { signature: "b noise", count: 2 },
+        { signature: "a noise", count: 1 },
+        { signature: "c noise", count: 1 },
+      ]);
+      expect(buildCaptureReceipt(input()).console.suppressed).toEqual([]);
+    });
+
+    it("обрезает число различных сигнатур, но не сами счётчики", () => {
+      const noisy = Array.from({ length: RECEIPT_SUPPRESSED_SIGNATURES_LIMIT + 8 }, (_, index) => `noise kind ${String.fromCharCode(97 + index)}`);
+      const receipt = buildCaptureReceipt(input({ console: { suppressed: [...noisy, ...noisy, "noise kind a"] } }));
+      expect(receipt.console.suppressed).toHaveLength(RECEIPT_SUPPRESSED_SIGNATURES_LIMIT);
+      // Самая частая сигнатура остаётся первой с честным счётчиком — обрезается хвост, а не число.
+      expect(receipt.console.suppressed[0]).toEqual({ signature: "noise kind a", count: 3 });
+    });
+
+    it("сигнатура — первая строка, обрезанная по потолку длины", () => {
+      expect(consoleSignature("boom\nat stack line")).toBe("boom");
+      expect(consoleSignature("x".repeat(400))).toHaveLength(RECEIPT_SIGNATURE_LENGTH_LIMIT);
+    });
   });
 
   it("дрейф рендерера едет кодом, а мусорные коды отбрасываются санитайзером", () => {
