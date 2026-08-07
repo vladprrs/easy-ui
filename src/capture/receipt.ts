@@ -109,12 +109,28 @@ export interface CaptureReceiptImage {
   contentHash: string | null;
 }
 
+/**
+ * Эхо фазы барьера ресурсов (план 2026-08-07 §W2). `null` — политика барьера не требовала (v1/v2)
+ * **или** доказательство не приехало; различить эти случаи — предмет гейта `readiness`, который
+ * знает политику джобы и отказывает кадру с `met:true` без блока при v3 (§1.5).
+ */
+export interface CaptureReceiptResourceBarrier {
+  expected: number;
+  decoded: number;
+  fontsReady: boolean;
+  stableFrames: number;
+  lateAfterBarrier: string[];
+  durationMs: number;
+}
+
 export interface CaptureReceiptResources {
   /** Хэш манифеста шрифтов темы джобы (N4: свойство темы, а не рендерера). */
   fontManifestHash: string | null;
   fontFaces: CaptureReceiptFontFace[];
   images: CaptureReceiptImage[];
   themeResources: { tokens: string[]; icons: string[]; images: string[] } | null;
+  /** W2: доказательство барьера ресурсов; `null` — блока в evidence не было. */
+  resourceBarrier: CaptureReceiptResourceBarrier | null;
 }
 
 export interface CaptureReceiptConsole {
@@ -140,11 +156,10 @@ export interface CaptureReceiptOutput {
 /**
  * Тайминги капчура. `null` — «не измерялось», и это честнее нуля.
  *
- * Пофазовый раскол ожидания (`fonts/images/network/frames/stabilize`) сегодня **не измеряется**:
- * его источник — `collectReadiness` (`src/capture/readiness.ts`), который публикует только
- * суммарный `elapsedMs` (поле {@link CaptureReceiptTimings.readinessMs}); правка readiness — вне
- * объёма и владения R5 (§6). Поля объявлены планом и остаются в форме, чтобы их заполнение не
- * было изменением схемы.
+ * Пофазовый раскол ожидания (`fonts/images/network/frames/stabilize`, а с волны W2 и `barrierMs`)
+ * приезжает из `collectReadiness` блоком `evidence.phaseTimings` и раскладывается здесь: до W2
+ * поля объявлялись схемой, но не заполнялись — измерять их мог только сам readiness, чья правка
+ * была вне объёма R5.
  */
 export interface CaptureReceiptTimings {
   navigateMs: number | null;
@@ -159,6 +174,8 @@ export interface CaptureReceiptTimings {
   readyMs: number | null;
   /** То же по версии страницы (`ReadinessReport.elapsedMs`). */
   readinessMs: number | null;
+  /** W2: длительность фазы барьера ресурсов (`evidence.resourceBarrier.durationMs`). */
+  barrierMs: number | null;
 }
 
 export interface CaptureReceiptVerdict {
@@ -267,18 +284,53 @@ function themeResourcesOf(evidence: Record<string, unknown> | null): CaptureRece
   };
 }
 
-const timingsOf = (input: Partial<CaptureReceiptTimings> | undefined): CaptureReceiptTimings => ({
-  navigateMs: num(input?.navigateMs),
-  fontsMs: num(input?.fontsMs),
-  imagesMs: num(input?.imagesMs),
-  networkMs: num(input?.networkMs),
-  framesMs: num(input?.framesMs),
-  stabilizeMs: num(input?.stabilizeMs),
-  screenshotMs: num(input?.screenshotMs),
-  totalMs: num(input?.totalMs),
-  readyMs: num(input?.readyMs),
-  readinessMs: num(input?.readinessMs),
-});
+/**
+ * Блок барьера из доказательства readiness. Форма проверяется структурно, а не типом: evidence
+ * приезжает из страницы `Record<string, unknown>`, и неполный блок — это отсутствие доказательства,
+ * а не «частично исполненный барьер».
+ */
+function resourceBarrierOf(evidence: Record<string, unknown> | null): CaptureReceiptResourceBarrier | null {
+  const raw = evidence?.resourceBarrier;
+  if (raw === null || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const expected = num(record.expected);
+  const decoded = num(record.decoded);
+  const stableFrames = num(record.stableFrames);
+  const durationMs = num(record.durationMs);
+  const fontsReady = bool(record.fontsReady);
+  if (expected === null || decoded === null || stableFrames === null || durationMs === null || fontsReady === null) return null;
+  return {
+    expected, decoded, fontsReady, stableFrames, durationMs,
+    lateAfterBarrier: strings(record.lateAfterBarrier, RECEIPT_THEME_RESOURCES_LIMIT),
+  };
+}
+
+/**
+ * Тайминги: явно переданное воркером сильнее, пофазовое доказательство страницы — источник
+ * остальных полей. Барьерный `barrierMs` берётся из `phaseTimings`, а при его отсутствии — из
+ * `resourceBarrier.durationMs` (то же число, измеренное самой фазой).
+ */
+const timingsOf = (
+  input: Partial<CaptureReceiptTimings> | undefined,
+  evidence: Record<string, unknown> | null,
+  barrier: CaptureReceiptResourceBarrier | null,
+): CaptureReceiptTimings => {
+  const phases = (evidence?.phaseTimings ?? null) as Record<string, unknown> | null;
+  const phase = (name: string): number | null => (phases === null ? null : num(phases[name]));
+  return {
+    navigateMs: num(input?.navigateMs),
+    fontsMs: num(input?.fontsMs) ?? phase("fontsMs"),
+    imagesMs: num(input?.imagesMs) ?? phase("imagesMs"),
+    networkMs: num(input?.networkMs) ?? phase("networkMs"),
+    framesMs: num(input?.framesMs) ?? phase("framesMs"),
+    stabilizeMs: num(input?.stabilizeMs) ?? phase("stabilizeMs"),
+    screenshotMs: num(input?.screenshotMs),
+    totalMs: num(input?.totalMs),
+    readyMs: num(input?.readyMs),
+    readinessMs: num(input?.readinessMs),
+    barrierMs: num(input?.barrierMs) ?? phase("barrierMs") ?? barrier?.durationMs ?? null,
+  };
+};
 
 /**
  * Собирает receipt. Чистая функция: тот же вход — тот же документ (включая порядок ключей после
@@ -287,6 +339,7 @@ const timingsOf = (input: Partial<CaptureReceiptTimings> | undefined): CaptureRe
 export function buildCaptureReceipt(input: CaptureReceiptInput): CaptureReceipt {
   const evidence = input.readiness?.evidence ?? null;
   const fontManifestHash = input.fontManifestHash ?? str(evidence?.fontManifestHash) ?? null;
+  const resourceBarrier = resourceBarrierOf(evidence);
   return {
     receiptVersion: CAPTURE_RECEIPT_VERSION,
     renderer: {
@@ -311,6 +364,7 @@ export function buildCaptureReceipt(input: CaptureReceiptInput): CaptureReceipt 
       fontFaces: fontFacesOf(evidence),
       images: imagesOf(evidence),
       themeResources: themeResourcesOf(evidence),
+      resourceBarrier,
     },
     console: {
       errors: strings(input.console?.errors, RECEIPT_CONSOLE_LIMIT),
@@ -318,7 +372,7 @@ export function buildCaptureReceipt(input: CaptureReceiptInput): CaptureReceipt 
       pageErrors: strings(input.console?.pageErrors, RECEIPT_CONSOLE_LIMIT),
     },
     output: input.output ?? null,
-    timings: timingsOf(input.timings),
+    timings: timingsOf(input.timings, evidence, resourceBarrier),
     verdict: {
       captureClean: input.captureClean,
       codes: sanitizeCaptureCodes(input.readiness?.codes ?? []),

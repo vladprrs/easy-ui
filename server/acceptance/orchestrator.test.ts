@@ -62,6 +62,9 @@ const READY_READINESS = {
     pendingRequests: [] as string[],
     framesWaited: 2, animationsDisabled: true,
     themeResources: { tokens: ["--eui-color-bg"], icons: [], images: [] },
+    // W2 (план 2026-08-07 §1.5): эхо барьера ресурсов обязательно при v3-политике профиля —
+    // кадр с `met:true` без него гейт `readiness` объявляет `indeterminate` («флаг не доехал»).
+    resourceBarrier: { expected: 1, decoded: 1, fontsReady: true, stableFrames: 2, lateAfterBarrier: [] as string[], durationMs: 12 },
   } as Record<string, unknown> | null,
   observedCaptureEnvFingerprint: "env-fingerprint" as string | null,
   observedCaptureEnv: null as Record<string, unknown> | null,
@@ -814,7 +817,8 @@ const manifestShapeHash = (manifest: unknown): string =>
  * ранов лежат на диске неизменными: голден описывает **новый** ран, а не их. Ни один вход
  * `frameFingerprint`/`comparisonFingerprint`/`verdict_policy_hash` при этом не добавлен.
  */
-const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "b5926a157bebfc59a964ad9dc6bb48faef68d176ad752b5ae5410c7c7b2d3d69";
+// W2: значение пересчитано вместе со сменой readiness-политики профиля (см. evidence.test.ts).
+const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "2338be6519cd58ba680e25783c1f8e0c5547789dc382a90ffd363f4c82f058ad";
 
 test("evidence-манифест slot-free рана не меняется от появления слот-полей (golden §A7)", async () => {
   const harness = await setup();

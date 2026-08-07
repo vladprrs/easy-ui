@@ -12,4 +12,6 @@ declare module "*/screenshot-pool-worker.mjs" {
   export function recycleReason(state: PoolRecycleState, limits: PoolLimits, now: number):
     "origin_changed" | "job_failed" | "job_budget" | "ttl" | "rss" | null;
   export function treeRssMb(rootPid?: number): Promise<number | null>;
+  /** W2: тот же производный потолок handshake'а, что и у per-job воркера (зеркало). */
+  export function handshakeTimeoutMs(job: { bootstrap?: { readiness?: { timeoutMs?: number } } } | undefined): number;
 }

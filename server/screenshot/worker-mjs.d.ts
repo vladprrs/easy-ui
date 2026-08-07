@@ -11,6 +11,8 @@ declare module "*/screenshot-worker.mjs" {
   export function readyToExpected(ready: Record<string, unknown>): Record<string, unknown>;
   /** Коды воркера из словаря `src/capture/failureCodes.ts` (R3): дубль сверяется тестом. */
   export const WORKER_FAILURE_CODES: Readonly<{ navigation: string; runtime: string; surfaceMissing: string }>;
+  /** W2: потолок ожидания handshake'а, производный от `bootstrap.readiness.timeoutMs`. */
+  export function handshakeTimeoutMs(job: { bootstrap?: { readiness?: { timeoutMs?: number } } } | undefined): number;
 }
 
 declare module "*/geometry.mjs" {

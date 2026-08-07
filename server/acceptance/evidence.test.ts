@@ -60,7 +60,13 @@ const manifestOf = (runId: string, artifacts: { name: string; sha256: string; by
  * поэтому манифест рана без слотов обязан остаться побайтово прежним — иначе `evidence_manifest_hash`
  * поехал бы у всех уже принятых ранов, а он связан промоутом (`promote.ts:239`).
  */
-const GOLDEN_SLOT_FREE_MANIFEST_HASH = "9217c6c82949e1c3f1741f87246c6dcae1c17e8b41a192eff700419fad1aea1f";
+/**
+ * Значение пересчитано волной W2 (план 2026-08-07 §1.5): манифест несёт `policyProfileHash`, а
+ * профиль сменил readiness-политику на v3 (барьер ресурсов). Это **объявленная** цена волны —
+ * корпус приёмки пересъёмывается целиком, — а не дрейф формы: инвариант теста прежний, слот-поля
+ * по-прежнему не появляются в манифесте рана без слотов.
+ */
+const GOLDEN_SLOT_FREE_MANIFEST_HASH = "1581069b54e4cad2b796702751f4fe5709deb0beb06d8f8f7acf16c1e5ab95e7";
 const GOLDEN_RUN_ID = "acc_00000000-0000-4000-8000-000000000000";
 
 test("slot-free run manifest hashes to its pre-slotBindings golden", () => {

@@ -37,7 +37,35 @@ export type CaptureFailureCode =
    * не `surface_mismatch`: это не расхождение размеров, а **невозможность их сравнить** — чинится
    * перевыгрузкой эталона, а не правкой компонента. `ref` — id ассета.
    */
-  | "dimensions_irreconcilable";
+  | "dimensions_irreconcilable"
+  /**
+   * Суммарный бюджет барьера ресурсов исчерпан (план 2026-08-07 §W2, §1.5): страница не успела
+   * догрузить/декодировать объявленный манифест за `resourceBarrier.budgetMs`. Код поднимается
+   * **изнутри страницы**, до дедлайна джобы (`JOB_DEADLINE_MS`, который убивает процесс-группу и
+   * типизированного исхода наружу не выпускает). `ref` — `"<phase>:<resourceId>"`: фаза (манифест,
+   * декод, шрифты, кадры, повторный диф) и предмет, на котором бюджет кончился.
+   */
+  | "resource_barrier_timeout"
+  /**
+   * Ресурс манифеста не декодировался за производный пер-ресурсный потолок (§W2). Отдельный код
+   * от `image_load_failed`: тот про `<img>` поверхности, этот — про любой ресурс манифеста
+   * (CSS background/mask, inline-SVG `<image>`), которого доволновая readiness не видела вовсе.
+   * `ref` — URL ресурса.
+   */
+  | "resource_decode_failed"
+  /**
+   * Ресурс появился в манифесте **после** барьера (диф второго снятия манифеста, §W2): кадр снят
+   * по неполной странице, и это ошибка вердикта, а не предупреждение — ровно тот класс дефекта,
+   * ради которого волна и заводится (потеря registry-листов на интерактивном пути). `ref` — URL.
+   */
+  | "resource_late_after_barrier"
+  /**
+   * Манифест страницы шире потолка `resourceBarrier.maxResources` (§W2, риск R4): барьер отработал
+   * по первым `maxResources` ресурсам, остальные не доказаны. `warning`, а не `error`: это предел
+   * нашего доказательства, а не дефект страницы, и валить им кадр значило бы наказывать компонент
+   * за наш cap. `ref` — фактическое число ресурсов.
+   */
+  | "resource_manifest_overflow";
 
 /**
  * `severity` — не украшение: `warning` означает «зафиксировано, вердикта не меняет» (напр.
@@ -56,6 +84,7 @@ export const CAPTURE_FAILURE_CODES: readonly CaptureFailureCode[] = [
   "layout_unstable", "surface_missing", "surface_overflow",
   "renderer_mismatch", "navigation_failed", "runtime_error",
   "surface_mismatch", "dimensions_irreconcilable",
+  "resource_barrier_timeout", "resource_decode_failed", "resource_late_after_barrier", "resource_manifest_overflow",
 ] as const;
 
 export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCode =>
@@ -69,7 +98,7 @@ export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCod
 export interface CaptureCodeOrigin {
   code: CaptureFailureCode;
   emitter: string;
-  wave: "R3" | "R4" | "R6" | "W1a" | "W1b";
+  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2";
 }
 
 export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
@@ -84,6 +113,10 @@ export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
   { code: "runtime_error", emitter: "scripts/screenshot-worker.mjs (handshake/mismatch); readiness network_timeout", wave: "R3" },
   { code: "surface_mismatch", emitter: "server/acceptance/gates/geometry2.ts (divergingSurfaces)", wave: "W1a" },
   { code: "dimensions_irreconcilable", emitter: "server/acceptance/gates/geometry2.ts (referenceExportCodes)", wave: "W1b" },
+  { code: "resource_barrier_timeout", emitter: "src/capture/readiness.ts settleResourceBarrier (budget)", wave: "W2" },
+  { code: "resource_decode_failed", emitter: "src/capture/readiness.ts settleResourceBarrier (decode)", wave: "W2" },
+  { code: "resource_late_after_barrier", emitter: "src/capture/readiness.ts settleResourceBarrier (manifest re-diff)", wave: "W2" },
+  { code: "resource_manifest_overflow", emitter: "src/capture/readiness.ts collectResourceManifest (cap)", wave: "W2" },
 ] as const;
 
 /**

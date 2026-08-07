@@ -67,6 +67,9 @@ const READY_READINESS = {
     pendingRequests: [] as string[],
     framesWaited: 2, animationsDisabled: true,
     themeResources: { tokens: ["--eui-color-bg"], icons: ["asset_icon"], images: [] },
+    // W2 (план 2026-08-07 §1.5): эхо барьера ресурсов обязательно при v3-политике профиля —
+    // кадр с `met:true` без него гейт `readiness` объявляет `indeterminate` («флаг не доехал»).
+    resourceBarrier: { expected: 1, decoded: 1, fontsReady: true, stableFrames: 2, lateAfterBarrier: [] as string[], durationMs: 12 },
   } as Record<string, unknown> | null,
   observedCaptureEnvFingerprint: "env-fingerprint" as string | null,
   observedCaptureEnv: null as Record<string, unknown> | null,

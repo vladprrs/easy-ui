@@ -31247,6 +31247,10 @@
                     "const": "geometry",
                     "type": "string"
                   },
+                  "readiness": {
+                    "const": "barrier",
+                    "type": "string"
+                  },
                   "rev": {
                     "maximum": 9007199254740991,
                     "minimum": -9007199254740991,
@@ -31375,7 +31379,7 @@
                 }
               }
             },
-            "description": "invalid_request (malformed body, or candidateOverrides that is not an array / exceeds limits.prototypeCandidateOverlayMax / targets the same component twice)"
+            "description": "invalid_request (malformed body, readiness that is not \"barrier\", or candidateOverrides that is not an array / exceeds limits.prototypeCandidateOverlayMax / targets the same component twice)"
           },
           "404": {
             "content": {
@@ -31428,7 +31432,7 @@
             "description": "screenshot_unavailable (no SERVE_DIST or chromium)"
           }
         },
-        "summary": "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically. CANDIDATE OVERLAY (plan 2026-08-05 §B, `capabilities.features.prototypeCandidateOverlay`): `candidateOverrides: [{candidateId}]` (at most `limits.prototypeCandidateOverlayMax`) substitutes the component pins of the resolved revision with the candidate bundles of those acceptance candidates, so a new revision of an ALREADY PUBLISHED component can be checked inside a composite screen before it is published. It is a pin SWAP, not an insertion: a component with no pin in that revision is 422 candidate_component_not_in_prototype, and a never-published component cannot be overlaid at all (use case-set `slotBindings` for first publishes). An overlay job is delivered as BYTES ONLY — its result is `{kind:\"image-bytes\", width, height, byteLength, pngSha256}` with no assetId and no imageUrl, the PNG is read from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min), nothing is written to the asset registry, no capture receipt is stored and the prototype document is untouched. Unknown and foreign candidates map to ONE identical 404 not_found (no existence oracle); two overrides of the same component are 400 invalid_request; reading the job status and its bytes requires prototype read access AND ownership of every overridden component. The response pins carry `status:\"candidate\"`, `candidate {candidateId, rev, sourceHash}` and the CANDIDATE bundleHash — a pin whose bundleHash still equals the published one means the override did not apply and the client must fail loudly. With the feature off, sending `candidateOverrides` is 404 not_found.",
+        "summary": "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically. CANDIDATE OVERLAY (plan 2026-08-05 §B, `capabilities.features.prototypeCandidateOverlay`): `candidateOverrides: [{candidateId}]` (at most `limits.prototypeCandidateOverlayMax`) substitutes the component pins of the resolved revision with the candidate bundles of those acceptance candidates, so a new revision of an ALREADY PUBLISHED component can be checked inside a composite screen before it is published. It is a pin SWAP, not an insertion: a component with no pin in that revision is 422 candidate_component_not_in_prototype, and a never-published component cannot be overlaid at all (use case-set `slotBindings` for first publishes). An overlay job is delivered as BYTES ONLY — its result is `{kind:\"image-bytes\", width, height, byteLength, pngSha256}` with no assetId and no imageUrl, the PNG is read from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min), nothing is written to the asset registry, no capture receipt is stored and the prototype document is untouched. Unknown and foreign candidates map to ONE identical 404 not_found (no existence oracle); two overrides of the same component are 400 invalid_request; reading the job status and its bytes requires prototype read access AND ownership of every overridden component. The response pins carry `status:\"candidate\"`, `candidate {candidateId, rev, sourceHash}` and the CANDIDATE bundleHash — a pin whose bundleHash still equals the published one means the override did not apply and the client must fail loudly. With the feature off, sending `candidateOverrides` is 404 not_found. RESOURCE BARRIER (plan 2026-08-07 §W2): the optional `readiness: \"barrier\"` runs this job under readiness policy v3 — the page builds a manifest of every resource it declares (CSS background/mask/border images, inline-SVG <image>, <img>), preloads and decodes all of them, awaits document.fonts.ready and two stable frames, then re-diffs the manifest, so a resource that arrives late is reported as `resource_late_after_barrier` instead of silently missing from the frame. Meant for service captures (galleries); the interactive default is unchanged (v1) because the barrier costs up to 8s per frame. With EASYUI_RESOURCE_BARRIER_DISABLED=1 the parameter stays valid and becomes a no-op.",
         "x-easyui-validated": false
       }
     },
@@ -33964,7 +33968,13 @@
                             "surface_overflow",
                             "renderer_mismatch",
                             "navigation_failed",
-                            "runtime_error"
+                            "runtime_error",
+                            "surface_mismatch",
+                            "dimensions_irreconcilable",
+                            "resource_barrier_timeout",
+                            "resource_decode_failed",
+                            "resource_late_after_barrier",
+                            "resource_manifest_overflow"
                           ],
                           "type": "string"
                         },
@@ -34475,7 +34485,13 @@
                             "surface_overflow",
                             "renderer_mismatch",
                             "navigation_failed",
-                            "runtime_error"
+                            "runtime_error",
+                            "surface_mismatch",
+                            "dimensions_irreconcilable",
+                            "resource_barrier_timeout",
+                            "resource_decode_failed",
+                            "resource_late_after_barrier",
+                            "resource_manifest_overflow"
                           ],
                           "type": "string"
                         },
@@ -35034,6 +35050,54 @@
                               },
                               "type": "array"
                             },
+                            "resourceBarrier": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "decoded": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer"
+                                    },
+                                    "durationMs": {
+                                      "type": "number"
+                                    },
+                                    "expected": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer"
+                                    },
+                                    "fontsReady": {
+                                      "type": "boolean"
+                                    },
+                                    "lateAfterBarrier": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "stableFrames": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "expected",
+                                    "decoded",
+                                    "fontsReady",
+                                    "stableFrames",
+                                    "lateAfterBarrier",
+                                    "durationMs"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "themeResources": {
                               "anyOf": [
                                 {
@@ -35075,7 +35139,8 @@
                             "fontManifestHash",
                             "fontFaces",
                             "images",
-                            "themeResources"
+                            "themeResources",
+                            "resourceBarrier"
                           ],
                           "type": "object"
                         },
@@ -35193,6 +35258,16 @@
                         "timings": {
                           "additionalProperties": false,
                           "properties": {
+                            "barrierMs": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "fontsMs": {
                               "anyOf": [
                                 {
@@ -35304,7 +35379,8 @@
                             "screenshotMs",
                             "totalMs",
                             "readyMs",
-                            "readinessMs"
+                            "readinessMs",
+                            "barrierMs"
                           ],
                           "type": "object"
                         },

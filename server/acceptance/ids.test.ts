@@ -7,6 +7,7 @@ import {
   type CaseSurface, type LayeredField,
 } from "./ids";
 import { ACCEPTANCE_POLICIES, withRequiredVisual, type AcceptancePolicy } from "./policies";
+import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
 import { rendererFingerprint } from "../capture/renderer";
 
 /**
@@ -98,9 +99,15 @@ test("props, поверхность и readiness-политика — кадро
   expect(caseFingerprintsOf({
     candidateId: CANDIDATE, surface: { ...SURFACE, dsf: 1 }, policy: DEFAULT, case: PLAIN,
   }).frame).not.toBe(before.frame);
-  // `pixel-strict-v1` несёт строгую readiness — она входит в кадр, и её смена честно требует
-  // пересъёмки (в отличие от порогов того же профиля).
-  expect(fingerprints(PLAIN, ACCEPTANCE_POLICIES["pixel-strict-v1"]).frame).not.toBe(before.frame);
+  // Readiness-политика входит в кадр, и её смена честно требует пересъёмки (в отличие от порогов
+  // того же профиля). С волны W2 **оба** профиля несут одну политику v3, поэтому разными профилями
+  // это уже не показать: сравниваем с доволновой политикой (её же возвращает kill-switch барьера).
+  expect(fingerprints(PLAIN, { ...DEFAULT, readiness: barrierAwareReadinessPolicy("acceptance-default", true) }).frame)
+    .not.toBe(before.frame);
+  expect(fingerprints(PLAIN, { ...DEFAULT, readiness: barrierAwareReadinessPolicy("acceptance-strict", true) }).frame)
+    .not.toBe(before.frame);
+  // Профили расходятся порогами, а не readiness ⇒ кадровый слой у них теперь общий (W2).
+  expect(fingerprints(PLAIN, ACCEPTANCE_POLICIES["pixel-strict-v1"]).frame).toBe(before.frame);
 });
 
 test("`--policy` инвалидирует reuse и на examples-, и на case-set-пути (C8)", () => {

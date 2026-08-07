@@ -4,6 +4,8 @@ import type { Database } from "bun:sqlite";
 import type { Principal } from "../auth";
 import { requirePrototypeOwner, requirePrototypeRead, requireResourceOwner, requireUser, resourceOwner } from "../authorization";
 import { registerOverlayLease, releaseOverlayLease } from "../components/candidates";
+import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
+import type { ReadinessPolicy } from "../../src/capture/readinessPolicy";
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -117,6 +119,21 @@ function optionalPositiveInt(value: unknown, name: string): number | undefined {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new ApiError(400, "invalid_request", `${name} must be a positive integer`);
   return value;
 }
+/**
+ * Опт-ин барьера ресурсов для одной джобы (план 2026-08-07 §W2, триаж O-M4).
+ *
+ * Дефолт интерактивного пути не меняется: редактор и превью человека продолжают снимать по v1 —
+ * барьер стоит времени, а их вердикт смотрит человек. Сервисные съёмки (галереи) просят его
+ * явно, потому что именно на этом пути воспроизводилась потеря registry-листов. При включённом
+ * kill-switch параметр остаётся валидным и становится no-op'ом (v1) — иначе аварийное выключение
+ * барьера ломало бы клиентов, а не только барьер.
+ */
+function parseReadinessOptIn(value: unknown): ReadinessPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (value !== "barrier") throw new ApiError(400, "invalid_request", "readiness must be \"barrier\"");
+  return barrierAwareReadinessPolicy("gallery");
+}
+
 function unavailable(): never { throw new ApiError(501, "screenshot_unavailable", "Screenshot capture requires SERVE_DIST and an installed chromium"); }
 
 /**
@@ -192,7 +209,8 @@ export async function routeScreenshots(request: Request, db:Database, service: S
       // целиком (тот же аргумент, что у draft-preview выше).
       throw new ApiError(404, "not_found", "Prototype candidate overlay is disabled");
     }
-    const enqueue = (overrides: ResolvedCandidateOverride[]) => service.enqueuePrototype(segments[1]!, segments[3]!, { rev, version, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false, probe: b.probe as "geometry" | undefined, ...(overrides.length ? { candidateOverrides: overrides } : {}) });
+    const readinessPolicy = parseReadinessOptIn(b.readiness);
+    const enqueue = (overrides: ResolvedCandidateOverride[]) => service.enqueuePrototype(segments[1]!, segments[3]!, { rev, version, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false, probe: b.probe as "geometry" | undefined, ...(readinessPolicy ? { readinessPolicy } : {}), ...(overrides.length ? { candidateOverrides: overrides } : {}) });
     if (overrideIds.length === 0) return json(enqueue([]), 202, noStore);
     const rows = overrideIds.map((candidateId) => overlayCandidate(db, candidateId, principal));
     // Два кандидата одного компонента — не «последний выигрывает», а отказ: подмена пина

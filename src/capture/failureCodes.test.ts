@@ -31,6 +31,11 @@ const REACHABILITY: Record<CaptureFailureCode, { kind: "unit"; codes: () => stri
   surface_mismatch: { kind: "fixture", where: "server/acceptance/gates/geometry2.ts#geometryCodes → server/acceptance/gates/geometry2.test.ts" },
   // W1b: эмитент — `referenceExportCodes` на третьем исходе замера габаритов эталона.
   dimensions_irreconcilable: { kind: "fixture", where: "server/acceptance/gates/geometry2.ts#referenceExportCodes → server/acceptance/gates/geometry2.test.ts" },
+  // W2 (план 2026-08-07 §W2): все четыре кода эмитит фаза барьера ресурсов внутри страницы.
+  resource_barrier_timeout: { kind: "fixture", where: "src/capture/readiness.ts#settleResourceBarrier → src/capture/readiness.test.ts" },
+  resource_decode_failed: { kind: "fixture", where: "src/capture/readiness.ts#settleResourceBarrier → src/capture/readiness.test.ts" },
+  resource_late_after_barrier: { kind: "fixture", where: "src/capture/readiness.ts#settleResourceBarrier → src/capture/readiness.test.ts" },
+  resource_manifest_overflow: { kind: "fixture", where: "src/capture/readiness.ts#collectResourceManifest → src/capture/readiness.test.ts" },
 };
 
 describe("capture failure codes", () => {
@@ -49,7 +54,7 @@ describe("capture failure codes", () => {
       } else if (plan.kind === "fixture") {
         expect(plan.where.length, `${code} обязан называть файл с фикстурой`).toBeGreaterThan(0);
         // Волна происхождения — R3 (typed codes) либо R4 (строгая readiness посадила эмитент).
-        expect(["R3", "R4", "W1a", "W1b"]).toContain(origin.wave);
+        expect(["R3", "R4", "W1a", "W1b", "W2"]).toContain(origin.wave);
       } else {
         // Отложенный код обязан согласовываться с реестром: волна в одном месте, а не в двух.
         expect(origin.wave).toBe(plan.wave);

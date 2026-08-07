@@ -305,12 +305,14 @@ export const jobAcceptedSchema = z.object({ jobId: z.string() });
 export const prototypeScreenshotContract = registerContract({
   method: "POST",
   path: "/api/prototypes/{id}/screens/{screenId}/screenshot",
-  summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically. CANDIDATE OVERLAY (plan 2026-08-05 §B, `capabilities.features.prototypeCandidateOverlay`): `candidateOverrides: [{candidateId}]` (at most `limits.prototypeCandidateOverlayMax`) substitutes the component pins of the resolved revision with the candidate bundles of those acceptance candidates, so a new revision of an ALREADY PUBLISHED component can be checked inside a composite screen before it is published. It is a pin SWAP, not an insertion: a component with no pin in that revision is 422 candidate_component_not_in_prototype, and a never-published component cannot be overlaid at all (use case-set `slotBindings` for first publishes). An overlay job is delivered as BYTES ONLY — its result is `{kind:\"image-bytes\", width, height, byteLength, pngSha256}` with no assetId and no imageUrl, the PNG is read from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min), nothing is written to the asset registry, no capture receipt is stored and the prototype document is untouched. Unknown and foreign candidates map to ONE identical 404 not_found (no existence oracle); two overrides of the same component are 400 invalid_request; reading the job status and its bytes requires prototype read access AND ownership of every overridden component. The response pins carry `status:\"candidate\"`, `candidate {candidateId, rev, sourceHash}` and the CANDIDATE bundleHash — a pin whose bundleHash still equals the published one means the override did not apply and the client must fail loudly. With the feature off, sending `candidateOverrides` is 404 not_found.",
+  summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically. CANDIDATE OVERLAY (plan 2026-08-05 §B, `capabilities.features.prototypeCandidateOverlay`): `candidateOverrides: [{candidateId}]` (at most `limits.prototypeCandidateOverlayMax`) substitutes the component pins of the resolved revision with the candidate bundles of those acceptance candidates, so a new revision of an ALREADY PUBLISHED component can be checked inside a composite screen before it is published. It is a pin SWAP, not an insertion: a component with no pin in that revision is 422 candidate_component_not_in_prototype, and a never-published component cannot be overlaid at all (use case-set `slotBindings` for first publishes). An overlay job is delivered as BYTES ONLY — its result is `{kind:\"image-bytes\", width, height, byteLength, pngSha256}` with no assetId and no imageUrl, the PNG is read from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min), nothing is written to the asset registry, no capture receipt is stored and the prototype document is untouched. Unknown and foreign candidates map to ONE identical 404 not_found (no existence oracle); two overrides of the same component are 400 invalid_request; reading the job status and its bytes requires prototype read access AND ownership of every overridden component. The response pins carry `status:\"candidate\"`, `candidate {candidateId, rev, sourceHash}` and the CANDIDATE bundleHash — a pin whose bundleHash still equals the published one means the override did not apply and the client must fail loudly. With the feature off, sending `candidateOverrides` is 404 not_found. RESOURCE BARRIER (plan 2026-08-07 §W2): the optional `readiness: \"barrier\"` runs this job under readiness policy v3 — the page builds a manifest of every resource it declares (CSS background/mask/border images, inline-SVG <image>, <img>), preloads and decodes all of them, awaits document.fonts.ready and two stable frames, then re-diffs the manifest, so a resource that arrives late is reported as `resource_late_after_barrier` instead of silently missing from the frame. Meant for service captures (galleries); the interactive default is unchanged (v1) because the barrier costs up to 8s per frame. With EASYUI_RESOURCE_BARRIER_DISABLED=1 the parameter stays valid and becomes a no-op.",
   status: 202,
   requestSchema: z.object({
     rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema,
     deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional(),
     probe: z.literal("geometry").optional(),
+    /** W2: опт-ин детерминированного барьера ресурсов для этой джобы (дефолт пути не меняется). */
+    readiness: z.literal("barrier").optional(),
     /** §B1: подмены пинов кандидатами; ≤ `limits.prototypeCandidateOverlayMax`, по одному на компонент. */
     candidateOverrides: z.array(z.strictObject({ candidateId: z.string().min(1) })).optional(),
   }),
@@ -326,7 +328,7 @@ export const prototypeScreenshotContract = registerContract({
     })),
   }),
   errors: [
-    { status: 400, code: "invalid_request", description: "malformed body, or candidateOverrides that is not an array / exceeds limits.prototypeCandidateOverlayMax / targets the same component twice" },
+    { status: 400, code: "invalid_request", description: "malformed body, readiness that is not \"barrier\", or candidateOverrides that is not an array / exceeds limits.prototypeCandidateOverlayMax / targets the same component twice" },
     { status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" },
     { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" },
     { status: 404, code: "not_found", description: "candidate overlay: an unknown OR foreign candidateId (one identical refusal by design), or the feature is disabled" },
@@ -461,6 +463,11 @@ export const captureFailureCodeSchema = z.enum([
   "font_load_failed", "font_face_missing", "image_load_failed",
   "layout_unstable", "surface_missing", "surface_overflow",
   "renderer_mismatch", "navigation_failed", "runtime_error",
+  // Волны 2026-08-07: геометрия по названным поверхностям (W1a/W1b) и барьер ресурсов (W2).
+  // Список обязан совпадать с `CAPTURE_FAILURE_CODES` (`src/capture/failureCodes.ts`) — словарь
+  // один на продукт, и код, отсутствующий здесь, не прошёл бы валидацию квитанции.
+  "surface_mismatch", "dimensions_irreconcilable",
+  "resource_barrier_timeout", "resource_decode_failed", "resource_late_after_barrier", "resource_manifest_overflow",
 ]);
 /** Таксономия исхода **джобы** (A3): инфраструктура против терминального `renderer_mismatch`. */
 export const jobOutcomeSchema = z.enum(["ok", "worker_crash", "timeout", "queue_full", "subprocess_error", "renderer_mismatch", "surface_missing"]);
@@ -502,6 +509,11 @@ export const captureReceiptSchema = z.object({
       decoded: z.boolean().nullable(), contentHash: z.string().nullable(),
     })),
     themeResources: z.object({ tokens: z.array(z.string()), icons: z.array(z.string()), images: z.array(z.string()) }).nullable(),
+    /** W2: эхо фазы барьера ресурсов; `null` — политика барьера не требовала либо эхо не приехало. */
+    resourceBarrier: z.object({
+      expected: z.number().int(), decoded: z.number().int(), fontsReady: z.boolean(),
+      stableFrames: z.number().int(), lateAfterBarrier: z.array(z.string()), durationMs: z.number(),
+    }).nullable(),
   }),
   console: z.object({ errors: z.array(z.string()), warnings: z.array(z.string()), pageErrors: z.array(z.string()) }),
   output: z.object({
@@ -515,6 +527,7 @@ export const captureReceiptSchema = z.object({
     networkMs: z.number().nullable(), framesMs: z.number().nullable(), stabilizeMs: z.number().nullable(),
     screenshotMs: z.number().nullable(), totalMs: z.number().nullable(),
     readyMs: z.number().nullable(), readinessMs: z.number().nullable(),
+    barrierMs: z.number().nullable(),
   }),
   verdict: z.object({
     captureClean: z.boolean(), codes: z.array(captureCodeSchema),

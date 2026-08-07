@@ -44,6 +44,7 @@ import { AcceptanceRepo } from "./acceptance/repo";
 import { referencedArtifactShas } from "./acceptance/evidence";
 import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
+import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -252,6 +253,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     const renderer=await initRenderer();
     for(const warning of renderer.warnings) console.warn(`[renderer] ${warning}`);
     console.log(`[renderer] ${renderer.declaration.rendererVersion} ${renderer.declaration.browserName}@${renderer.declaration.browserVersion ?? "unknown"} (${renderer.declaration.source}) fingerprint=${renderer.fingerprint}`);
+    // W2 (план 2026-08-07 §W2): kill-switch барьера ресурсов читается один раз на процесс
+    // (`server/capture/resourceBarrier.ts`) и меняет readiness-политику обоих профилей приёмки,
+    // режима `reference` и галерейного опт-ина. Он render-affecting через отпечатки
+    // (`policyProfileHash`/`readinessPolicyHash`/`rendererFingerprint`), поэтому факт включения
+    // обязан быть виден в логе старта, а не только в env контейнера.
+    if(RESOURCE_BARRIER_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_DISABLED=1: resource barrier off, profiles fall back to their pre-wave readiness policies (default-v1 → v1, pixel-strict-v1 → v2, reference → v2)");
     const dataDir=process.env.DATA_DIR??"data";
     // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,
     // а DATA_DIR в проде — постоянный том (план 2026-07-31 §3.5).

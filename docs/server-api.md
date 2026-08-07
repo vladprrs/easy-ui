@@ -1642,7 +1642,7 @@ case-set-манифеста (`policy.perCase.<id>`): `allowPaintOverflow` (ож�
 `features.captureReadiness` в `GET /capabilities`.
 
 ```ts
-readinessPolicy = { version: 1, fonts: "used-faces" | "document-ready", images: "decoded",   // v2 — ниже, «Строгая readiness 2.0»
+readinessPolicy = { version: 1, fonts: "used-faces" | "document-ready", images: "decoded",   // v2 — ниже, «Строгая readiness 2.0»; v3 — «Deterministic resource barrier»
   network: { quietMs: 200, scope: "component-owned" }, frames: 2,
   animations: "disabled", timeoutMs: 15000 }
 readinessPolicyHash = sha256(canonicalStringify(policy))       // src/capture/readinessPolicy.ts
@@ -1711,6 +1711,67 @@ readiness не считает сравнивающие гейты случая (
 хэш политики — общий с клиентом, серверная часть отпечатка окружения — платформа хоста плюс этот
 хэш (браузерная часть отпечатка наблюдается в кадре и живёт в evidence, потому что отпечаток
 случая считается **до** съёмки).
+
+### Deterministic resource barrier — readiness v3 (волна W2, план 2026-08-07)
+
+Доволновая readiness видела ровно один класс ресурсов — `<img>` поверхности. CSS-фон, `mask-image`,
+`border-image` и inline-SVG `<image>` в её предмет не входили вовсе, поэтому кадр мог сняться
+до их появления и молча уехать в визуальную оценку (класс дефекта «пропали листья реестра»).
+
+Политика v3 добавляет к строгой политике R4 фазу **`settleResourceBarrier`**, исполняемую
+поверхностью **перед съёмкой кадра**:
+
+```ts
+readinessPolicy.v3 = { ...v2-строгая, version: 3,
+  resourceBarrier: { budgetMs: 8000, maxResources: 256, stableFrames: 2 } }
+// пер-ресурсный потолок — производная бюджета (budgetMs/8, пол 500 мс), а не отдельная ручка
+```
+
+1. манифест ресурсов кадра: `getComputedStyle` (background/mask/border-image/list-style/content),
+   inline-SVG `<image>`, `<img>`; дубли по URL схлопываются, порядок — обход DOM;
+2. preload + decode каждого ресурса манифеста;
+3. `document.fonts.ready`;
+4. `stableFrames` подряд стабильных rAF-кадров;
+5. **повторный** сбор манифеста и его диф с первым: разность — `lateAfterBarrier[]`.
+
+Бюджет фазы **суммарный и внутри страницы** (≤ 8 000 мс, живёт внутри `timeoutMs` политики):
+исчерпание даёт типизированный `resource_barrier_timeout` с `ref="<phase>:<resourceId>"` **до**
+дедлайна джобы (`JOB_DEADLINE_MS` = 60 с убивает процесс-группу, и типизированный код наружу бы не
+доехал). Коды фазы (словарь `src/capture/failureCodes.ts`): `resource_barrier_timeout`,
+`resource_decode_failed`, `resource_late_after_barrier` (все `error`) и `resource_manifest_overflow`
+(`warning` — предел нашего доказательства, а не дефект страницы).
+
+Эхо фазы едет в `readiness.evidence.resourceBarrier` и в квитанцию
+(`resources.resourceBarrier`, `timings.barrierMs`; там же волна впервые заполняет
+`timings.fontsMs/imagesMs/networkMs/framesMs/stabilizeMs` — их источник `evidence.phaseTimings`):
+
+```json
+{"expected": 12, "decoded": 12, "fontsReady": true, "stableFrames": 2,
+ "lateAfterBarrier": [], "durationMs": 640}
+```
+
+**Гейт `readiness` требует это эхо:** кадр с `met:true` под v3-политикой, но **без** блока
+`resourceBarrier`, получает `indeterminate`, а не `pass` — иначе «политика не доехала до
+поверхности» было бы неотличимо от «барьер исполнен и всё чисто».
+
+**Где включено.** Точка включения приёмки — реестр профилей (`ACCEPTANCE_POLICIES`): `default-v1`
+переведён с v1, `pixel-strict-v1` — с v2, оба теперь несут v3. Режим `reference` — с v2 на v3.
+Дефолт интерактивного пути (редактор, превью, галерея по умолчанию) остаётся **v1**: барьер стоит
+времени, а его вердикт там смотрит человек. Сервисная съёмка просит барьер явно — необязательное
+поле `readiness: "barrier"` в `POST /prototypes/:id/screens/:screenId/screenshot` (иное значение —
+`400 invalid_request`).
+
+**Kill-switch `EASYUI_RESOURCE_BARRIER_DISABLED=1`** возвращает **доволновую политику каждого
+потребителя**, а не «всем одну»: `default-v1` → v1, `pixel-strict-v1` → v2, `reference` → v2,
+галерейный опт-ин → v1 (no-op). Флаг читается один раз на процесс (политика входит в
+`policyProfileHash`/`readinessPolicyHash`/`rendererFingerprint`), его включение видно в логе старта.
+
+**Цена.** Смена политики двигает `readinessPolicyHash`, а с ним `frameFingerprint`,
+`policyProfileHash` и `rendererFingerprint`: накопленный reuse приёмки инвалидируется честно, и
+семья либо промоутится целиком по доволновым артефактам, либо целиком пересъёмывается после волны
+(смешанные наборы дают `422 acceptance_renderer_mismatch`). Межкадровое переиспользование
+результата барьера (прогретый кэш ресурсов) — **сознательный non-goal**: барьер исполняется на
+каждом кадре, стоимость = `durationMs` × число кадров.
 
 ### Минимальный визуальный гейт приёмки (волна W5a, план 2026-08-03 §2 A5)
 

@@ -108,6 +108,20 @@ export async function treeRssMb(rootPid = process.pid) {
   return Math.round((total / 1024 / 1024) * 10) / 10;
 }
 
+/**
+ * Потолок ожидания handshake'а (план 2026-08-07 §W2). Барьер ресурсов живёт **внутри** дедлайна
+ * readiness-политики (её `timeoutMs`), поэтому страница не начинает ждать дольше, чем до волны, —
+ * но потолок воркера обязан быть производным от политики, а не константой: иначе политика с
+ * бо́льшим `timeoutMs` дала бы `runtime_error` («handshake timed out») вместо типизированного
+ * `resource_barrier_timeout`, который поверхность уже посчитала. Верхняя граница держит суммарное
+ * время джобы под `JOB_DEADLINE_MS` (60 с), который убивает процесс-группу вообще без кода.
+ */
+export function handshakeTimeoutMs(job) {
+  const declared = job?.bootstrap?.readiness?.timeoutMs;
+  const base = typeof declared === "number" && Number.isFinite(declared) && declared > 0 ? declared : 15000;
+  return Math.min(40000, Math.max(20000, Math.round(base) + 5000));
+}
+
 const elapsedSince = (startedAt) => Math.max(0, Math.round(Date.now() - startedAt));
 
 /**
@@ -180,7 +194,7 @@ async function captureWithContext(browser, job) {
 
     const readyAt = Date.now();
     const ready = await (async () => {
-      const handle = await page.waitForFunction(() => window.__EUI_CAPTURE_READY__ ?? null, null, { timeout: 20000, polling: 100 });
+      const handle = await page.waitForFunction(() => window.__EUI_CAPTURE_READY__ ?? null, null, { timeout: handshakeTimeoutMs(job), polling: 100 });
       return handle.jsonValue();
     })().catch((error) => ({ status: "error", error: `capture handshake timed out: ${error?.message ?? String(error)}` }));
     timings.readyMs = elapsedSince(readyAt);

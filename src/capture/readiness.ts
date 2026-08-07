@@ -27,8 +27,8 @@ import {
   type CaptureBootstrap, type CaptureFontFaceDeclaration, type CaptureFontManifest, type CaptureReady,
 } from "./protocol";
 import {
-  DEFAULT_READINESS_POLICY, isReadinessPolicy, readinessPolicyHash,
-  type ReadinessPolicy,
+  DEFAULT_READINESS_POLICY, isReadinessPolicy, perResourceTimeoutMs, readinessPolicyHash,
+  type ReadinessBarrierPolicy, type ReadinessPolicy,
 } from "./readinessPolicy";
 import { rectSignature, settleLayout } from "./stability";
 
@@ -101,6 +101,28 @@ export interface ReadinessEvidence {
   framesWaited: number;
   animationsDisabled: boolean;
   themeResources: ReadinessThemeResources;
+  /**
+   * Только политика v3 (W2): доказательство исполнения барьера ресурсов. Оно **обязательно** —
+   * гейт `readiness` отказывает кадру с `met:true`, пришедшему по v3-политике без этого блока
+   * (§1.5: иначе «флаг не доехал до поверхности» неотличимо от «барьер исполнен»).
+   */
+  resourceBarrier?: ReadinessResourceBarrier;
+  /**
+   * Пофазовый раскол ожидания (§W2, «заполнить `timings.*`»): до волны receipt нёс только
+   * суммарный `readinessMs`, и «где именно кадр простоял 9 секунд» было неизвестно.
+   */
+  phaseTimings?: ReadinessPhaseTimings;
+}
+
+/** Длительности фаз readiness, мс. Источник `timings.*` receipt'а (§W2). */
+export interface ReadinessPhaseTimings {
+  fontsMs: number;
+  imagesMs: number;
+  networkMs: number;
+  framesMs: number;
+  stabilizeMs: number;
+  /** Только v3: длительность фазы барьера (она же `resourceBarrier.durationMs`). */
+  barrierMs?: number;
 }
 
 export interface ReadinessReport {
@@ -493,6 +515,237 @@ export function collectThemeAssets(root: ParentNode, elements: Element[]): { ico
   return { icons: [...icons].sort(), images: [...images].sort() };
 }
 
+/* ------------------------------------------------------------------------------------------- *
+ * Deterministic resource barrier (план 2026-08-07 §W2, P0.2)
+ * ------------------------------------------------------------------------------------------- */
+
+/**
+ * Один ресурс манифеста страницы. `kind` — не украшение: он отвечает на вопрос «откуда мы вообще
+ * узнали про этот ресурс», а доволновая readiness знала ровно один источник (`<img>`) — из-за чего
+ * CSS-фон и inline-SVG `<image>` уезжали в кадр недогруженными (мотивировка волны).
+ */
+export interface ReadinessResourceEntry {
+  /** Стабильный идентификатор ресурса внутри кадра (он же `resourceId` в `ref` кодов). */
+  id: string;
+  kind: "img" | "css" | "svg-image";
+  url: string;
+}
+
+/** Доказательство исполнения барьера — то самое «эхо», без которого гейт при v3 отказывает (§1.5). */
+export interface ReadinessResourceBarrier {
+  /** Сколько ресурсов барьер объявил своим предметом (после cap'а). */
+  expected: number;
+  /** Сколько из них доказанно декодировано. */
+  decoded: number;
+  fontsReady: boolean;
+  /** Сколько стабильных кадров отстояно после декода. */
+  stableFrames: number;
+  /** Ресурсы, появившиеся **после** барьера (диф второго снятия манифеста). */
+  lateAfterBarrier: string[];
+  durationMs: number;
+}
+
+export type ResourceDecodeOutcome = "decoded" | "failed" | "timeout";
+
+/** Фазы барьера — первая половина `ref` кодов (`"<phase>:<resourceId>"`). */
+export type ResourceBarrierPhase = "manifest" | "decode" | "fonts" | "frames" | "rediff";
+
+export interface ResourceBarrierOptions {
+  barrier: ReadinessBarrierPolicy;
+  /** Дедлайн политики целиком: барьер не вправе его пережить, даже если бюджет ещё есть. */
+  deadline: number;
+  /** Инъекции для тестов; по умолчанию — реальные браузерные механизмы. */
+  decode?: (url: string, timeoutMs: number) => Promise<ResourceDecodeOutcome>;
+  fontsReady?: () => Promise<unknown> | undefined;
+  frame?: () => Promise<void>;
+  now?: () => number;
+}
+
+export interface ResourceBarrierOutcome {
+  evidence: ReadinessResourceBarrier;
+  codes: CaptureCode[];
+  reasons: string[];
+}
+
+const CSS_URL_PATTERN = /url\((["']?)([^"')]+)\1\)/g;
+/** Свойства computed style, через которые страница тянет растр помимо `<img>`. */
+const CSS_IMAGE_PROPERTIES = ["backgroundImage", "maskImage", "webkitMaskImage", "borderImageSource", "listStyleImage", "content"] as const;
+
+const resourceUrlsOfDeclaration = (value: string): string[] => {
+  if (!value || !value.includes("url(")) return [];
+  CSS_URL_PATTERN.lastIndex = 0;
+  return [...value.matchAll(CSS_URL_PATTERN)].map((match) => match[2]!).filter((url) => url.length > 0);
+};
+
+/**
+ * Манифест ресурсов кадра: computed-стили выборки элементов (фон, маска, border-image, list-style,
+ * `content`), inline-SVG `<image>` и `<img>`. Порядок детерминирован (обход DOM), дубли схлопнуты
+ * по URL — один и тот же фон на сотне элементов остаётся одним ресурсом.
+ *
+ * `overflow` — честный признак того, что предмет доказательства **шире** потолка: барьер отработает
+ * по первым `limit` ресурсам, и это фиксируется кодом `resource_manifest_overflow`, а не молчанием.
+ */
+export function collectResourceManifest(
+  root: ParentNode,
+  elements: Element[],
+  limit: number,
+): { entries: ReadinessResourceEntry[]; total: number; overflow: boolean } {
+  const seen = new Map<string, ReadinessResourceEntry>();
+  const add = (kind: ReadinessResourceEntry["kind"], url: string): void => {
+    const trimmed = url.trim();
+    if (trimmed.length === 0 || trimmed === "none" || trimmed.startsWith("#")) return;
+    if (!seen.has(trimmed)) seen.set(trimmed, { id: trimmed, kind, url: trimmed });
+  };
+  for (const element of elements) {
+    let computed: CSSStyleDeclaration | null = null;
+    try { computed = getComputedStyle(element); } catch { computed = null; }
+    if (!computed) continue;
+    for (const property of CSS_IMAGE_PROPERTIES) {
+      for (const url of resourceUrlsOfDeclaration((computed as unknown as Record<string, string>)[property] ?? "")) add("css", url);
+    }
+  }
+  for (const image of root.querySelectorAll("img")) add("img", image.currentSrc || image.src || image.getAttribute("src") || "");
+  // Inline-SVG `<image>`: `href`/`xlink:href` мимо `querySelectorAll("img")` — именно этот класс
+  // ресурсов доволновая readiness не видела вовсе.
+  for (const image of root.querySelectorAll("image")) {
+    add("svg-image", image.getAttribute("href") ?? image.getAttribute("xlink:href") ?? "");
+  }
+  const entries = [...seen.values()];
+  return { entries: entries.slice(0, limit), total: entries.length, overflow: entries.length > limit };
+}
+
+/** Декод одного ресурса вне DOM поверхности: растр либо есть, либо назван виновником. */
+async function decodeResourceDefault(url: string, timeoutMs: number): Promise<ResourceDecodeOutcome> {
+  if (typeof Image !== "function") return "decoded";
+  const image = new Image();
+  const settled: Promise<ResourceDecodeOutcome> = new Promise((done) => {
+    image.addEventListener("load", () => done("decoded"), { once: true });
+    image.addEventListener("error", () => done("failed"), { once: true });
+  });
+  image.src = url;
+  const decoded = typeof image.decode === "function"
+    ? image.decode().then((): ResourceDecodeOutcome => "decoded").catch((): ResourceDecodeOutcome => "failed")
+    : settled;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ResourceDecodeOutcome>((done) => { timer = setTimeout(() => done("timeout"), Math.max(timeoutMs, 0)); });
+  try { return await Promise.race([decoded, timeout]); }
+  finally { if (timer !== undefined) clearTimeout(timer); }
+}
+
+const nextAnimationFrame = (): Promise<void> =>
+  typeof requestAnimationFrame === "function"
+    ? new Promise<void>((done) => requestAnimationFrame(() => done()))
+    : sleep(16);
+
+/**
+ * Фаза `settleResourceBarrier` (§W2): манифест → preload/decode всего манифеста →
+ * `document.fonts.ready` → `stableFrames` стабильных кадров → **повторный** манифест и его диф.
+ *
+ * Бюджет — суммарный и **внутри страницы** (§1.5): исчерпание даёт типизированный
+ * `resource_barrier_timeout` с указателем на фазу и предмет, а не смерть процесс-группы по
+ * `JOB_DEADLINE_MS`, из-под которой наружу не доезжает ничего, кроме `capture timed out`.
+ *
+ * Барьер никогда не бросает: любой негодный исход — это код и `met:false`, а не сбой капчура.
+ */
+export async function settleResourceBarrier(
+  root: ParentNode,
+  options: ResourceBarrierOptions,
+): Promise<ResourceBarrierOutcome> {
+  const clock = options.now ?? now;
+  const startedAt = clock();
+  const decode = options.decode ?? decodeResourceDefault;
+  const frame = options.frame ?? nextAnimationFrame;
+  const perResource = perResourceTimeoutMs(options.barrier);
+  // Барьер живёт внутри двух потолков сразу: собственного бюджета и дедлайна политики.
+  const barrierDeadline = Math.min(options.deadline, startedAt + options.barrier.budgetMs);
+  const codes: CaptureCode[] = [];
+  const reasons: string[] = [];
+  const addReason = (reason: string): void => { if (!reasons.includes(reason)) reasons.push(reason); };
+  const timedOut = (phase: ResourceBarrierPhase, resourceId: string): void => {
+    codes.push({
+      code: "resource_barrier_timeout", severity: "error",
+      detail: `resource barrier exhausted its ${options.barrier.budgetMs}ms budget in phase "${phase}"`,
+      ref: `${phase}:${resourceId}`,
+    });
+    addReason("resource_barrier_timeout");
+  };
+  const expired = (): boolean => clock() >= barrierDeadline;
+
+  const elements = elementsOf(root);
+  const manifest = collectResourceManifest(root, elements, options.barrier.maxResources);
+  if (manifest.overflow) {
+    codes.push({
+      code: "resource_manifest_overflow", severity: "warning",
+      detail: `page declares ${manifest.total} resources, barrier proves the first ${options.barrier.maxResources}`,
+      ref: String(manifest.total),
+    });
+  }
+
+  let decoded = 0;
+  if (expired() && manifest.entries.length > 0) timedOut("manifest", String(manifest.entries.length));
+  for (const entry of manifest.entries) {
+    if (expired()) { timedOut("decode", entry.id); break; }
+    const remaining = Math.max(0, barrierDeadline - clock());
+    const outcome = await decode(entry.url, Math.min(perResource, remaining));
+    if (outcome === "decoded") { decoded += 1; continue; }
+    if (outcome === "timeout") {
+      // Пер-ресурсный потолок — производная бюджета, поэтому его исчерпание и есть исчерпание
+      // бюджета на этом ресурсе: он назван поимённо, а фаза продолжается для остальных.
+      timedOut("decode", entry.id);
+      continue;
+    }
+    codes.push({ code: "resource_decode_failed", severity: "error", detail: `resource failed to decode (${entry.kind})`, ref: entry.url });
+    addReason("resource_decode_failed");
+  }
+
+  // Гонка с дедлайном барьера ведётся по **его** часам (`clock`), а не по модульным: инъекция
+  // времени в тесте иначе рассинхронизировала бы бюджет фазы и её же ожидания.
+  const untilDeadline = async (promise: Promise<unknown>): Promise<boolean> => {
+    const remaining = barrierDeadline - clock();
+    if (remaining <= 0) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((done) => { timer = setTimeout(() => done("timeout"), remaining); });
+    try { return await Promise.race([promise.then(() => "ok" as const), timeout]) === "ok"; }
+    catch { return true; }
+    finally { if (timer !== undefined) clearTimeout(timer); }
+  };
+
+  let fontsReady = false;
+  const fontsPromise = options.fontsReady ? options.fontsReady() : (typeof document === "undefined" ? undefined : document.fonts?.ready);
+  if (fontsPromise === undefined) fontsReady = true;
+  else if (await untilDeadline(Promise.resolve(fontsPromise))) fontsReady = true;
+  else timedOut("fonts", "document.fonts.ready");
+
+  let stableFrames = 0;
+  for (let index = 0; index < options.barrier.stableFrames; index += 1) {
+    if (!await untilDeadline(frame())) { timedOut("frames", String(index)); break; }
+    stableFrames += 1;
+  }
+
+  // Повторный диф — единственное доказательство того, что страница **перестала** тянуть ресурсы.
+  const after = collectResourceManifest(root, elementsOf(root), options.barrier.maxResources);
+  const known = new Set(manifest.entries.map((entry) => entry.id));
+  const lateAfterBarrier = after.entries.filter((entry) => !known.has(entry.id)).map((entry) => entry.url);
+  for (const url of lateAfterBarrier.slice(0, 10)) {
+    codes.push({ code: "resource_late_after_barrier", severity: "error", detail: "resource appeared after the barrier settled", ref: url });
+  }
+  if (lateAfterBarrier.length > 0) addReason("resource_late_after_barrier");
+  if (expired() && lateAfterBarrier.length === 0 && reasons.length === 0) timedOut("rediff", String(after.entries.length));
+
+  return {
+    evidence: {
+      expected: manifest.entries.length,
+      decoded,
+      fontsReady,
+      stableFrames,
+      lateAfterBarrier: lateAfterBarrier.slice(0, 20),
+      durationMs: Math.round(clock() - startedAt),
+    },
+    codes,
+    reasons,
+  };
+}
+
 /**
  * Свёртка кодов отчёта: доволновые строки маппятся словарём R3, коды строгой политики едут как
  * есть и **выигрывают** конфликт по коду (они несут `ref`). Строки, которых в словаре R3 нет
@@ -515,7 +768,7 @@ export function mergeCaptureCodes(reasons: readonly string[], strictCodes: reado
 export async function collectReadiness(
   root: ParentNode,
   policy: ReadinessPolicy = DEFAULT_READINESS_POLICY,
-  options: { fonts?: CaptureFontManifest } = {},
+  options: { fonts?: CaptureFontManifest; barrier?: Omit<ResourceBarrierOptions, "barrier" | "deadline"> } = {},
 ): Promise<ReadinessReport> {
   const startedAt = now();
   const deadline = startedAt + policy.timeoutMs;
@@ -527,17 +780,27 @@ export async function collectReadiness(
   // которого маппинг доволновых строк дать не может — поэтому они едут отдельным списком.
   const strictCodes: CaptureCode[] = [];
 
+  // Границы фаз замеряются здесь же: `phaseTimings` — единственный источник `timings.*` receipt'а
+  // (§W2), и вычислять их вне readiness было бы гаданием по суммарному `elapsedMs`.
+  const phaseAt = now();
+  let phaseMark = phaseAt;
+  const phase = (): number => { const at = now(); const spent = Math.round(at - phaseMark); phaseMark = at; return spent; };
+
   const fonts = await settleFonts(policy, elements, deadline, options.fonts?.declared ?? []);
+  const fontsMs = phase();
   if (fonts.timedOut) reasons.push("fonts_timeout");
   reasons.push(...fonts.reasons);
   strictCodes.push(...fonts.codes);
   const images = await settleImages(root, deadline, policy.images === "decoded-strict");
+  const imagesMs = phase();
   if (images.timedOut) reasons.push("images_timeout");
   if (images.failed > 0) reasons.push("images_failed");
   strictCodes.push(...images.codes);
   const network = await settleNetwork(policy, deadline);
+  const networkMs = phase();
   if (network.timedOut) reasons.push("network_timeout");
   const frames = await settleFrames(policy, deadline);
+  const framesMs = phase();
   if (frames.timedOut) reasons.push("frames_timeout");
   if (fonts.pending.length > 0) reasons.push("fonts_pending");
 
@@ -560,6 +823,24 @@ export async function collectReadiness(
       });
     }
   }
+
+  const stabilizeMs = phase();
+
+  // Барьер ресурсов (W2) — **последняя** фаза перед съёмкой кадра: он и догружает всё, что
+  // объявила страница (включая CSS-фоны и inline-SVG `<image>`, которых доволновая readiness не
+  // видела), и доказывает повторным дифом манифеста, что после него ничего не приехало.
+  let resourceBarrier: ReadinessResourceBarrier | undefined;
+  if (policy.resourceBarrier !== undefined) {
+    const outcome = await settleResourceBarrier(root, {
+      barrier: policy.resourceBarrier,
+      deadline,
+      ...(options.barrier ?? {}),
+    });
+    resourceBarrier = outcome.evidence;
+    strictCodes.push(...outcome.codes);
+    for (const reason of outcome.reasons) if (!reasons.includes(reason)) reasons.push(reason);
+  }
+  const barrierMs = phase();
 
   // Ресурсы собираются **после** ожидания: нужны те, что действительно попали в готовый кадр.
   const themeResources: ReadinessThemeResources = {
@@ -588,6 +869,11 @@ export async function collectReadiness(
       framesWaited: frames.framesWaited,
       animationsDisabled,
       themeResources,
+      ...(resourceBarrier === undefined ? {} : { resourceBarrier }),
+      phaseTimings: {
+        fontsMs, imagesMs, networkMs, framesMs, stabilizeMs,
+        ...(resourceBarrier === undefined ? {} : { barrierMs }),
+      },
     },
   };
 }

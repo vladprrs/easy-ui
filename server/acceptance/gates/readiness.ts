@@ -19,6 +19,7 @@
  * Инвариант D5 («capture с `met:false` не получает визуального вердикта») держит не этот гейт, а
  * раннер: он пропускает последующие визуальные/геометрические сравнения случая (см. `runner.ts`).
  */
+import { readinessRequiresBarrier } from "../../capture/resourceBarrier";
 import { putArtifact } from "../evidence";
 import { readinessPolicyHashOf } from "../ids";
 import type { CaptureOutcome } from "./capture";
@@ -82,6 +83,9 @@ export const readinessGate: Gate = {
       imageDetails: (evidence as { imageDetails?: unknown[] }).imageDetails ?? null,
       layout: (evidence as { layout?: unknown }).layout ?? null,
       fontManifestHash: (evidence as { fontManifestHash?: string | null }).fontManifestHash ?? null,
+      // W2: эхо фазы барьера. `null` — политика барьера не требовала; при v3-политике `null`
+      // означает, что барьер не исполнялся, и это отдельный исход ниже, а не «всё хорошо».
+      resourceBarrier: (evidence as { resourceBarrier?: unknown }).resourceBarrier ?? null,
       themeResources: {
         tokens: themeResources.tokens ?? [],
         icons: themeResources.icons ?? [],
@@ -93,6 +97,16 @@ export const readinessGate: Gate = {
       return {
         gate: "readiness", status: "indeterminate", artifacts, metrics,
         detail: `Surface honoured a different readiness policy (${observed.readinessPolicyHash} ≠ ${expectedPolicyHash})`,
+      };
+    }
+    // W2 (§1.5): факт исполнения барьера едет **эхом**, и при v3-политике он обязателен. Кадр,
+    // объявивший `met:true` без блока `resourceBarrier`, снят поверхностью, до которой политика
+    // не доехала (старый бандл шелла, сброшенный bootstrap) — а это неотличимо от «барьер
+    // исполнен и всё чисто». Вердикта такому кадру не выдаётся: `indeterminate`, не `pass`.
+    if (readinessRequiresBarrier(ctx.policy.readiness) && observed.readinessMet && metrics.resourceBarrier === null) {
+      return {
+        gate: "readiness", status: "indeterminate", artifacts, metrics,
+        detail: "Policy declares a resource barrier (readiness v3) but the capture published no resourceBarrier evidence",
       };
     }
     if (!observed.readinessMet) {

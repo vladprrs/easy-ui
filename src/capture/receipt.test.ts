@@ -107,7 +107,39 @@ describe("capture receipt (R5)", () => {
     expect(receipt.timings).toEqual({
       navigateMs: null, fontsMs: null, imagesMs: null, networkMs: null, framesMs: null,
       stabilizeMs: null, screenshotMs: null, totalMs: null, readyMs: null, readinessMs: null,
+      barrierMs: null,
     });
+    // W2: барьера не было — `null`, а не пустой блок «как будто исполнен».
+    expect(receipt.resources.resourceBarrier).toBeNull();
+  });
+
+  /**
+   * W2 (план 2026-08-07 §W2): эхо барьера и пофазовые тайминги приезжают из доказательства
+   * страницы. До волны `timings.fontsMs`/`imagesMs`/… были объявлены схемой, но всегда `null` —
+   * измерить их мог только сам readiness.
+   */
+  it("раскладывает блок барьера и phaseTimings доказательства в receipt", () => {
+    const receipt = buildCaptureReceipt(input({
+      timings: {},
+      readiness: {
+        met: true, policyHash: "hash-v3", codes: [],
+        evidence: {
+          resourceBarrier: { expected: 4, decoded: 4, fontsReady: true, stableFrames: 2, lateAfterBarrier: [], durationMs: 812 },
+          phaseTimings: { fontsMs: 40, imagesMs: 10, networkMs: 200, framesMs: 32, stabilizeMs: 16, barrierMs: 812 },
+        },
+      },
+    }));
+    expect(receipt.resources.resourceBarrier).toEqual({
+      expected: 4, decoded: 4, fontsReady: true, stableFrames: 2, lateAfterBarrier: [], durationMs: 812,
+    });
+    expect(receipt.timings).toMatchObject({ fontsMs: 40, imagesMs: 10, networkMs: 200, framesMs: 32, stabilizeMs: 16, barrierMs: 812 });
+    // Неполный блок — это отсутствие доказательства, а не «частично исполненный барьер».
+    const broken = buildCaptureReceipt(input({
+      timings: {},
+      readiness: { met: true, policyHash: "hash-v3", codes: [], evidence: { resourceBarrier: { expected: 4 } } },
+    }));
+    expect(broken.resources.resourceBarrier).toBeNull();
+    expect(broken.timings.barrierMs).toBeNull();
   });
 
   it("дрейф рендерера едет кодом, а мусорные коды отбрасываются санитайзером", () => {

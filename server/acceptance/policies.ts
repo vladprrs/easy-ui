@@ -10,7 +10,8 @@
  * а не сборки).
  */
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import { DEFAULT_READINESS_POLICY, STRICT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import { type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
 
 /**
  * Роль гейта в вердикте (свёртка D10):
@@ -108,7 +109,11 @@ const DEFAULT_V1: AcceptancePolicy = {
   geometry: { overflowPx: 1, sizeDeltaPx: 2, offsetPx: 2 },
   visual: { maxRawDiffPct: 2.0, maxDimensionDeltaPx: 8 },
   requireVisual: false,
-  readiness: DEFAULT_READINESS_POLICY,
+  // W2 (план 2026-08-07 §1.5): **точка включения барьера ресурсов** — здесь, а не в
+  // `resolveCaptureMode`: acceptance-режим несёт лишь дефолт, реальную политику рана выдаёт
+  // профиль. `default-v1`: v1 → v3 (kill-switch возвращает v1), `pixel-strict-v1`: v2 → v3
+  // (kill-switch возвращает v2). Профили расходятся только тем, куда откатываются.
+  readiness: barrierAwareReadinessPolicy("acceptance-default"),
 };
 
 /**
@@ -128,10 +133,10 @@ const PIXEL_STRICT_V1: AcceptancePolicy = {
   visual: { maxRawDiffPct: 0.5, maxDimensionDeltaPx: 4 },
   requireVisual: true,
   // R4 (план renderer-contract-2 §5): пиксельная приёмка судит только доказанно готовый кадр —
-  // обязательные faces манифеста темы, строгий декод картинок, устоявшийся layout. `default-v1`
-  // остаётся на v1 намеренно: перевод дефолтного профиля — отдельный откатываемый шаг после
-  // приёмки этой волны (N10), иначе строгость приехала бы всем сразу и без окна отката.
-  readiness: STRICT_READINESS_POLICY,
+  // обязательные faces манифеста темы, строгий декод картинок, устоявшийся layout. W2 добавляет
+  // к этому барьер ресурсов (v3); при включённом kill-switch профиль откатывается **в свою**
+  // доволновую политику v2, а не в общую с `default-v1`.
+  readiness: barrierAwareReadinessPolicy("acceptance-strict"),
 };
 
 export const ACCEPTANCE_POLICIES = {

@@ -606,7 +606,7 @@ export class ScreenshotService {
    * Ответ enqueue отдаёт разрешённые пины (P2.3/P5.2): для track:head-дока это единственный
    * момент, когда клиент узнаёт, какие версии компонентов реально пойдут в кадр.
    */
-  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; candidateOverrides?: ResolvedCandidateOverride[] }): { jobId: string; components: { id: string; name: string; version: number; bundleHash: string; status?: string; candidate?: { candidateId: string; rev: number; sourceHash: string } }[] } {
+  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; candidateOverrides?: ResolvedCandidateOverride[]; readinessPolicy?: ReadinessPolicy }): { jobId: string; components: { id: string; name: string; version: number; bundleHash: string; status?: string; candidate?: { candidateId: string; rev: number; sourceHash: string } }[] } {
     const {jobId,components}=this.enqueuePrototypeFrozen(id,screenId,opts);
     // Подменённый пин отдаётся наружу вместе со статусом и ссылкой на кандидата: это и есть
     // объявленный сигнал детекции (§B2.3) — совпал bundleHash с опубликованным ⇒ подмена не
@@ -647,7 +647,7 @@ export class ScreenshotService {
       : this.enqueueComponentFrozen(target.id,target.version,{...opts,props:target.props});
   }
 
-  private enqueuePrototypeFrozen(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; candidateOverrides?: ResolvedCandidateOverride[] }): FrozenEnqueue {
+  private enqueuePrototypeFrozen(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; candidateOverrides?: ResolvedCandidateOverride[]; readinessPolicy?: ReadinessPolicy }): FrozenEnqueue {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
@@ -722,6 +722,9 @@ export class ScreenshotService {
       // §B2.1: кадр с неопубликованным кодом не попадает в asset-store вовсе — «capture-only»
       // здесь буквально, а не по договорённости: у ассета нет ни GC, ни per-override авторизации.
       ...(candidateOverlay === undefined ? {} : { candidateOverlay, deliver: "bytes" as const }),
+      // W2 (§1.5, триаж O-M4): опт-ин `readiness:"barrier"` прототипного запроса. Поле условное —
+      // джоба без опт-ина обязана остаться байт-в-байт прежней (bootstrap без ключа `readiness`).
+      ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
     return {jobId,expected,components:capturePins};
   }

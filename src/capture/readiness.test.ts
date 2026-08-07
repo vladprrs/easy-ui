@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { collectCaptureEnv, observedCaptureEnvFingerprint, type CaptureEnvInput } from "./env";
 import { codesFromReadinessReasons, READINESS_REASON_CODES } from "./failureCodes";
 import {
-  collectReadiness, collectThemeAssets, collectThemeTokens, fontFaceShorthand, fontShorthandWeight,
-  requiredFontFaces, usedFontFamilies,
+  collectReadiness, collectResourceManifest, collectThemeAssets, collectThemeTokens, fontFaceShorthand,
+  fontShorthandWeight, requiredFontFaces, settleResourceBarrier, usedFontFamilies,
+  type ResourceDecodeOutcome,
 } from "./readiness";
 import type { CaptureFontFaceDeclaration } from "./protocol";
 import {
-  canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy, readinessPolicyHash,
-  STRICT_READINESS_POLICY, type ReadinessPolicy,
+  BARRIER_READINESS_POLICY, canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy,
+  perResourceTimeoutMs, readinessPolicyHash, STRICT_READINESS_POLICY, type ReadinessPolicy,
 } from "./readinessPolicy";
 
 // W4 (план 2026-08-03 §3 D5, §5 W4): политика readiness, отпечаток окружения и сбор
@@ -374,5 +375,157 @@ describe("readiness под строгой политикой", () => {
     expect(report.evidence.layout).toEqual({ stable: true, attempts: 1, elementKey: null });
     expect(report.codes.some((code) => code.code === "layout_unstable")).toBe(false);
     root.remove();
+  });
+});
+
+/**
+ * W2 (план 2026-08-07 §W2, P0.2) — детерминированный барьер ресурсов. Предмет тестов — три вещи,
+ * которых доволновая readiness не умела: **видеть** ресурсы мимо `<img>` (CSS-фон, inline-SVG
+ * `<image>`), **доказывать** отсутствие поздних ресурсов повторным дифом манифеста и **отказывать
+ * изнутри страницы** по суммарному бюджету, до дедлайна джобы.
+ */
+describe("resource barrier (W2)", () => {
+  const surface = (html: string): HTMLElement => {
+    const root = document.createElement("div");
+    root.id = "eui-capture-surface";
+    root.innerHTML = html;
+    document.body.append(root);
+    return root;
+  };
+  const barrier = BARRIER_READINESS_POLICY.resourceBarrier!;
+  /** Декодер-инъекция: тесты не зависят от того, умеет ли jsdom грузить растр. */
+  const decodeAll = async (): Promise<ResourceDecodeOutcome> => "decoded";
+  const barrierOptions = { decode: decodeAll, fontsReady: () => Promise.resolve(), frame: () => Promise.resolve() };
+
+  it("видит CSS background и inline-SVG <image>, которых доволновая readiness не знала", async () => {
+    const root = surface(`
+      <div style="background-image: url(/api/assets/asset_bg)"></div>
+      <div style="-webkit-mask-image: url(/api/assets/asset_mask)"></div>
+      <svg><image href="/api/assets/asset_svg" /></svg>
+      <img src="/api/assets/asset_img" alt="img" />
+    `);
+    const manifest = collectResourceManifest(root, [...root.querySelectorAll("*")], barrier.maxResources);
+    const urls = manifest.entries.map((entry) => entry.url);
+    expect(urls).toContain("/api/assets/asset_bg");
+    expect(urls).toContain("/api/assets/asset_svg");
+    expect(urls.some((url) => url.includes("asset_img"))).toBe(true);
+    expect(manifest.overflow).toBe(false);
+
+    const outcome = await settleResourceBarrier(root, { barrier, deadline: performance.now() + 5_000, ...barrierOptions });
+    expect(outcome.evidence.expected).toBe(manifest.entries.length);
+    expect(outcome.evidence.decoded).toBe(manifest.entries.length);
+    expect(outcome.evidence.fontsReady).toBe(true);
+    expect(outcome.evidence.stableFrames).toBe(barrier.stableFrames);
+    expect(outcome.codes).toEqual([]);
+    root.remove();
+  });
+
+  it("поздний ассет ловится дифом манифеста: resource_late_after_barrier и met:false", async () => {
+    const root = surface('<div style="background-image: url(/api/assets/asset_bg)"></div>');
+    // Ассет приезжает в DOM **во время** барьера — ровно тот класс дефекта, ради которого волна.
+    const late = async (): Promise<ResourceDecodeOutcome> => {
+      const node = document.createElement("div");
+      node.setAttribute("style", "background-image: url(/api/assets/asset_late)");
+      root.append(node);
+      return "decoded";
+    };
+    const outcome = await settleResourceBarrier(root, { barrier, deadline: performance.now() + 5_000, ...barrierOptions, decode: late });
+    expect(outcome.evidence.lateAfterBarrier).toEqual(["/api/assets/asset_late"]);
+    const code = outcome.codes.find((item) => item.code === "resource_late_after_barrier");
+    expect(code).toMatchObject({ severity: "error", ref: "/api/assets/asset_late" });
+    expect(outcome.reasons).toContain("resource_late_after_barrier");
+
+    // Тот же исход через `collectReadiness`: политика v3 отдаёт `met:false` и несёт эхо барьера.
+    const root2 = surface('<div style="background-image: url(/api/assets/asset_bg2)"></div>');
+    const report = await collectReadiness(root2, { ...BARRIER_READINESS_POLICY, timeoutMs: 3_000, network: { quietMs: 0, scope: "component-owned" } }, {
+      barrier: {
+        ...barrierOptions,
+        decode: async () => {
+          const node = document.createElement("div");
+          node.setAttribute("style", "background-image: url(/api/assets/asset_late2)");
+          root2.append(node);
+          return "decoded";
+        },
+      },
+    });
+    expect(report.met).toBe(false);
+    expect(report.reason?.split(",")).toContain("resource_late_after_barrier");
+    expect(report.evidence.resourceBarrier?.lateAfterBarrier).toEqual(["/api/assets/asset_late2"]);
+    expect(report.evidence.phaseTimings?.barrierMs).toBeGreaterThanOrEqual(0);
+    root.remove();
+    root2.remove();
+  });
+
+  it("отказывает по суммарному бюджету изнутри страницы, задолго до дедлайна джобы", async () => {
+    const root = surface(`
+      <div style="background-image: url(/api/assets/asset_a)"></div>
+      <div style="background-image: url(/api/assets/asset_b)"></div>
+    `);
+    // Часы двигает сам тест: бюджет обязан кончиться по объявленному числу, а не по стенным часам.
+    let clock = 0;
+    const outcome = await settleResourceBarrier(root, {
+      barrier: { ...barrier, budgetMs: 800 },
+      // Дедлайн политики заведомо дальше бюджета: отказ обязан прийти по **бюджету барьера**.
+      deadline: 60_000,
+      now: () => clock,
+      fontsReady: () => Promise.resolve(),
+      frame: () => Promise.resolve(),
+      decode: async () => { clock += 900; return "decoded"; },
+    });
+    const timeout = outcome.codes.find((code) => code.code === "resource_barrier_timeout");
+    expect(timeout).toMatchObject({ severity: "error" });
+    expect(timeout?.ref).toMatch(/^decode:\/api\/assets\/asset_/);
+    expect(outcome.reasons).toContain("resource_barrier_timeout");
+    // Фаза уложилась в свой бюджет с запасом относительно JOB_DEADLINE_MS (60 000 мс).
+    expect(outcome.evidence.durationMs).toBeLessThan(2_000);
+    root.remove();
+  });
+
+  it("декод-отказ и переполнение манифеста различаются severity", async () => {
+    const root = surface('<div style="background-image: url(/api/assets/asset_broken)"></div>');
+    const outcome = await settleResourceBarrier(root, {
+      barrier, deadline: performance.now() + 5_000, ...barrierOptions, decode: async () => "failed",
+    });
+    expect(outcome.codes).toEqual([
+      expect.objectContaining({ code: "resource_decode_failed", severity: "error", ref: "/api/assets/asset_broken" }),
+    ]);
+    expect(outcome.evidence.decoded).toBe(0);
+
+    const wide = surface([...Array(5).keys()].map((index) => `<div style="background-image: url(/api/assets/asset_${index})"></div>`).join(""));
+    const capped = await settleResourceBarrier(wide, {
+      barrier: { ...barrier, maxResources: 2 }, deadline: performance.now() + 5_000, ...barrierOptions,
+    });
+    // Переполнение — предел **нашего** доказательства, а не дефект страницы: warning, кадр не валится.
+    expect(capped.codes.find((code) => code.code === "resource_manifest_overflow")).toMatchObject({ severity: "warning", ref: "5" });
+    expect(capped.reasons).toEqual([]);
+    expect(capped.evidence.expected).toBe(2);
+    root.remove();
+    wide.remove();
+  });
+
+  it("политика v3 валидна только с барьерной веткой и двигает хэш", async () => {
+    // Ветка v3 в `isReadinessPolicy` обязательна: без неё политика волны молча деградирует в v1
+    // у поверхности (триаж C-M6), и «барьер не исполнялся» видно только по расхождению хешей.
+    expect(isReadinessPolicy(BARRIER_READINESS_POLICY)).toBe(true);
+    expect(isReadinessPolicy({ ...BARRIER_READINESS_POLICY, resourceBarrier: undefined })).toBe(false);
+    expect(isReadinessPolicy({ ...BARRIER_READINESS_POLICY, version: 2 })).toBe(false);
+    // Барьер в политике v1/v2 — испорченный bootstrap, а не «политика с барьером».
+    expect(isReadinessPolicy({ ...DEFAULT_READINESS_POLICY, resourceBarrier: BARRIER_READINESS_POLICY.resourceBarrier })).toBe(false);
+    expect(isReadinessPolicy({ ...STRICT_READINESS_POLICY, resourceBarrier: BARRIER_READINESS_POLICY.resourceBarrier })).toBe(false);
+    // Бюджет сверх потолка §1.5 — не политика.
+    expect(isReadinessPolicy({ ...BARRIER_READINESS_POLICY, resourceBarrier: { ...barrier, budgetMs: 8_001 } })).toBe(false);
+
+    // Барьерные поля входят в канонизацию ⇒ двигают хэш (иначе reuse не инвалидируется).
+    const base = await readinessPolicyHash(BARRIER_READINESS_POLICY);
+    expect(canonicalReadinessPolicy(BARRIER_READINESS_POLICY)).toContain("resourceBarrier");
+    for (const changed of [
+      { ...BARRIER_READINESS_POLICY, resourceBarrier: { ...barrier, budgetMs: 4_000 } },
+      { ...BARRIER_READINESS_POLICY, resourceBarrier: { ...barrier, maxResources: 128 } },
+      { ...BARRIER_READINESS_POLICY, resourceBarrier: { ...barrier, stableFrames: 3 } },
+    ]) expect(await readinessPolicyHash(changed as ReadinessPolicy)).not.toBe(base);
+    expect(base).not.toBe(await readinessPolicyHash(STRICT_READINESS_POLICY));
+    // Пер-ресурсный потолок — производная бюджета, а не отдельная ручка политики.
+    expect(perResourceTimeoutMs(barrier)).toBe(1_000);
+    expect(perResourceTimeoutMs({ ...barrier, budgetMs: 800 })).toBe(500);
   });
 });

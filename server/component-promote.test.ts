@@ -787,7 +787,10 @@ describe("promotion policy (план 2026-08-04 W3)", () => {
     expect(view.acceptanceRunId).toBe(injected.run_id);
 
     const caps = await (await handler(req("/capabilities"))).json() as {
-      acceptance: { policyProfiles: string[]; defaultPolicyProfile: string; promotionPolicyProfiles: string[] };
+      acceptance: {
+        policyProfiles: string[]; defaultPolicyProfile: string; promotionPolicyProfiles: string[];
+        geometryContractVersion: number; comparisonSurfaces: string[];
+      };
     };
     expect(caps.acceptance).toEqual({
       policyProfiles: ["default-v1", "pixel-strict-v1"],

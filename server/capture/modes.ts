@@ -8,7 +8,8 @@
  * и guard'ом (R6), а лишний публичный параметр конфликтует с «замком драйвера». Поэтому функция
  * внутренняя: она нужна серверу, чтобы дефолты режимов жили в одном месте и не разъезжались.
  */
-import { DEFAULT_READINESS_POLICY, STRICT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import { DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import { barrierAwareReadinessPolicy } from "./resourceBarrier";
 
 /**
  * `interactive` — галерея/библиотека/драфт-превью: кадр уезжает в asset-store, политика
@@ -16,7 +17,8 @@ import { DEFAULT_READINESS_POLICY, STRICT_READINESS_POLICY, type ReadinessPolicy
  * `acceptance` — прогон приёмки: байты мимо asset-store (A4), фоновая полоса очереди, политика
  * приходит **из профиля** рана, поэтому здесь только дефолт на случай её отсутствия;
  * `reference` — съёмка визуального эталона: та же доставка, но политика заведомо строгая —
- * эталон, снятый до готовности шрифтов, отравляет все последующие сравнения.
+ * эталон, снятый до готовности шрифтов, отравляет все последующие сравнения. С волны W2 это
+ * политика v3 (строгая + барьер ресурсов); kill-switch возвращает её в доволновую v2.
  */
 export type CaptureMode = "interactive" | "acceptance" | "reference";
 
@@ -31,7 +33,7 @@ export interface ResolvedCaptureMode {
 const MODES: Readonly<Record<CaptureMode, ResolvedCaptureMode>> = Object.freeze({
   interactive: { mode: "interactive", readiness: DEFAULT_READINESS_POLICY, deliver: "asset", background: false },
   acceptance: { mode: "acceptance", readiness: DEFAULT_READINESS_POLICY, deliver: "bytes", background: true },
-  reference: { mode: "reference", readiness: STRICT_READINESS_POLICY, deliver: "bytes", background: true },
+  reference: { mode: "reference", readiness: barrierAwareReadinessPolicy("reference"), deliver: "bytes", background: true },
 });
 
 export const isCaptureMode = (value: unknown): value is CaptureMode =>
