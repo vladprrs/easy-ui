@@ -1,7 +1,7 @@
-# Волна по фидбэку миграции Yandex Pay v2 (v1)
+# Волна по фидбэку миграции Yandex Pay v2 (v2)
 
 **Дата:** 2026-08-07 · **Источник:** `docs/EASYUI_MIGRATION_RETROSPECTIVE_20260807.md` (итоги миграции yandex-pay-v2: 55 активных компонентов, чистый аудит; 10 улучшений P0.1–P2.2).
-**Статус:** v1 — до Stage 2 (адверсариальное ревью).
+**Статус:** v2 — после Stage 2, раунд 1 (3 линзы: корректность контрактов, скоуп/AC, миграции/опс; 13 blocker + 27 major; триаж — §5). Требуется дельта-ревью v2 перед исполнением.
 **Скоуп:** все 10 пунктов, порядок — §13 ретроспективы (подтверждено пользователем 2026-08-07).
 
 Ретроспектива называет четыре повторяющихся класса потерь: geometry contract не различает четыре поверхности; readiness не гарантирует попадание ресурсов в первый кадр; unpublished dependency tree нельзя принять до первой публикации; publication tail — длинная ручная транзакция.
@@ -12,325 +12,304 @@
 
 | # | Пункт | Волна | Слой инвалидации | Миграция |
 |---|---|---|---|---|
-| P0.1 | Geometry Contract v3 — четыре поверхности | **W1** | comparison+verdict у объявивших; frame только у кейсов с `expectedSurfaces.root`/`clipExpectation` | v32 |
-| P0.2 | Deterministic resource barrier | **W2** | frame — только профили `readiness.version:3` (acceptance/reference) | — |
-| P0.3 | Candidate dependency overlay | **W3** | frame (только кейсы/превью с overlay; overlay-free — байт-в-байт) | v33 |
-| P0.4 | Migration commit transaction | **W4** | нет (оркестрация поверх существующих мутаций) | v34 |
-| P1.1 | Impact-driven gallery regression | **W5** | нет; `screenFrameFingerprint` — ключ reuse, не вход приёмки | v35 |
-| P1.2 | Stable agent receipts (envelope) | **W6** | нет (только вывод CLI, аддитивно) | — |
-| P1.3 | Typed cause + suggested policy | **W7** | нет (report-only производная сохранённых метрик) | — |
-| P1.4 | Figma Source Package | **W8** | comparison (через `referenceAssetId` зависимых кейсов) | v36 |
-| P2.1 | Runtime schema defaults | **W9** | candidate fingerprint — только у компонентов с флагом | — |
+| P0.1 | Geometry Contract v3 — четыре поверхности | **W1a** (схема + verdict/comparison) → **W1b** (rootBounds + clipExpectation) | comparison+verdict; кадры **не** инвалидируются (замер аддитивен, §1.1); доволновые кадры без факта → recompute-refuse → пересъёмка только затронутого кейса | v32 (W1a) |
+| P0.2 | Deterministic resource barrier | **W2** | frame — профили приёмки, перешедшие на readiness v3 (правка `ACCEPTANCE_POLICIES`, §1.5) | — |
+| P0.3 | Candidate dependency overlay | **W3** | frame (только кейсы с overlay; overlay-free — байт-в-байт) | v33 |
+| P1.1 | Impact-driven gallery regression | **W5** | нет; `screenFrameFingerprint` — ключ reuse, не вход приёмки | v34 |
+| P0.4 | Migration commit transaction | **W4** (после W5 — зависимость односторонняя) | нет (оркестрация поверх существующих мутаций) | v35 |
+| P1.2 | Stable agent receipts (envelope) | **W6a** (каркас, первым в очереди driver.mjs) + **W6b** (per-verb summary, `--summary-json`) | нет | — |
+| P1.3 | Typed cause + suggested policy | **W7** | нет (report-only) | — |
+| P1.4 | Figma Source Package | **W8** | comparison (через `referenceAssetId` зависимых кейсов); `sourcePackageId` — metadata-only, ни в один отпечаток не входит | v36 |
+| P2.1 | Runtime schema defaults | **W9** | candidate id двигается **через `sourceHash`** (флаг объявлен в исходнике — §1.6) | — |
 | P2.2 | Service capture hygiene | **W10** | нет (receipt аддитивен) | — |
-| — | Capabilities, changelog, финальная верификация | **W11** | — | — |
+| — | Capabilities, compose, deploy-чеклист, changelog | **W11** | — | — |
 
-Порядок исполнения: **W1 → W2 ∥ W10 → W3 → W4 → W5 → W6 → W7 → W8 → W9 → W11** (детали параллелизации — §3).
+Порядок исполнения: **W6a → W1a → W1b → W2 ∥ W10 → W3 → W5 → W4 → W6b → W7 → W8 → W9 → W11**. Миграции: v32 (W1a) → v33 (W3) → v34 (W5) → v35 (W4) → v36 (W8).
 
 ## 1. Ключевые решения
 
-### 1.1. (a) Поверхности — opt-in, `GEOMETRY_CONTRACT_VERSION` остаётся `2`
+### 1.1. (a) `rootBounds` и `referenceExportDims` измеряются **безусловно**; `GEOMETRY_CONTRACT_VERSION` остаётся `2`; отпечатки не трогаются вовсе
 
-Bump до 3 = полная пересъёмка прод-корпуса (feedback-3 W2 платил её потому, что менялась семантика существующего `layoutBounds`; здесь она не меняется: `layoutUnion` = сегодняшний `layoutBounds`, `paint` = сегодняшний ink-bbox). Прецедент opt-in без bump — `overlayAwareRoot` (W5 feedback-3).
+Раунд 1 опроверг конструкцию v1 «`surface.rootBounds` как opt-in кадровый ключ» дважды: `CaseSurface` строится один раз на манифест и кладётся на весь ран (`surfaceOfManifest`, `caseSets.ts:76-85`; `orchestrator.ts:315/403/494`) — per-case opt-in через surface невозможен; и сам opt-in нарушал AC §3.4 («изменение только expected surface ⇒ не recapture») ровно на головном кейсе Payment Schedule. Механизм v2:
 
-Разделение по цене замера:
-- **`paint`** — уже в фактах → verdict-слой, recompute без пересъёмки;
-- **`referenceExport`** — не браузерная величина: габариты эталонного ассета (уже в `sourceDims`/`refDims` visual-гейта) → comparison-слой (re-diff);
-- **`layoutUnion`** — сегодняшний `layoutBounds` → verdict-слой;
-- **`root`** — единственный новый браузерный замер: узкий кадровый ключ `surface.rootBounds?: true` условным спредом в `CaseSurface`, **только** когда кейс объявил `expectedSurfaces.root` или `clipExpectation`. Такой кейс пересъёмывается один раз; остальные — байт-в-байт прежние `frameFingerprint`.
+- **`rootBounds` измеряется всегда** (W1b): один дополнительный замер в `detailOf()` — дешёвый, не меняет PNG и не меняет семантику `layoutBounds` ⇒ `GEOMETRY_CONTRACT_VERSION` остаётся 2, **ни один вход `frameFingerprint` не добавляется**, golden не двигается. Определение (маркер — `span[display:contents]` без собственного бокса, `runtime.ts:33-44`): `rootBounds` = border-box **единственного элементного потомка маркера верхнего уровня**; если таких потомков больше одного или ноль — `rootBounds = null` ⇒ вердикт поверхности `not-measured`. Определение фиксируется в контракте.
+- **`referenceExportDims` пишутся гейтом геометрии безусловно** (W1b): гейт читает `assets.width/height` через `GateContext.db` (габариты уже в БД, `migrations.ts:93-101`) и кладёт в `metrics` в **CSS px** (= device px ассета ÷ `deviceScaleFactor`; нормализация — одна именованная функция; расхождение неразрешимо ⇒ `dimensions_irreconcilable`). Все `expectedSurfaces` объявляются в CSS px — фиксируется в схеме и docs.
+- Доволновые кадры не имеют этих фактов: кейс, объявивший `expectedSurfaces.root|referenceExport`, на recompute получает честный `null` → fall-through re-diff → recapture **только этого кейса** — существующий механизм `recapture:policy_delta` (`runner.ts:571-572`). Все кадры, снятые после W1b, несут факты, и дальнейшие правки ожиданий — чистый recompute/re-diff. AC §3.4 выполняется для всех кадров пост-W1b; для доволновых кадров первая декларация новой поверхности стоит пересъёмку одного кейса — фиксируется в changelog.
+- `paint`/`layoutUnion` пересчитываемы из уже сохраняемых метрик (`gates/geometry2.ts:190-215` → `recompute.ts:252-286`) — verdict-слой, подтверждено ревью.
 
-AC «изменение только expected surface ⇒ recompute/rediff, не recapture» выполняется буквально: меняются числа ожиданий (verdict/comparison), не набор измеряемых поверхностей (frame).
+**Легаси-ветка вердикта сохраняется байт-в-байт.** Удаление раннего return `geometryPolicy.ts:225-232` меняло бы вердикты существующего корпуса через включённый по умолчанию recompute (`EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1` в compose) при замороженном `CASE_FINGERPRINT_ALGO_VERSION = 7` — reuse-кэш и свежая съёмка давали бы разные вердикты на одном отпечатке. Поэтому: `evaluateGeometryPolicy` ветвится по признаку «манифест объявил `expectedSurfaces`/`comparisonSurface`/`clipExpectation`»; **легаси-вход исполняет прежний код с ранним return** (дифференциальный golden-тест на байт-идентичность результата), новый путь — per-surface вердикты. ALGO остаётся 7 честно: смысл легаси-входов не меняется.
 
-**Легаси-нормализация — одна именованная функция** (прецеденты `cropIsApplied`, `referenceSurfaceOf`) в новом `src/acceptance/surfaces.ts`:
+**Нормализация** — одна именованная функция в новом `src/acceptance/surfaces.ts` (прецеденты `cropIsApplied`, `referenceSurfaceOf`): `expectedGeometry` → `{layoutUnion}`, `comparisonSurface = "layoutUnion"`. Одновременное объявление обоих — `422 case_surface_conflict`.
 
-```ts
-expectedSurfacesOf({expectedSurfaces?, expectedGeometry?}): NormalizedSurfaces
-comparisonSurfaceOf(input): "root" | "layoutUnion" | "paint" | "referenceExport"
-```
+**Per-surface вердикты** (новый путь): `GeometryPolicyResult.surfaces: Partial<Record<Surface, {verdict: "clean"|"size-mismatch"|"not-measured", expected, observed, delta, tolerancePx}>>`, `divergingSurfaces[]` (порядок root→layoutUnion→paint→referenceExport), `clipSatisfied: boolean|null`. Классы не переименовываются; новые поверхности — класс `surface-mismatch`; `expectedGeometryDelta` сохраняется как проекция `surfaces.layoutUnion`. `geometryVerdictBlocks` (новая ветка) блокирует по любой расходящейся поверхности; `geometryCodes` — второй код `surface_mismatch` (`ref = <поверхность>`); допуск на поверхность — существующий `sizeDeltaPx` (per-case побеждает профиль), единый для всех поверхностей.
 
-Легаси: `expectedGeometry` → `{layoutUnion}`, `comparisonSurface = "layoutUnion"`. Одновременное объявление `expectedGeometry` **и** `expectedSurfaces` — `422 case_surface_conflict`.
+**`clipExpectation`** — только `"root-does-not-clip-layout"` (вариант `"root-clips-layout"` из v1 снят — сценария нет, триаж S-m3); семантика: `layoutUnion` может превышать `rootBounds` при отсутствии клипа по пути (проверка по clip-стеку `detailOf`); слой `["verdict"]` — кадрового эффекта больше нет (замер безусловный).
 
-**Per-surface вердикты.** `GeometryPolicyResult` расширяется (`surfaces: Partial<Record<Surface, {verdict: "clean"|"size-mismatch"|"not-measured", expected, observed, delta, tolerancePx}>>`, `divergingSurfaces[]` в порядке root→layoutUnion→paint→referenceExport, `clipSatisfied: boolean|null`); ранний return по `expectedGeometry` в `geometryPolicy.ts:~215` удаляется. Классы вердикта не переименовываются (лежат в сохранённых `geometry.json`): для новых поверхностей — новый класс `surface-mismatch`; `expectedGeometryDelta` сохраняется как проекция `surfaces.layoutUnion` (доволновые читатели не ломаются). `geometryVerdictBlocks` блокирует по любой расходящейся поверхности; `geometryCodes` — второй код `surface_mismatch` c `ref = <поверхность>`.
+**Слои:** `expectedSurfaces: ["comparison","verdict"]` (как `expectedGeometry`), `clipExpectation: ["verdict"]`, `comparisonSurface: ["comparison"]` — **только** comparison: смена сравнительной поверхности — re-diff через `comparisonFingerprint`, в `VerdictPolicySnapshot`/`verdictPolicyDelta` поле не входит (триаж C-m1; ошибка v1 снята).
 
-**Разрыв связки канвы с layout union:** `referenceCanvasOf` (`server/acceptance/gates/visual.ts:~179`, сейчас `layoutRoot = expectedGeometry ?? facts.layoutBounds`) выбирает источник по `comparisonSurface`; `layoutRootSource` расширяется значениями `"surface:<name>"`, доволновые кейсы идут прежней веткой. Поэтому `expectedSurfaces`/`comparisonSurface` — двухслойные поля, как `expectedGeometry`.
+**Канва сравнения:** `referenceCanvasOf` выбирает `layoutRoot` по `comparisonSurface` (расширение `layoutRootSource: "surface:<name>"`); для `referenceExport` — от нормализованных CSS-габаритов ассета; выравнивание — существующий `referencePlacement`, дефолт как сегодня; доволновые кейсы идут прежней веткой.
 
-### 1.2. (b) Overlay: иммутабельный inline-манифест в case set + материализованный резолв в ране; request-scoped — только превью
+### 1.2. (b) Overlay: durable-приёмка графа — только на component case set; prototype/composition — диагностические поверхности; insertion в прототип не делается
 
-Отдельная сущность `ovl_<sha>` отвергнута: case-set'ы контентно-адресованы (`cset_` = хеш `parsed.data`) → inline-overlay иммутабелен по построению; второй реестр = дублирование жизненного цикла и второе место GC-пинов.
+Раунд 1 показал: «prototype-поверхность» v1 была покрыта только по названию — существующий `candidateOverrides` это pin **swap** опубликованного компонента (никогда не публиковавшийся компонент в прототип не вставить: `snapshotDefinitions` требует `status='active'`), и это осознанный отказ feedback-3 §1.1 (`docs/server-api.md:2085`), который **остаётся в силе**. Честный скоуп W3:
 
-Три уровня:
-1. **Декларация (durable):** top-level поле манифеста (не per-case — overlay описывает граф зависимостей цели): `"candidateOverlay": {"<componentId>": "cand_…"}`, ≤ 8 узлов. Ключ — `componentId` (имя не уникально между DS). Строго `.optional()`, без `.default()`.
-2. **Резолв (durable, в ране):** при `createRun` overlay резолвится в `[{componentId, candidateId, rev, sourceHash, bundleHash}]` (сортировка по componentId) → `acceptance_runs.overlay_manifest_json` + `overlay_hash` (v33). Это читает receipt и верифицирует promote.
-3. **Request-scoped (ephemeral):** component preview, `POST /compositions/:id/preview-tree`, render-status и существующий `candidateOverrides` прототипа принимают ту же карту как параметр запроса; лизы + TTL из `server/components/candidates.ts`; ничего не сохраняется.
+1. **Durable (единственная приёмочная поверхность): component case set.** Top-level поле манифеста `candidateOverlay: {"<componentId>": "cand_…"}` (≤ 8 узлов, `.optional()` без `.default()`). AC §5.1 («unpublished parent + unpublished deps одним acceptance run») выполняется так: parent = голова кандидата рана, deps = **overlay-дети в `slotBindings`**. Для этого вводится новая форма slot-ребёнка: `{ overlay: "<componentId>" }` (вместо пары name+version) — резолв идёт **мимо** `publishedPinByNameAndVersion` (та не может вернуть неопубликованное — `caseSets.ts:1035-1057`), по `(designSystem, name) → components.id` + кандидат из `candidateOverlay`, с формой пина `status:"candidate"` по образцу прототипного пути (`service.ts:687-698`). Отказ v1 `candidate_overlay_component_not_in_tree` для case-set-пути снят (триаж C-m9): дерево = голова + slotBindings, overlay-узлы обязаны быть на него замкнуты — незадействованный узел overlay = `422 candidate_overlay_unused` (иначе тихий сдвиг `frameFingerprint` без эффекта).
+2. **Резолв в ране (durable):** при `createRun` overlay резолвится в `[{componentId, candidateId, rev, sourceHash, bundleHash}]` → `acceptance_runs.overlay_manifest_json` + `overlay_hash` (v33). **GC-пин:** `pinnedSourceHashes()` (`repo.ts:667-672`) расширяется джойном по `overlay_manifest_json` нетерминальных ранов — пин durable и переживает рестарт (in-memory лизы для этого непригодны — триаж C-M2); лизы остаются только у request-scoped превью. Протухший/выселенный кандидат при `createRun` — `409 candidate_overlay_expired` / `candidate_overlay_evicted` (триаж C-m8; контентная иммутабельность `cset_` не гарантирует живучесть референта — пересоздание кандидата повторной валидацией того же source, id детерминирован).
+3. **Ephemeral (диагностика, без приёмки):** component preview, `POST /compositions/:id/preview-tree`, render-status принимают ту же карту как параметр запроса; ответ **эхом** несёт резолв узлов `{componentId, candidateId, rev, sourceHash, bundleHash}` (in-memory, не сохраняется) — частичное покрытие AC §5.2 на диагностических поверхностях. Прототипный `candidateOverrides` не меняется (swap-only, max 2). Composition-целей приёмка не существует в принципе (`server/acceptance/` не знает composition) — фиксируется в changelog как ограничение.
 
-**Запрет в опубликованной ревизии сохраняется:** `snapshotDefinitions` (`server/validation.ts`) не трогается; осознанный отказ feedback-3 §1.1 (`docs/server-api.md:2085`) остаётся в силе и переформулируется в changelog.
+**Fingerprint:** `FrameFingerprintInput.candidateOverlay?` условным спредом; `FIELD_LAYERS.candidateOverlay = ["frame"]`; overlay-free — байт-в-байт, golden не двигается.
 
-**Fingerprint:** `FrameFingerprintInput.candidateOverlay?` условным спредом (как `slotBindings`); `FIELD_LAYERS.candidateOverlay = ["frame"]`; overlay-free кейсы — прежние хеши, golden не двигается.
+**Promote-верификация графа:** фаза A `promoteComponent` — каждый узел overlay каждого зачтённого рана опубликован сейчас с теми же `bundleHash`/`sourceHash` → `409 overlay_dependency_not_published` / `overlay_dependency_diverged`; мультиран — `422 overlay_hash_mismatch`.
 
-**Promote-верификация графа** (`server/components/promote.ts`, фаза A): каждый узел overlay каждого зачтённого рана должен быть сейчас опубликован с теми же `bundleHash`/`sourceHash` → иначе `409 overlay_dependency_not_published` / `409 overlay_dependency_diverged`. Мультиран: `overlay_hash` всех ранов должен совпадать → `422 overlay_hash_mismatch` (аргумент как у `renderer_fingerprint` v30). Активный каталог не меняется by construction.
+**Kill-switch и rollback (триаж O-B3):** `EASYUI_CANDIDATE_OVERLAY_DISABLED=1`; rollback-window v33: пока окно отката открыто — overlay-раны не создавать (старый образ промоутит overlay-ран **без** верификации графа); после первого overlay-рана откат образа только вместе с восстановлением бэкапа тома (канон `docs/server-api.md:2240-2244`).
 
-### 1.3. (c) Saga — серверное состояние + endpoints; драйвер только poller
+### 1.3. (c) Saga — серверное состояние + endpoints; идемпотентность и watchdog по существующим примитивам
 
-Драйвер-оркестрация отвергнута: (1) обрыв процесса агента не должен требовать выяснения commit point — это и есть проблема из §6; (2) idempotency-примитив уже серверный (`UNIQUE(candidate_id, idempotency_key)` + partial unique in-flight); (3) receipt о серверных мутациях должен быть подписан сервером.
+Форма v1 сохраняется (серверная сага, драйвер — poller), с исправлениями раунда 1:
+- **Идемпотентность:** `idempotency_key` — `NOT NULL` (обязателен в API; nullable UNIQUE в SQLite не ограничивает — триаж O-M8); in-flight — **partial unique index** `migration_commits_one_in_flight ON migration_commits(component_id) WHERE phase NOT IN ('complete','failed-preflight')` (прецедент `acceptance_runs_one_in_flight`), а не `maintenance_locks` (та — одна глобальная строка, per-component lock невыразим — триаж O-M7).
+- **Watchdog:** в сервере нет периодических таймеров — sweep зависших фаз исполняется на старте (`main.ts`, рядом с существующими sweep'ами) и на каждом запросе к `/api/migration-commits*` (триаж O-M7).
+- Фазы: `preflight → promote → gallery-save → verify (status/geometry затронутых экранов) → impacted-regression → audit → complete` (фаза `verify` добавлена — триаж S-M2). W4 идёт **после** W5 (зависимость односторонняя — триаж S-M3); квитанция несёт `regressionMode: "impacted"|"full"`.
+- **Честная граница KPI:** сага закрывает серверный хвост; агентские контрольные документы (`WORKFLOW_STATE.md`/`BUILD_ORDER.md` рабочего пространства координатора) сервер не пишет — драйвер сохраняет receipt-файл, обновление документов остаётся одной агентской операцией. KPI §14 формулируется «1 resumable server workflow + 1 агентская запись receipt», не «ноль ручных действий».
+- Роуты гейтятся `EASYUI_ACCEPTANCE_MATRIX` (как остальная приёмка — триаж O-m13); kill-switch `EASYUI_MIGRATION_COMMIT_DISABLED`.
 
-Таблица `migration_commits` (v34) с журналом фаз, CAS на переходах, sweep/watchdog по существующему образцу. Фазы: `preflight → promote → gallery-save → impacted-regression → audit → complete`. Провал фазы никогда не откатывает предыдущую (promote необратим by design), оставляет типизированное `needs-gallery-commit` / `needs-regression` / `needs-audit`. Dry-run — отдельный `POST …/plan` без создания строки саги.
+### 1.4. (d) Envelope: W6a (каркас) — первым в очереди driver.mjs; W6b (контракты summary) — после серверных волн
 
-### 1.4. (d) Envelope — аддитивные поля поверх существующего payload + `--summary-json`
+Порядок v1 («W6 целиком последним») перевёрнут наполовину (триаж S-M4): сигнатура `report(lines, payload, envelope)` и каркас envelope — **W6a, до W1** (механическая правка ~44 call-site'ов — триаж C-m5: не 38); тогда W3/W4/W5/W8 пишут свои новые verb'ы сразу в новой форме. Контракты `summary` per-verb и `--summary-json` — W6b, после серверных волн.
 
-`report()` — единственная точка (`driver.mjs:53`, 38 call-site'ов). Аддитивное расширение (`{schemaVersion:1, command, ok, summary, items, artifacts, warnings, nextActions}` рядом с существующими ключами) позволяет мигрировать call-site'ы по одному, не ломая `eui-cache-v1` и существующие рецепты. `--summary-json` печатает только envelope — «компактный стабильный contract» из §8. Согласованность `ok ↔ exit` — сигнатурой `report(lines, payload, envelope)` (envelope.ok обязателен) + тест-таблица по всем verb'ам. Verb'ы мимо `report()` (`design-system`, `get`) приводятся к нему. `.json` всегда JSON; текст — `.txt`.
+**Контракт `summary` определяется таблицей (триаж S-M5), минимум:**
 
-### 1.5. (e) Readiness: новая `version: 3`, барьер получают только strict-профили
+| Verb | Обязательные поля summary |
+|---|---|
+| `accept` / `accept-status` | `runId, verdict, casesTotal, casesFailed, casesReused, topCauses[], revision` |
+| `snap` | `captured, reused, cleanScreens, failedScreens, suppressedNoise` |
+| `promote` | `version, rev, catalogRevision, candidateId, runsLinked` |
+| `status` | `screensTotal, renderable, blocked[]` |
+| `geometry` | `verdict, divergingSurfaces[], gaps` |
+| `audit` | `exitCode, deprecatedInUse, unused` |
+| `migration-commit` | `commitId, phase, phasesDone, regressionMode` |
 
-«v2 с барьером» против «v2 без» — версия под другим именем (hash и так меняется); номер обязан называть семантику. `DEFAULT_READINESS_POLICY` (v1, интерактив) не трогается; `STRICT_READINESS_POLICY` (v2) сохраняется для отката; новая `BARRIER_READINESS_POLICY` (v3) = strict + `resourceBarrier`; `resolveCaptureMode` выдаёт её acceptance/reference. Следствие: `readinessPolicyHash` меняется → `FIELD_LAYERS.readiness = ["frame"]` → пересъёмка корпуса приёмки при первом ране (честная цена гарантии `readinessMet=true` ⇒ нет late-asset). Kill-switch `EASYUI_RESOURCE_BARRIER_DISABLED=1` возвращает v2 без деплоя.
+Остальное как в v1: аддитивные поля рядом с payload; `ok === (exit === EXIT.ok)` тест-таблицей; verb'ы мимо `report()` (`design-system`, `get`) приводятся; `.json` всегда JSON, текст — `.txt` (+ абзац миграции путей существующих текстовых `.json`-квитанций — триаж S-m7).
 
-**Переиспользование результата барьера (AC 4):** отдельный кэш не строится — межджобное переиспользование уже обеспечено слоем выше (совпал `frameFingerprint` ⇒ кадр из CAS ⇒ барьер не исполняется). Внутри page-context — мемо по `resourceManifestHash`. Иное прочтение = кэш с инвалидацией по реестру ассетов — отдельный проект, non-goal в changelog.
+### 1.5. (e) Readiness v3: точка правки — `ACCEPTANCE_POLICIES`, бюджет барьера суммарный, факт исполнения — эхом
 
-### 1.6. (f) Defaults: per-component capability-флаг, fingerprint — только у согласившихся
+Раунд 1 опроверг механизм v1 «`resolveCaptureMode` выдаёт v3»: acceptance-режим в `modes.ts` несёт лишь **дефолт** (v1!), реальная политика приходит из профиля рана (`server/acceptance/policies.ts:111` — `default-v1` → v1-readiness; `:134` — `pixel-strict-v1` → v2). Механизм v2:
 
-`safeParse` меняет наблюдаемый рендер 55 опубликованных компонентов — глобально включать нельзя. Прецедент в трёх строках: payload событий уже проходит `safeParse` с fall-through на raw (`easyUiRuntime.tsx:105`).
-- Флаг `ComponentDefinition.capabilities.runtimeSchemaDefaults?: true` + `features.runtimeSchemaDefaults`.
-- `const effective = parsed?.success ? parsed.data : props` — никогда не бросает; провал парса ⇒ raw + warning `runtime_props_parse_failed` в receipt.
-- `BuildFingerprintInput` — условный спред `runtimeSchemaDefaults: true` ⇒ candidate id сдвигается только у флагнутых; запись в history-блок `ids.ts` обязательна.
-- Publish-аудит: `server/components/extract-subprocess.ts:45` уже считает `safeParse({}).data`; для компонентов без флага сравнение с рендером `{}` даёт warning `runtime_default_drift`.
-- Kill-switch `EASYUI_RUNTIME_DEFAULTS_DISABLED=1`.
+- **Точка правки — `ACCEPTANCE_POLICIES`** (`policies.ts:105-140`): оба профиля получают `BARRIER_READINESS_POLICY` (v3 = strict + barrier). Таблица «профиль → readiness до/после»: `default-v1`: v1 → v3; `pixel-strict-v1`: v2 → v3. Reference-режим (`modes.ts`) — v2 → v3.
+- **Последствие для promote:** смена readiness меняет `policyProfileHash` → доволновые раны попадают в stale-ветку (`promote.ts:228-236`, warning), а `EASYUI_PROMOTE_POLICY_STRICT=1` начнёт **отказывать** по доволновым ранам. Правило деплоя: на волне W2 strict-режим promote должен быть выключен (проверить compose) до пересъёмки семей, идущих в promote; несовместимость двух kill-switch'ей фиксируется в deploy-чеклисте (триаж O-B1).
+- **Kill-switch:** `EASYUI_RESOURCE_BARRIER_DISABLED=1` возвращает **доволновую политику каждого профиля** (default→v1, strict→v2, reference→v2), не «всем v2».
+- **Бюджет:** суммарный `barrierBudgetMs ≤ 8000` внутри страницы, отказ `resource_barrier_timeout` (`ref="<phase>:<resourceId>"`) поднимается **до** дедлайна джобы (`JOB_DEADLINE_MS = 60s` убивает процесс-группу — типизированный код иначе не доедет; триаж O-B2); `perResourceTimeoutMs` — производный.
+- **Схема политики:** union `version: 1|2|3` (сейчас `1|2` — `readinessPolicy.ts:41`), ветка v3 в `isReadinessPolicy` (иначе молчаливая деградация в v1 — триаж C-M6), барьерные поля входят в `canonicalReadinessPolicy` (двигают хэш). Факт исполнения барьера едет **эхом** в `readiness.evidence.resourceBarrier` и обязателен для гейта: `readinessMet=true` без evidence-блока при v3-политике — refusal (иначе «флаг не доехал» неотличим от исполнения).
+- **Словарь кодов:** `failureCodes.ts` — единственный словарь (расширить union + реестр эмитентов + `wave`); `WORKER_FAILURE_CODES` — три worker-level исхода, **не трогается** (в v1 заявлено несуществующее «зеркало» — триаж C-M5).
+- **Галереи (триаж O-M4):** потеря registry-листов воспроизводилась на интерактивном пути (галереи снимаются `interactive` → v1). Прототипный screenshot-запрос получает опциональный `readiness: "barrier"` (v3 для этой джобы); драйверный `snap` шлёт его для service-галерей по умолчанию (`--no-barrier` для отката). Дефолт интерактивного режима (редактор/превью человека) остаётся v1.
+- **AC §4.4 («identical resource fingerprint переиспользует barrier result») — сознательно сужен** (триаж S-M1): межкадровый прогретый кэш ресурсов (worker-scoped, с инвалидацией по реестру) — non-goal этой волны, фиксируется в changelog с ценой «барьер исполняется на каждом кадре, стоимость = `durationMs`×N»; смягчение — W5 (реже снимаем) и повторное использование browser-context в пуле. In-page мемо по `resourceManifestHash` — единственное переиспользование внутри кадра.
+- **Стоимость и взаимодействие с feedback-3 (триаж O-M10):** после 2026-08-06 корпус приёмки и так ждёт полной пересъёмки (`geometryContractVersion`, deploy-SKILL:68). W2 выкатывается **до** амортизации той пересъёмки — платим один раз. Числовой гейт: 64 кейса × (≈6 с + барьер) < `runDeadlineMs` 30 мин ⇒ барьер ≤ ~20 с/кейс теоретический потолок, целевой ≤ 2 с/кейс; замер — локально на восстановленной копии прод-тома (staging нет; логические бэкапы case-set'ы не несут — триаж O-m15), go/no-go до деплоя.
 
-### 1.7. (g) Impact-selection — серверный endpoint
+### 1.6. (f) Defaults: candidate id двигается через `sourceHash`; kill-switch — аварийный и render-affecting
 
-Reverse-index уже серверный (`server/usageGraph.ts` `currentHeadUsages[].screens[]`); «доказанный reuse» обязан быть подписанной сервером квитанцией. Новый примитив `screenFrameFingerprint` (входы существуют: подмножество пинов экрана = ревизионные пины ∩ дерево экрана, viewport/dsf/theme, `readinessPolicyHash`, `rendererFingerprint`, хеш спеки экрана); per-screen пины в БД **не заводятся**. `POST /prototypes/:id/snap-plan` возвращает план `action: "capture"|"reuse"` с причиной; `snap --impacted` исполняет план, `snap --full` его не запрашивает. Конкурентность рендерера (hard 1 / пул с дедлайновой оговоркой `worker-runner.ts:117-122`) не трогается.
+Исправления раунда 1 (триаж C-M9):
+- Прецедент событий читается наоборот: `easyUiRuntime.tsx:104-110` на провале `safeParse` **не** делает fall-through — логирует и не доставляет событие. Для props контракт другой и фиксируется явно: провал парса ⇒ **raw props + warning** `runtime_props_parse_failed` в receipt (рендер важнее строгости).
+- **`BuildFingerprintInput` не расширяется:** флаг `capabilities.runtimeSchemaDefaults` объявляется в исходнике компонента ⇒ уже учтён `sourceHash` ⇒ candidate id сдвигается сам. AC §11.2 («default semantics входят в candidate fingerprint») выполняется через `sourceHash`; history-блок `ids.ts` получает поясняющую запись без изменения кода.
+- **Kill-switch `EASYUI_RUNTIME_DEFAULTS_DISABLED` — render-affecting** (меняет рендер, не входя в отпечатки — триаж O-m16): помечается аварийным; штатный откат флагнутого компонента — только републикация без флага; при включённом kill-switch приёмка флагнутых семей считается недействительной (в `accept-status` — предупреждение).
+- Capability доступен серверу из `CandidateEntry.extracted.meta.capabilities` (`candidates.ts:74-94`); протяжка в нужные точки — явная под-задача W9.
+- Аудит-warning `runtime_default_drift`: вычисление `safeParse({}).data` сегодня исполняется только для `layoutNeutral`-ветки (`extract-subprocess.ts:43-56`) — для сплошного аудита это **новая** работа в extract-subprocess (не переиспользование), плюс разовый скрипт «сколько компонентов дрейфуют» до волны.
+- **Процедура перевода одного компонента (триаж S-M7):** (1) прогнать drift-скрипт по компоненту; (2) добавить флаг в source + удалить дублирующие `??`; (3) publish → новый candidate id (через sourceHash); (4) acceptance run семьи (кадры инвалидированы честно); (5) promote. Регресс «рендер не изменился» доказывается зелёной приёмкой, не PNG-сравнением вручную.
+
+### 1.7. (g) Impact-selection: серверный endpoint; отпечаток экрана — кортеж handshake
+
+Исправление раунда 1 (триаж C-M1): входы v1 не покрывали то, что сервер сам считает кадровым. `screenFrameFingerprint` = sha256 от **кортежа `CaptureExpected`** (`prototypeInstanceId, rev, componentManifestHash по подмножеству пинов экрана, builtinCatalogHash, designSystem, dsMetaVersion`) + `screenSpecHash` + `viewport/dsf/theme` + `readinessPolicyHash` + `rendererFingerprint` + **`themeContentHash`** — последний обязателен для head-track: незапиненная meta-версия резолвится в latest (`service.ts:673-677`), и правка токенов ДС иначе не сдвинула бы ни один вход. Критерий недоказуемости (триаж C-m11): «использование по имени в JSON экрана» не отличает «нет компонента» от «есть транзитивно» — поэтому экран, содержащий хотя бы один элемент, чьё resolved-дерево не разворачивается полностью (композиция без inner-ключей, неразобранный бандл), — всегда `capture`. Retention (триаж O-m12): `prototype_screen_frames` хранит последние **5 ревизий** на прототип (sweep на записи), `receipt_json` ≤ 64 КБ.
 
 ## 2. Волны
 
-### W1. Geometry Contract v3 (P0.1) — миграция v32
+### W1a. Geometry Contract v3 — схема, нормализация, per-surface вердикты (comparison/verdict слои) — миграция v32
 
-**Контракт** (`src/acceptance/caseSetSchema.ts`, `caseSetCaseSchema`, всё `.optional()` без `.default()` — C6/C25):
+**Контракт** (`src/acceptance/caseSetSchema.ts`, `caseSetCaseSchema`, всё `.optional()` без `.default()`):
 
 ```ts
 expectedSurfaces: z.strictObject({
   root: surfaceDims.optional(), layoutUnion: surfaceDims.optional(),
-  paint: surfaceDims.optional(), referenceExport: surfaceDims.optional(),
+  paint: surfaceDims.optional(), referenceExport: surfaceDims.optional(),   // все — CSS px
 }).refine(v => Object.keys(v).length > 0).optional(),
 comparisonSurface: z.enum(["root","layoutUnion","paint","referenceExport"]).optional(),
-clipExpectation: z.enum(["root-does-not-clip-layout","root-clips-layout"]).optional(),
+clipExpectation: z.literal("root-does-not-clip-layout").optional(),
 ```
 
-Отказы: `422 case_surface_conflict` (вместе с `expectedGeometry`); `422 case_comparison_surface_undeclared`; `422 case_clip_expectation_requires_root`.
+Отказы: `422 case_surface_conflict`; `422 case_comparison_surface_undeclared`; `422 case_clip_expectation_requires_root`.
 
-**Проброс (8 точек):**
-1. `src/acceptance/surfaces.ts` — нормализация (§1.1); живёт в `src/`, импортируется сервером (как `caseSetSchema.ts`).
-2. `src/capture/geometry.mjs` — `detailOf()` измеряет `rootBounds` (border-box маркера в координатах `#eui-capture-surface`) **только** при bootstrap-флаге; `GEOMETRY_CONTRACT_VERSION` остаётся 2; условный спред.
-3. `src/capture/protocol.ts` + `scripts/screenshot-worker.mjs` + `screenshot-pool-worker.mjs` + `CaptureComponent.tsx` — bootstrap-поле `measureRootBounds`, вне `expected`/`readyToExpected` (паттерн `paint.marginPx`).
-4. `src/capture/geometryPolicy.ts` — `surfaces`/`divergingSurfaces`/`clipSatisfied`, удаление раннего return ~:215, расширенный `geometryVerdictBlocks`.
-5. `server/acceptance/gates/geometry2.ts` — `GeometryFacts.rootBounds`, проброс нормализованных поверхностей, код `surface_mismatch`, запись поверхностей в `geometry.json`.
-6. `server/acceptance/gates/visual.ts` `referenceCanvasOf` — выбор `layoutRoot` по `comparisonSurface`; для `referenceExport` канва от габаритов ассета.
-7. `server/acceptance/ids.ts` — `CaseSurface.rootBounds?: true` (условный спред в `surfaceOfManifest`); `comparisonFingerprintOf`/`VerdictPolicySnapshot`; **`FIELD_LAYERS`**: `expectedSurfaces: ["comparison","verdict"]`, `comparisonSurface: ["comparison"]`, `clipExpectation: ["verdict"]`, `"surface.rootBounds": ["frame"]` (тотальность — compile-гейт).
-8. `server/acceptance/recompute.ts` — `VerdictPolicyField` + `verdictPolicyDelta` + `GATES_BY_POLICY_FIELD` (`expectedSurfaces: ["geometry","visual"]`, `clipExpectation: ["geometry"]`, `comparisonSurface: ["visual"]`); `recomputeGeometry` читает сырые метрики поверхностей, при отсутствии — честный `null` с fall-through на re-diff (механизм W4 feedback-3).
+**Точки:**
+1. `src/acceptance/surfaces.ts` — `expectedSurfacesOf`/`comparisonSurfaceOf` (§1.1).
+2. `src/capture/geometryPolicy.ts` — ветвление легаси/новый путь (§1.1; легаси-ветка байт-идентична, golden-тест), `surfaces`/`divergingSurfaces`/`clipSatisfied`, новая ветка `geometryVerdictBlocks`.
+3. `server/acceptance/gates/geometry2.ts` — проброс нормализованных поверхностей, код `surface_mismatch`, запись поверхностей в `geometry.json` и `metrics`.
+4. `src/capture/failureCodes.ts` — `surface_mismatch` в словарь + реестр эмитентов + расширение `wave`-union (триаж C-M3а).
+5. `server/acceptance/gates/visual.ts` `referenceCanvasOf` — выбор по `comparisonSurface`, `layoutRootSource: "surface:<name>"`; выравнивание через `referencePlacement`.
+6. `server/acceptance/ids.ts` — `comparisonFingerprintOf` (+`expectedSurfaces`/`comparisonSurface` условным спредом), `VerdictPolicySnapshot` (+`expectedSurfaces`/`clipExpectation`; `comparisonSurface` — **не** входит), `FIELD_LAYERS`: `expectedSurfaces: ["comparison","verdict"]`, `comparisonSurface: ["comparison"]`, `clipExpectation: ["verdict"]`.
+7. `server/acceptance/recompute.ts` — `VerdictPolicyField` + `verdictPolicyDelta` + `GATES_BY_POLICY_FIELD` (`expectedSurfaces: ["geometry","visual"]`, `clipExpectation: ["geometry"]`; `comparisonSurface` сюда не входит — comparison-слой); `recomputeGeometry` — per-surface из сохранённых метрик, отсутствие фактов ⇒ `null` (fall-through re-diff→recapture); фильтр переносимых кодов — по множеству кодов `geometryCodes`, не по одной строке `surface_overflow` (триаж C-M3б, `recompute.ts:300-302`).
+8. `server/acceptance/caseSets.ts` (`buildCasesFromManifest`), `cases.ts`, `repo.ts`; `server/migrations.ts` **v32**: `ALTER TABLE acceptance_cases ADD COLUMN expected_surfaces_json TEXT` (nullable, без backfill; NULL = нормализация из `expectedGeometry`).
 
-Плюс `server/acceptance/caseSets.ts` (`buildCasesFromManifest`), `cases.ts`, `repo.ts` (`:124/:204/:520`), `server/migrations.ts` (v32: `ALTER TABLE acceptance_cases ADD COLUMN expected_surfaces_json TEXT`, nullable, без backfill; NULL = нормализация из `expectedGeometry`), `contracts.ts`, openapi, sdk, `docs/server-api.md`.
+**Драйвер/зеркала:** `CASE_SET_CASE_KEYS` (`driver.mjs:2889`) + валидатор около `:2866` × 3 копии (поимённо: `.claude/skills/author/driver.mjs` — канон, `share/easy-ui-authoring-skill/driver.mjs`, `share/yp-figma-rebuild-skill/driver.mjs`; синхронизация `scripts/sync-share-skills.mjs`; `.claude/skills/deploy/` содержит **другой**, несинхронизируемый файл — триаж S-m4) + `driver-mjs.d.ts` + limits в capabilities.
 
-**Драйвер/зеркала:** allowlist ключей кейса `driver.mjs:2894` + валидатор около `:2863` (диапазоны, взаимоисключение, enum) × 3 копии + `sync-share-skills.mjs` + `driver-mjs.d.ts` + `limits` в capabilities.
+**Тесты:** golden байт-идентичности легаси-ветки `evaluateGeometryPolicy`; Payment Schedule (root 343×88 / export 367×88 / unions 480×88, 558×88) — четыре вердикта; нормализация: доволновые манифесты — прежние `cset_`/`comparisonFingerprint`/`frameFingerprint` байт-в-байт (frame вообще не трогается); recompute per-surface; `422`-отказы; драйвер принимает/отклоняет.
 
-**Тесты:** unit `geometryPolicy.test.ts` — кейс Payment Schedule (root 343×88, export 367×88, unions 480×88/558×88): четыре вердикта, ни один не глотает другой; нормализация: доволновые манифесты — байт-в-байт прежние `cset_`/`comparisonFingerprint`; дифференциальный: `expectedSurfaces.paint` двигает comparison, не frame; `expectedSurfaces.root` двигает frame; recompute без пересъёмки; e2e — два overflow-кейса Payment Schedule без waiver; driver-cli — локальный валидатор принимает/отклоняет.
+**Done (AC §3, часть):** вердикт называет поверхность; легаси работает; смена ожидания ⇒ recompute/re-diff (для кадров с фактами). Полный AC §3 закрывается W1b.
 
-**Done (AC §3):** оба overflow-кейса Payment Schedule проходят без правки source и waiver; `reasons[]`/`divergingSurfaces` называют поверхность; легаси через `expectedSurfacesOf`; смена ожидания ⇒ recompute/re-diff.
+### W1b. Geometry Contract v3 — безусловные замеры `rootBounds` + `referenceExportDims`, `clipExpectation`
 
-**Риски:** R1 — смена канвы у объявивших `comparisonSurface` (доволновые идут прежней веткой, регресс-тест); R2 — недоступный ассет для `referenceExport` ⇒ `not-measured`/`indeterminate reference_dims_unresolved`, не тихий pass.
+**Точки:**
+1. `src/capture/geometry.mjs` — `detailOf()` всегда возвращает `rootBounds` (определение §1.1: единственный элементный потомок маркера; иначе `null`); `GEOMETRY_CONTRACT_VERSION` остаётся 2 (аддитивный факт, семантика `layoutBounds` не меняется — прецедент подтверждён ревью); `geometry.d.mts`.
+2. `server/acceptance/gates/geometry2.ts` — `GeometryFacts.rootBounds`; чтение `assets.width/height` через `GateContext.db` → `metrics.referenceExportDims` (CSS px, нормализация одной функцией; `dimensions_irreconcilable` при неразрешимости).
+3. `src/capture/geometryPolicy.ts` — `clipExpectation`-проверка по clip-стеку.
+4. Прод-аудит (до деплоя, триаж O-M5): расширить `scripts/audit-geometry-contract.mjs` классом «expectedGeometry + allowPaintOverflow/expectedClip» и прогнать на восстановленной копии тома — перечень семей, чьи вердикты чувствительны к новой ветке (ожидание: ноль, т.к. легаси-ветка байт-идентична; аудит — доказательство).
+
+**Тесты:** фикстура `display:contents`-маркера с одним корневым боксом — `rootBounds` измерен; с двумя корневыми — `not-measured`; e2e два overflow-кейса Payment Schedule проходят без waiver; корпус детерминизма (12×20) после правки `geometry.mjs`.
+
+**Done (AC §3, полностью):** оба overflow-кейса без правки source и waiver; recompute/re-diff для пост-W1b кадров; доволновый кадр при первой декларации новой поверхности — пересъёмка одного кейса (зафиксировано в changelog).
 
 ### W2. Deterministic resource barrier (P0.2)
 
-**Политика** (`src/capture/readinessPolicy.ts`): `version: 1|2|3`; `resourceBarrier?: {preload, decodeBackgrounds, manifestDiff, maxResources: 256, perResourceTimeoutMs: 4000}` — только при v3; `BARRIER_READINESS_POLICY` = strict + barrier.
+Механизм фазы `settleResourceBarrier` (manifest из computed styles + inline-SVG, preload, `document.fonts.ready` + decode + 2 стабильных кадра, диф manifest → `lateAfterBarrier[]`) — как в v1. Изменения по триажу:
 
-**Механизм** (`src/capture/readiness.ts`): новая фаза `settleResourceBarrier` между `elementsOf` и `settleFonts`:
-1. manifest: `collectThemeAssets` + `collectThemeTokens` + `themeIconUrls` + `ownedResourceUrls` + `assetIdOf` **плюс** новый сбор из computed styles (`background-image`, `mask-image`, `border-image`, `list-style-image`) и inline-SVG `<image href>` — это и есть дыра (сегодня `settleImages` смотрит только `<img>`);
-2. preload (`Image.decode()`/fetch, дедуп по `assetIdOf`);
-3. `document.fonts.ready` + decode всех + два стабильных layout-кадра;
-4. повторный сбор → diff → `lateAfterBarrier[]`;
-5. далее существующая цепочка.
+- **Политики:** union `1|2|3`, ветка v3 в `isReadinessPolicy`, барьер в `canonicalReadinessPolicy`; `BARRIER_READINESS_POLICY`; **точка включения приёмки — `ACCEPTANCE_POLICIES`** (§1.5, таблица до/после); reference — `modes.ts`; галереи — opt-in `readiness:"barrier"` в screenshot-запросе + драйверный дефолт для service-галерей (`--no-barrier`).
+- **Бюджет:** суммарный ≤ 8 с, отказ изнутри страницы до `JOB_DEADLINE_MS` (§1.5).
+- **Коды:** `resource_barrier_timeout` / `resource_decode_failed` / `resource_late_after_barrier` (error) / `resource_manifest_overflow` — только в `failureCodes.ts` (словарь+реестр+wave); `WORKER_FAILURE_CODES` не трогается.
+- **Receipt:** блок `resourceBarrier {expected, decoded, fontsReady, stableFrames, lateAfterBarrier[], durationMs}` в `readiness.evidence` (обязателен для гейта при v3 — §1.5) и в `CaptureReceiptResources`; заполнить `timings.*` + `barrierMs`.
+- **Promote-взаимодействие:** правило деплоя про `EASYUI_PROMOTE_POLICY_STRICT` (§1.5) — в deploy-чеклист.
+- **Kill-switch:** `EASYUI_RESOURCE_BARRIER_DISABLED` → доволновая политика каждого профиля.
 
-**Коды** (`failureCodes.ts` + зеркало `WORKER_FAILURE_CODES`, равенство тест-асертится): `resource_barrier_timeout` (`ref="<phase>:<resourceId>"`), `resource_decode_failed`, `resource_late_after_barrier` (**error** — делает `readinessMet=true` честной гарантией), `resource_manifest_overflow`.
+**Файлы:** `readiness.ts`, `readinessPolicy.ts`, `failureCodes.ts`, `receipt.ts`, `scripts/screenshot-worker.mjs` (+pool), `server/capture/modes.ts`, `server/acceptance/policies.ts`, `server/routes/screenshots.ts` (opt-in параметр), `contracts.ts`, openapi, driver ×3 (`--no-barrier`, вывод блока), docs, `main.ts`.
 
-**Receipt** (`src/capture/receipt.ts` + `captureReceiptSchema`): блок `resourceBarrier {expected, decoded, fontsReady, stableFrames, lateAfterBarrier[], durationMs}`; **заполнить** `timings.fontsMs/imagesMs/networkMs/framesMs/stabilizeMs` (сегодня всегда null — без них «timeout называет phase» недоказуем) + `barrierMs`.
+**Тесты:** CSS background + inline-SVG `<image>` видимы барьеру; поздний ассет ⇒ `resource_late_after_barrier`, `met:false`; отказ до дедлайна джобы (суммарный бюджет); v3-политика без evidence-блока ⇒ refusal гейта; политика v3 не проходит старый `isReadinessPolicy` ⇒ тест новой ветки; e2e Card Input forced recapture (галерейный путь с `readiness:"barrier"`).
 
-**Кто получает:** `resolveCaptureMode` — acceptance/reference → v3; interactive → v1.
+**Done (AC §4):** п.1–3 — прямые тесты; п.4 — сознательно сужен (§1.5, changelog). Гейт стоимости: замер на копии тома, целевой ≤ 2 с/кейс, go/no-go до деплоя.
 
-**Файлы:** `readiness.ts`, `readinessPolicy.ts`, `failureCodes.ts`, `receipt.ts`, `scripts/screenshot-worker.mjs`, `screenshot-pool-worker.mjs`, `server/capture/modes.ts`, `contracts.ts`, openapi, `docs/server-api.md`, `main.ts` (kill-switch). Полей манифеста нет ⇒ правок валидатора драйвера нет; capabilities: `acceptance.readinessPolicyVersion: 3`, `features.resourceBarrier`.
+### W10 (один PR/деплой-набор с W2). Service capture hygiene (P2.2)
 
-**Тесты:** фикстура с CSS background + inline-SVG image → барьер видит; поздний ассет после барьера → `resource_late_after_barrier`, `met:false`; таймаут называет ресурс+фазу; равенство зеркал кодов; e2e Card Input forced recapture — registry-листья на месте; таймингы не null.
-
-**Done (AC §4):** forced recapture не теряет registry leaves; `readinessMet=true` ⇒ нет late-asset в кадре; timeout называет id+phase; reuse — через CAS по `frameFingerprint` + in-page мемо (non-goal зафиксирован).
-
-**Риски:** R3 — стоимость барьера на 43 экранах (обязательный замер, `durationMs` — KPI); R4 — data-URI/внешние URL ⇒ cap + `resource_manifest_overflow`, не тихое усечение.
-
-### W10 (один деплой с W2). Service capture hygiene (P2.2)
-
-**Вариант A — устранение запроса:** capture-маршруты (`src/app/routes.tsx:43-49`) выносятся из-под `AuthProvider` → `getMe()` не вызывается, `/api/auth/me` не запрашивается, console-ошибки нет. Причина, не симптом.
-
-**Страховка:** `CaptureReceiptConsole.suppressed: [{signature, count}]` (агрегат по `INFRA_NOISE_PATTERNS`), сырые строки инфрашума в `errors[]` не дублируются; `CaptureQuality.suppressedCount`; драйвер (`runSnap`) — одна сводная строка на прогон вместо строки на экран.
-
-**Файлы:** `routes.tsx`, `receipt.ts`, `server/screenshot/noise.ts`, `service.ts`, `contracts.ts`, driver ×3, `server/screenshot.test.ts:237-262`.
-
-**Done (AC §12):** нет 43 одинаковых строк; неожиданные ошибки блокируют как раньше; suppressed — одним summary.
+Как v1: вынос capture-маршрутов из-под `AuthProvider` (второй top-level RouteObject рядом с обёрткой `routes.tsx:42-45` — триаж C-m4); `CaptureReceiptConsole.suppressed[{signature,count}]`; `CaptureQuality.suppressedCount`; драйвер — одна сводная строка. Примечание: «один деплой» W2+W10 — организационный (общие файлы), физического skew сервер/воркер не существует (один контейнер — триаж O-m14); реальная матрица совместимости — драйвер×сервер, см. §3.
 
 ### W3. Candidate dependency overlay (P0.3) — миграция v33
 
-**Контракт:** `candidateOverlaySchema = z.record(componentId, candidateId)` (1..8 узлов, `CASE_SET_MAX_OVERLAY_NODES = 8`; `prototypeCandidateOverlayMax = 2` не меняется — другая ручка, расхождение объяснено в capabilities). Точки приёма — §1.2 (таблица: case set durable / ран durable / preview + preview-tree + render-status + candidateOverrides ephemeral / сохранённая ревизия — запрещено).
+Контракт и семантика — §1.2. Сводно:
+- Манифест: top-level `candidateOverlay` (≤8) + overlay-форма slot-ребёнка `{overlay: "<componentId>"}`; отказы `422 candidate_overlay_duplicate|limit|unused`, `409 candidate_overlay_expired|evicted`, promote `409 overlay_dependency_not_published|diverged`, `422 overlay_hash_mismatch`.
+- Резолв мимо `publishedPinByNameAndVersion`; пин GC через `pinnedSourceHashes()`+`overlay_manifest_json`; ephemeral-поверхности — эхо резолва.
+- v33: `acceptance_runs.overlay_manifest_json` + `overlay_hash`.
+- Kill-switch `EASYUI_CANDIDATE_OVERLAY_DISABLED`; rollback-window правило (§1.2).
+- Драйвер: `CASE_SET_TOP_LEVEL_KEYS` (`:2887`) + slot-ребёнок overlay-формы + `accept --overlay` ×3; `limits.caseSetMaxOverlayNodes: 8`.
+- Принятая цена (триаж C-m10): overlay учитывается в `frameFingerprint` целиком — узел, не влияющий на конкретный кейс, всё равно сдвигает кадр; дедуп не строится.
 
-**Отказы:** `422 candidate_overlay_duplicate` / `candidate_overlay_limit` / `candidate_overlay_component_not_in_tree`; `409 candidate_overlay_superseded`; promote: `409 overlay_dependency_not_published` / `overlay_dependency_diverged`, `422 overlay_hash_mismatch`.
+**Тесты:** e2e «unpublished parent + 2 unpublished deps (nested slot) ⇒ один зелёный ран, receipt с хешами узлов»; `candidate_overlay_unused`; GC не выселяет overlay-кандидата нетерминального рана (рестарт сервера переживается); promote 409×2/ok/hash-mismatch; overlay-free — байт-в-байт; каталог неизменен; ревизия прототипа с неопубликованным типом — по-прежнему 422.
 
-**Fingerprint/receipt:** условный спред `candidateOverlay` в `frameFingerprint`; `FIELD_LAYERS.candidateOverlay = ["frame"]`; квитанция рана перечисляет `{componentId, candidateId, rev, sourceHash, bundleHash}` по узлам.
+**Done (AC §5):** п.1 (case-set путь), п.2 (receipt рана; ephemeral — эхо), п.3, п.4 — тесты; ограничение по prototype/composition-поверхностям — явный абзац changelog (§1.2).
 
-**Миграция v33:** `ALTER TABLE acceptance_runs ADD COLUMN overlay_manifest_json TEXT` + `overlay_hash TEXT` (nullable; NULL = ран без overlay).
+### W5. Impact-driven gallery regression (P1.1) — миграция v34
 
-**Файлы:** `caseSetSchema.ts`, `server/acceptance/caseSets.ts` (`publishedPinByNameAndVersion` получает overlay-ветку — резолв кандидата вместо опубликованного пина), `cases.ts`, `ids.ts`, `repo.ts`, `orchestrator.ts`, `server/components/candidates.ts` (лизы/GC-пины на весь ран), `promote.ts`, `server/screenshot/service.ts`, `routes/compositions.ts`, `routes/screenshots.ts`, `migrations.ts`, `contracts.ts`, openapi, sdk, docs. Драйвер: allowlist top-level ключа + валидатор (формат `cand_…`, лимит, дубликаты) ×3; `limits.caseSetMaxOverlayNodes`; флаг `accept --overlay <componentId>=<candidateId>` (повторяемый).
+Как v1 плюс триаж: `screenFrameFingerprint` — кортеж `CaptureExpected` + `themeContentHash` (§1.7); критерий «не разворачивается ⇒ capture»; retention 5 ревизий; таблица `prototype_screen_frames` (v34). `POST /api/prototypes/:id/snap-plan` (гейт `EASYUI_ACCEPTANCE_MATRIX` не нужен — работает и без матрицы, но требует `EASYUI_IMPACTED_SNAP` capability-флага; kill-switch `EASYUI_IMPACTED_SNAP_DISABLED`). Драйвер `snap --impacted`/`--full` ×3; сервер деплоится раньше драйвера.
 
-**Тесты:** e2e «unpublished parent + 2 unpublished deps ⇒ один зелёный ран»; регресс «overlay-free — байт-в-байт прежние хеши/golden»; promote 409×2/ok; «активный каталог не изменился»; «сохранение ревизии с неопубликованным типом по-прежнему 422».
-
-**Done (AC §5):** один ран для unpublished-графа; receipt с точными хешами узлов; каталог неизменен; promote верифицирует граф.
-
-**Риски:** R5 — лизы должны жить весь ран (продление на постановке, снятие в терминале, watchdog); R6 — overlay × nested slots комбинаторика (лимиты публикуются и проверяются до резолва).
-
-### W4. Migration commit transaction (P0.4) — миграция v34
-
-**API:** `POST /api/migration-commits` (`{componentId, candidateId, acceptanceRunIds[], galleryPrototypeId, screenFragment, auditDesignSystem, idempotencyKey}` → `201 {commitId, phase}`); `POST /api/migration-commits/plan` (dry-run, ничего не пишет, → `{plan[], impact, mutations[]}`); `GET /api/migration-commits/:id`; `POST /api/migration-commits/:id/advance`.
-
-**Фазы:** `preflight → promote → gallery-save → impacted-regression → audit → complete`; терминальные провалы типизированы и не откатывают: `needs-promote` / `needs-gallery-commit` / `needs-regression` / `needs-audit` / `failed-preflight`. Конкурентный второй commit того же компонента ⇒ `409 migration_commit_in_flight` (через `maintenance_locks`).
-
-**Квитанция:** `{before/after: {catalogRev, galleryRev}, acceptanceRunIds, overlayHash, impact, auditResult, phases[{phase, startedAt, endedAt, status, idempotentReplay}]}`.
-
-**Миграция v34:** таблица `migration_commits` (`commit_id PK, component_id, candidate_id, design_system, phase, phases_json, request_json, receipt_json, idempotency_key, owner_key, created_at, updated_at, UNIQUE(candidate_id, idempotency_key)`) + partial index по незавершённым фазам. Мягкие ссылки без FK (кандидаты вымываются GC — сага отвечает `candidate_evicted` в фазе, не падает на чтении).
-
-**Переиспользуется, не переписывается:** CAS, `maintenance_locks`, sweep/watchdog, `computeImpact`, `runAudit`/`auditCatalog`, `PUT /prototypes/:id` (gallery-save), `snap-plan` W5 (impacted-regression; если W5 не готова — деградация в full-regression с warning).
-
-**Файлы:** новые `server/migration/commit.ts` + `server/routes/migrationCommits.ts`; `migrations.ts`, `promote.ts`, `contracts.ts`, openapi, sdk, docs; драйвер verb `migration-commit` (`--candidate/--acceptance-run/--gallery/--screen-fragment/--audit-design-system/--receipt/--dry-run/--resume`) ×3; `main.ts` (`EASYUI_MIGRATION_COMMIT_DISABLED`).
-
-**Тесты:** повтор с тем же ключом ⇒ тот же commitId, ноль новых ревизий; kill между promote и gallery-save + advance ⇒ продолжение с gallery-save; провал gallery ⇒ `needs-gallery-commit` при живом promote; dry-run ⇒ ноль мутаций; конкурентный ⇒ 409.
-
-**Done (AC §6):** все четыре пункта — прямые тесты. Риски: R7 — фазовые дедлайны + watchdog (в `needs-regression`, не висеть); R8 — откат образа с v34: зависшие саги доигрываются вручную, зафиксировать в Rollback policy.
-
-### W5. Impact-driven gallery regression (P1.1) — миграция v35
-
-**API:** `POST /api/prototypes/:id/snap-plan` `{rev?, viewport, dsf, theme, mode: "impacted"|"full", changedComponents?}` → `{planId, screens[{screenId, action: "capture"|"reuse", reason: "new-screen"|"pin-changed"|"renderer-changed"|"readiness-policy-changed"|"proven-reuse", screenFrameFingerprint, reuseReceipt?}]}`.
-
-**Примитив:** `screenFrameFingerprint = sha256({screenId, screenSpecHash, pins[{componentId, version, bundleHash}] sorted, viewport, dsf, theme, readinessPolicyHash, rendererFingerprint})`; пины экрана = ревизионные пины ∩ дерево экрана (как `currentHeadUsages`); per-screen пинов в БД нет. Reuse-квитанция подписана сервером (образец `reuseReceiptOf` + `reuse_receipt_json` v29): `{screenId, screenFrameFingerprint, previousRev, previousPngSha256, provenAt}`.
-
-**Миграция v35:** таблица `prototype_screen_frames (prototype_id, rev, screen_id, screen_frame_fingerprint, png_sha256, receipt_json, created_at, PK(prototype_id, rev, screen_id))` + индекс по fingerprint.
-
-**Драйвер:** `snap --impacted` (план → снимает только capture, reuse-квитанции в receipt) и `snap --full` (план не запрашивается). `buildSnapPlan` — второй источник плана; последовательность и `SNAP_ATTEMPTS` не меняются.
-
-**Файлы:** новый `server/prototypes/screenFrames.ts`; `usageGraph.ts` (per-screen проекция), `routes/prototypes.ts`, `migrations.ts`, `contracts.ts`, openapi, sdk, driver ×3, docs, `main.ts` (`EASYUI_IMPACTED_SNAP_DISABLED`).
-
-**Тесты:** addition-only Connect Card на 43-экранной галерее ⇒ 1 capture + 42 proven-reuse; изменение PayButton ⇒ capture только у экранов с PayButton в resolved tree; смена `rendererFingerprint` ⇒ все capture (`renderer-changed`); `--full` игнорирует план; **недоказанный reuse деградирует в capture** (R9: если резолв не даёт транзитивные зависимости — консервативно capture, тест обязателен).
+**Тесты:** addition-only ⇒ 1 capture + 42 proven-reuse; изменение PayButton ⇒ только его экраны; смена токена темы (unpinned head) ⇒ все capture (тест на `themeContentHash`); смена renderer ⇒ все capture; неразворачиваемый экран ⇒ capture; `--full` без плана.
 
 **Done (AC §7):** все три пункта; KPI «recaptured ≤ new + impacted».
 
-### W6. Receipt envelope (P1.2)
+### W4. Migration commit transaction (P0.4) — миграция v35
 
-Контракт §1.4. `report(lines, payload, envelope)`; `--summary-json`; verb'ы мимо `report()` приводятся; `writeReceiptFile` — `.json` всегда JSON, текст `.txt`; инвариант `ok === (exit === EXIT.ok)`.
+Как v1 плюс триаж (§1.3): фаза `verify`; `idempotency_key NOT NULL` + partial unique in-flight по `component_id`; watchdog на старте + на запросах; `regressionMode` в квитанции; гейт `EASYUI_ACCEPTANCE_MATRIX`; честная граница KPI. API/фазы/квитанция/dry-run — как v1. v35: таблица `migration_commits` (без nullable-ключа идемпотентности).
 
-**Файлы:** driver ×3, `server/driver-mjs.d.ts` (типизированный фасад envelope), `driver-cli.test.ts`, `cache.mjs` (envelope в квитанции `eui-cache-v1`), `SKILL.md` + зеркала (схема envelope), `sync-share-skills.mjs`, `docs/server-api.md` (`features.receiptEnvelopeVersion: 1`).
+**Тесты:** как v1 + «watchdog переводит зависшую фазу в `needs-*` при следующем запросе»; «параллельный commit другого компонента не блокируется» (per-component lock).
 
-**Тесты:** тест-таблица по всем verb'ам (envelope присутствует, `ok ↔ exit`); `--summary-json` — только envelope; существующие ключи payload не исчезли (регресс на 6 verb'ов из AC); `.json`/`.txt` receipt.
+### W6a. Envelope-каркас (первым в очереди driver.mjs)
 
-**Done (AC §8):** один envelope у status/geometry/snap/accept/promote/audit; summary без `keys`-проб; версия документирована, обратная совместимость доказана регресс-тестом; exit ↔ ok. Риск R10 — 38 call-site'ов, миграция по одному, каждый коммит зелёный.
+Сигнатура `report(lines, payload, envelope)` (envelope.ok обязателен), каркас `{schemaVersion:1, command, ok, summary:{}, items, artifacts, warnings, nextActions}` аддитивно, механическая правка всех ~44 call-site'ов, приведение `design-system`/`get` к `report()`. Тест-таблица `ok ↔ exit` по всем verb'ам. ×3 копии + `driver-mjs.d.ts` + `driver-cli.test.ts`.
+
+### W6b. Envelope-контракты (P1.2, после серверных волн)
+
+Таблица summary per-verb (§1.4), `--summary-json`, `.json`/`.txt` правило + миграция путей, документация схемы в SKILL.md + зеркалах, `features.receiptEnvelopeVersion: 1`.
+
+**Done (AC §8):** один envelope у 6 verb'ов; summary достаточен (проверяется сценарными тестами по таблице §1.4); версия документирована; exit ↔ ok.
 
 ### W7. Typed cause + suggested policy (P1.3)
 
-**Контракт:** `suggestedPolicy {kind: "textAaBudget"|"maxRawDiffPct"|"overflowBudgetPx", textAaBudget?, maxRawDiffPct?, basis, scope: "case-id"|"remediation-group", remediationKey?, evidence {topCause, confidence, edgeResidualInsidePct, bestOffset, geometryUnchanged, affectedElementKeys, rendererFingerprint}, expiry {trigger: "renderer-or-source-fingerprint-change", rendererFingerprint, referenceAssetId}, requiresHumanJudgement: true}`.
-
-**Продюсер** — чистая функция `suggestPolicy(input, causes, observed): SuggestedPolicy | null` рядом с `classifyVisualCauses` (`server/visual/causes.ts`), питается `CauseInput` + `CAUSE_THRESHOLDS` + `TEXT_AA_PRESETS`; `CLASSIFIERS` и 9 кодов не трогаются. **Обязательный отказ**, если топ-причина структурная (`geometry-shift`/`descendant-outside-mask`/`effect-overflow`/`missing-late-asset`) → `null` (AC + тест).
-
-**Привязка:** `annotateCauses` в `runner.ts`; на `:602` причины удаляются у reused-строк — `suggestedPolicy` удаляется там же. Группировка — существующий `remediationKey` (`server/acceptance/grouping.ts`): одна причина ⇒ одна группа ⇒ одно предложение. Слой — report-only, не входит в fingerprints, никогда не применяется автоматически.
-
-**Файлы:** `causes.ts`, `grouping.ts`, `runner.ts`, `contracts.ts` (`acceptanceGateResultSchema`), `routes/acceptance.ts`, openapi, sdk, driver ×3 (рендер в `accept-status`), docs, `main.ts` (`EASYUI_SUGGESTED_POLICY_DISABLED`).
-
-**Тесты:** глиф-AA ⇒ `live-text-v1`; сдвиг геометрии ⇒ null; два кейса, одна причина ⇒ один `remediationKey`, одно предложение; смена рендерера ⇒ протухание принятого исключения; reused-строка без `suggestedPolicy`.
-
-**Done (AC §9):** группировка между кейсами; structural residual никогда не waiver; expiry по renderer/source fingerprint; `requiresHumanJudgement: true` всегда.
+Как v1 с исправлениями:
+- **Размещение:** `suggestPolicy` живёт на стороне приёмки — `server/acceptance/suggest.ts` (не в `causes.ts`: пресеты в `gates/visual.ts` импортируют `CAUSE_THRESHOLDS` из `causes.ts` — цикл; триаж C-M7). `causes.ts` остаётся листом.
+- **Reused-строки:** причины у reused-строк **пересчитываются** (`runner.ts:601-604`), не удаляются насовсем — `suggestedPolicy` пересчитывается вместе с ними; тест v1 «reused без suggestedPolicy» снят (триаж C-M8), заменён тестом «suggestedPolicy reused-строки консистентен пересчитанным причинам».
+- **Expiry (AC §9.3) — advisory-форма** (триаж S-M8): durable-хранилища принятых исключений не существует (per-case бюджеты живут в контентно-адресованных манифестах); механизм — `accept-status` предупреждает `policy_exception_stale`, когда `renderer_fingerprint` текущего рана ≠ fingerprint рана, в котором кейс с `textAaBudget`/per-case бюджетом впервые прошёл (данные есть: `acceptance_runs.renderer_fingerprint`, v30). AC §9.3 покрывается в advisory-форме — фиксируется в changelog.
+- Отказ от предложения при структурной топ-причине; группировка `remediationKey`; report-only; kill-switch — как v1.
 
 ### W8. Figma Source Package (P1.4) — миграция v36
 
-**API:** `POST /api/figma-source-packages` (контентно-адресован `fsp_<sha256(manifest)>`: `{designSystem, fileKey, sourceRevision, nodes[], exports[], instanceProperties[], textRuns[], effects[], usageContexts[], missing[], anomalies[]}` → `{packageId, exports[{nodeId, assetId, width, height, sha256, deduped}]}`); `GET …/:id`; `POST …/:id/case-set-skeleton` → черновик манифеста (не сохраняется).
-
-- Валидация: объявленные dims/SHA сверяются с байтами ⇒ `422 source_package_export_dimension_mismatch` / `source_package_export_sha_mismatch`; дубликаты дедуплицируются в реестр `asset_<sha256>`; повтор nodeId ⇒ `422 source_package_duplicate_node`; `limits.sourcePackageMaxExports = 256`. Байты живут только в реестре ассетов, таблица хранит manifest.
-- Provenance: `figmaSchema` получает `sourcePackageId?` (пакет той же DS); `check-provenance-resolver.ts` — пины обновляются.
-- **Typed preflight:** пакет объявил `missing[]` с ролью `exact-reference` для узла компонента ⇒ `422 missing_exact_reference` в publish-префлайте (`server/components/validate.ts`) с nodeId — до сохранения компонента.
-- **Skeleton:** генератор у `coverageOf`/`buildCasesFromManifest`; заполняет `expectedSurfaces.referenceExport` из dims экспорта + `referenceAssetId` — синергия с W1. Skeleton обязан проходить локальный валидатор драйвера (гейт наоборот).
-- **Инвалидация — только comparison:** смена `sourceRevision` ⇒ новый пакет, новые assetId ⇒ у зависимых кейсов меняется `referenceAssetId` (`["comparison"]` в `FIELD_LAYERS`), пересъёмки нет.
-
-**Миграция v36:** `figma_source_packages (package_id PK, design_system, file_key, source_revision, manifest_json, created_at)` + индекс `(design_system, file_key)`.
-
-**Файлы:** новые `server/figma/sourcePackage.ts` + `routes/figmaSourcePackages.ts`; `figma.ts`, `components/validate.ts`, `caseSets.ts`, `check-provenance-resolver.ts`, `migrations.ts`, `contracts.ts`, openapi, sdk, driver ×3 (verb `source-package upload|show|skeleton`), docs, `main.ts` (`EASYUI_SOURCE_PACKAGE_DISABLED`).
-
-**Тесты:** расходящиеся dims ⇒ 422; повторный экспорт ⇒ `deduped:true`, один asset; `missing_exact_reference` до сохранения; skeleton проходит валидатор драйвера; смена `sourceRevision` ⇒ двигается `comparisonFingerprint`, не `frameFingerprint`.
-
-**Done (AC §10):** все четыре пункта.
+Как v1 плюс триаж:
+- Валидация provenance (триаж S-m6): согласованность `fileKey`/принадлежность `nodeId` пакету/`componentKeys`; dims/SHA как v1.
+- v36: `figma_source_packages.design_system` — `REFERENCES design_systems(id)` + запись в список `assertRegistryIntegrity` (триаж O-m11).
+- `figmaSchema.sourcePackageId` — **metadata-only**, ни в один отпечаток не входит (явно; триаж S-M11).
+- **Reuse search** (триаж S-M6): под-задача — component key + semantic role из пакета как сигналы `server/catalog/matcher.ts` (ранжирование, не гейт).
+- Skeleton, preflight `missing_exact_reference`, дедуп — как v1.
 
 ### W9. Runtime schema defaults (P2.1)
 
-Контракт §1.6. **Файлы:** `src/player/easyUiRuntime.tsx`, тип `ComponentDefinition.capabilities` (`src/catalog/normalize.ts`), `server/components/extract-subprocess.ts` (`capabilitiesSchema` + warning `runtime_default_drift`), загрузчик (`src/customComponents/loader.ts` copy-through), `server/acceptance/ids.ts` (history + `BuildFingerprintInput`), `server/components/validate.ts`, `routes/meta.ts`, `main.ts`, docs, скилл yandex-pay (правило «не дублировать `??`» для флагнутых).
+Контракт §1.6 (исправленный): без правки `BuildFingerprintInput`; протяжка capability из `CandidateEntry.extracted.meta.capabilities`; drift-аудит — новая работа + разовый скрипт; процедура перевода компонента (5 шагов); kill-switch аварийный render-affecting (Rollback policy).
 
-**Тесты:** `.default("md")` + флаг ⇒ `{}` рендерится как contract parse; без флага — байт-в-байт доволновое; невалидные props ⇒ raw без throw; candidate id не меняется у компонентов без флага (регресс по корпусу).
+**Тесты:** `.default("md")` + флаг ⇒ `{}` = contract parse; без флага байт-в-байт; невалидные props ⇒ raw + warning; сдвиг candidate id при добавлении флага (через sourceHash) — дифференциальный тест.
 
-**Done (AC §11):** `{}` = contract parse; default-семантика в candidate fingerprint (у флагнутых); постепенный перевод через capability-флаг.
+### W11. Capabilities, compose, deploy-чеклист, changelog
 
-### W11. Capabilities, changelog, финальная верификация
-
-- `features`: `geometrySurfacesV3`, `resourceBarrier`, `candidateDependencyOverlay`, `migrationCommit`, `impactedSnap`, `suggestedPolicy`, `figmaSourcePackage`, `runtimeSchemaDefaults`, `captureNoiseSummary`, `receiptEnvelopeVersion: 1`.
-- `acceptance`: `geometryContractVersion: 2` (**не 3** — §1.1, объяснено в changelog), `readinessPolicyVersion: 3`, `comparisonSurfaces: [...]`.
-- `limits`: `caseSetMaxOverlayNodes: 8`, `prototypeCandidateOverlayMax: 2`, `sourcePackageMaxExports: 256`, `snapPlanMaxScreens`, `migrationCommitPhaseTimeoutMs`, `resourceBarrierMaxResources: 256`.
-- Changelog `docs/server-api.md`: абзац на capability + таблица флагов/kill-switch'ей + слой инвалидации на каждое поле + два зафиксированных отказа: (1) `GEOMETRY_CONTRACT_VERSION` не поднимается; (2) документ прототипа с кандидатным пином по-прежнему недоступен.
-- Верификация: `npm run verify` + `npm run e2e` на каждой волне; runtime-прогон по `/verify`; корпус детерминизма после W1/W2; замер стоимости барьера; прогон одной прод-семьи до/после W1.
-
-**KPI-проводка (§14):** revisions → envelope `summary.revisions` (W6); typedCausePct (W7); `resource_late_after_barrier` при `met:true` недостижим по построению (W2); captured/reused в snap-plan (W5); 1 resumable workflow (W4); schema-discovery = 0 через `--summary-json` (W6); невыразимых поверхностей = 0 (W1); преждевременных публикаций = 0 — доля ранов с overlay (W3).
+- `features`: `geometrySurfacesV3`, `resourceBarrier`, `candidateDependencyOverlay`, `migrationCommit`, `impactedSnap`, `suggestedPolicy`, `figmaSourcePackage`, `runtimeSchemaDefaults`, `captureNoiseSummary`, `receiptEnvelopeVersion: 1`; `acceptance`: `geometryContractVersion: 2` (не 3 — §1.1), `readinessPolicyVersion: 3`, `comparisonSurfaces: [...]`; `limits`: `caseSetMaxOverlayNodes: 8`, `prototypeCandidateOverlayMax: 2`, `sourcePackageMaxExports: 256`, `snapPlanMaxScreens`, `migrationCommitPhaseTimeoutMs`, `resourceBarrierMaxResources: 256`, `resourceBarrierBudgetMs: 8000`.
+- **`docker-compose.yml`:** строки `EASYUI_X: ${EASYUI_X:-}` для всех 8 kill-switch'ей (без compose-строки env в контейнер не попадает — триаж O-M6).
+- **`.claude/skills/deploy/SKILL.md`:** секция волны со смоук-ключами (`features.*`, `acceptance.readinessPolicyVersion: 3`, `geometryContractVersion: 2` — «не 3, это не дефект»), правило про `EASYUI_PROMOTE_POLICY_STRICT` (§1.5), rollback-window абзацы по каждой миграции (§3), именованные бэкапы `.backups/prod-<волна>`.
+- Changelog `docs/server-api.md`: абзац на capability + таблица флагов + слой инвалидации на поле + три зафиксированных отказа/ограничения: (1) `GEOMETRY_CONTRACT_VERSION` не поднимается; (2) документ прототипа с кандидатным пином недоступен, prototype-overlay — swap-only, composition-приёмки не существует; (3) AC §4.4 — межкадровый barrier-кэш non-goal.
+- Верификация: `npm run verify` + `npm run e2e` на каждой волне; runtime `/verify`; корпус детерминизма после W1b/W2; замер барьера (go/no-go).
+- **KPI-проводка (§14, скорректирована — триаж S-m1/m2):** revisions → `summary.revisions` (агрегация — скрипт по client-cache links, baseline фиксируется до волны); typedCausePct (W7); `resource_late_after_barrier` при `met:true` недостижим по построению (W2); captured/reused (W5); «1 server workflow + 1 агентская запись» (W4, §1.3); schema-discovery = 0 (`--summary-json`, W6b); невыразимых поверхностей = 0 (W1); KPI «преждевременных публикаций = 0» — прокси-метрика v1 снята, измеряется вручную по BUILD_ORDER координатора (доля lane'ов, где leaf публиковался только ради родителя).
 
 ## 3. Параллелизация, сериализация, инварианты деплоя
 
-**Группы:**
-- **A (ядро схем/отпечатков, строго последовательно):** W1 → W3 → W5 (общие `ids.ts`/`caseSetSchema.ts`/`caseSets.ts`).
-- **B (капчур):** W2 ∥ W10, внутри W2 → W10 (общий `receipt.ts`). Независима от A.
-- **C:** W4 — после W3 (overlay-верификация в promote) и W5 (фаза impacted-regression; при задержке — деградация в full с warning).
-- **D (независимые):** W6, W7, W9 — параллельно A/B; W8 — после W1 (skeleton заполняет `expectedSurfaces.referenceExport`).
+**Честная параллель одна** (триаж S-B4): **A** (W6a → W1a → W1b → W3 → W5 → W4 → W6b → W7 → W8 → W9 — очередь по `driver.mjs`/`ids.ts`/`caseSetSchema.ts`) ∥ **B** (W2 → W10 — капчур-контур, общий `receipt.ts`). W2 не трогает файлы группы A (правка `policies.ts`/`modes.ts`/`readiness*`/`failureCodes.ts` — пересечение с W1a по `failureCodes.ts` сериализуется W1a → W2). Остальное — очередь; заявленный в v1 «параллелизм группы D» снят.
 
 **Сериализация файлов:**
 
 | Файл | Порядок |
 |---|---|
-| `caseSetSchema.ts` | W1 → W3 |
-| `server/acceptance/ids.ts` | W1 → W3 → W9 |
-| `server/acceptance/caseSets.ts` | W1 → W3 → W8 |
-| `cases.ts` / `repo.ts` | W1 → W3 |
-| `recompute.ts`, `src/capture/geometry.mjs` | W1 |
+| `driver.mjs` ×3 + `sync-share-skills.mjs` | **W6a** → W1a → W3 → W5 → W4 → W6b → W7 → W8 |
+| `caseSetSchema.ts` | W1a → W3 |
+| `server/acceptance/ids.ts` | W1a → W3 (W9 не трогает — §1.6) |
+| `server/acceptance/caseSets.ts` | W1a → W3 → W8 |
+| `cases.ts` / `repo.ts` | W1a → W3 |
+| `recompute.ts` | W1a |
+| `src/capture/geometry.mjs` | W1b |
+| `src/capture/failureCodes.ts` | W1a → W2 |
 | `src/capture/receipt.ts` + схема | W2 → W10 → W9 |
+| `server/acceptance/policies.ts` | W2 |
 | `promote.ts` | W3 → W4 |
-| `runner.ts` | W1 → W7 |
-| `driver.mjs` ×3 | W1 → W3 → W4 → W5 → W6 → W7 → W8 |
-| `routes/meta.ts`, `contracts.ts`/openapi | по волне за раз; финализирует W11 |
+| `runner.ts` | W1a → W7 |
+| `server/main.ts` (kill-switch'и, sweep) | по волне за раз: W2 → W3 → W5 → W4 → W7 → W8 → W9 |
+| `server/migrations.ts` | v32 → v33 → v34 → v35 → v36, по волне |
+| `routes/meta.ts`, `contracts.ts`/openapi/sdk, `docs/server-api.md`, `SKILL.md`+зеркала | по волне за раз; финализирует W11 |
 
-W6 намеренно после серверных волн в очереди driver.mjs: он рефакторит `report()`, а не per-verb валидаторы — обратный порядок заставил бы каждую серверную волну переписывать свежие call-site'ы.
+**Совместимость драйвер × сервер** (заменяет вакуумный инвариант v1 «W2+W10 один деплой» — триаж O-m14): сервер всегда деплоится раньше раскатки драйвера той же волны; старый драйвер × новый сервер — работает (поля аддитивны); новый драйвер × старый сервер — новые verb'ы/поля дают `404`/`422 validation_failed` с понятным сообщением (тест на каждый новый verb).
 
 **Инварианты деплоя:**
-1. W2 + W10 — один деплой (общая схема квитанции).
-2. W3 + W4 — один деплой, если W4 включает overlay-верификацию (иначе promote примет непроверяемый граф).
-3. W1 — деплой в одиночку, до первого прод-прогона с `expectedSurfaces`; окна ложных fail нет (волна опциональна по построению).
-4. W5: сервер (`snap-plan`) деплоится раньше драйверного `--impacted`; старый драйвер работает как раньше.
-5. Сборка на прод-сервере запрещена; деплой — `/deploy` по явной команде пользователя.
-6. Прод-аудит: перед W2 — замер стоимости барьера на копии галереи; перед W1 — список семейств, где `expectedSurfaces.root` вызовет пересъёмку (переиспользовать `scripts/audit-geometry-contract.mjs`).
+1. W1a и W1b — можно одним деплоем; прод-аудит W1b (§W1b.4) — до него.
+2. W2 — до амортизации пересъёмки feedback-3 (§1.5); замер барьера go/no-go; проверить `EASYUI_PROMOTE_POLICY_STRICT` выключен на окно пересъёмки.
+3. W3 — rollback-window правило (§1.2): overlay-раны не создавать, пока откат образа возможен без восстановления тома.
+4. W5 — сервер раньше драйвера `--impacted`.
+5. Сборка на прод-сервере запрещена; деплой — `/deploy` по явной команде пользователя; перед каждой миграцией — именованный бэкап тома (`.db`+`-wal`+`-shm` + `DATA_DIR/assets/` — один объект).
+6. Rollback-window по миграциям (в deploy-чеклист): v32 — не персистить манифесты с `expectedSurfaces` в окне; v33 — §1.2; v34 — безопасна (quитанции игнорируются старым кодом); v35 — не запускать саги в окне; v36 — не загружать пакеты и не ссылаться `sourcePackageId` в окне.
 
-**Миграции:** v32 (W1) → v33 (W3) → v34 (W4) → v35 (W5) → v36 (W8); одна на волну; аддитивные nullable / новые таблицы; читатели `SELECT *`; FK-аудит; номера выдаёт оркестратор (параллельная разработка миграций в ветках запрещена — R12).
-
-**Сквозные инварианты (ревью каждой волны):**
-1. Новые поля манифеста — `.optional()` без `.default()` (контентная адресация `cset_`).
-2. Conditional spread для каждого нового входа отпечатка; `GOLDEN_FRAME` не двигается ни разу; `CASE_FINGERPRINT_ALGO_VERSION` остаётся 7.
-3. Каждое новое поле — тест каскада на уровне `caseFingerprintsOf`, не только декларация в `FIELD_LAYERS`.
-4. `src/` не импортирует `server/`; дублирование `src` ↔ `scripts/*.mjs` тест-асертится.
-5. Драйвер: 3 копии + `driver-mjs.d.ts` + `capabilities.limits` + тест «драйвер принимает манифест с новым полем» — в той же волне, что схема.
-6. `registerContract` + регенерация openapi (drift-гейт) + SDK + секция в `docs/server-api.md` — в той же волне.
-7. Kill-switch резолвится один раз в `main.ts`.
+**Сквозные инварианты** — как v1 (без изменений): `.optional()` без `.default()`; conditional spread, `GOLDEN_FRAME` не двигается, ALGO остаётся 7 (легаси-семантика не меняется — §1.1); тест каскада на `caseFingerprintsOf` для каждого нового поля; `src/` не импортирует `server/`, `src`↔`scripts/*.mjs` тест-асертится; драйвер ×3 + d.ts + limits + тест в той же волне; `registerContract`+openapi+SDK+docs в той же волне; kill-switch — `main.ts` + compose-строка.
 
 ## 4. Верификация (сводно)
 
-- Каждая волна: `npm run verify` + `npm run e2e` зелёные; для схемных волн — регресс байт-идентичности хешей доволновых манифестов (golden).
-- Финал: runtime-прогон по `.claude/skills/verify/SKILL.md` (скилл `/verify`); корпус детерминизма после W1/W2; e2e-сценарии из Done-критериев волн (Payment Schedule W1, Card Input forced recapture W2, unpublished-граф W3, kill/resume саги W4, 1+42 план W5).
-- KPI §14 ретроспективы измеримы из квитанций (проводка в W11).
+- Каждая волна: `npm run verify` + `npm run e2e`; для схемных волн — регресс байт-идентичности хешей и golden-вердиктов доволновых манифестов.
+- Финал: runtime `/verify`; корпус детерминизма после W1b/W2; e2e-сценарии Done-критериев (Payment Schedule W1, Card Input W2, unpublished-граф W3, kill/resume саги W4, 1+42 план W5, смена токена темы W5).
+- KPI §14 — проводка §W11.
+
+## 5. Триаж находок Stage 2 (раунд 1)
+
+Ревью: 3 линзы (корректность C, скоуп/AC S, миграции/опс O); 13 blocker, 27 major, 18 minor.
+
+**Принято (вошло в v2):**
+- C-B1/C-B2/S-B3 → безусловный замер `rootBounds`, отказ от frame-ключа и от opt-in (§1.1); C-B3 → легаси-ветка вердикта байт-в-байт, ALGO 7 честно; C-B4/C-B5 → `referenceExportDims` в metrics безусловно, CSS px; C-B6 → overlay-форма slot-ребёнка мимо `publishedPinByNameAndVersion`; C-M2 → durable-пин через `pinnedSourceHashes`; C-M3 → `failureCodes.ts` в W1a, фильтр recompute по множеству; C-M4/O-B1 → точка правки `ACCEPTANCE_POLICIES`, таблица до/после, promote-strict правило; C-M5 → словарь единый, WORKER_FAILURE_CODES не трогается; C-M6 → union 1|2|3, ветка isReadinessPolicy, evidence-эхо обязателен; C-M7 → `suggestPolicy` в `server/acceptance/suggest.ts`; C-M8 → reused-строки пересчитывают suggestion; C-M9/O-m16 → отказ от правки BuildFingerprintInput (sourceHash), kill-switch W9 аварийный; C-M1 → кортеж CaptureExpected + themeContentHash; C-m1 → comparisonSurface только comparison; C-m8/m9/m10/m11 → отказы expired/evicted, unused вместо not-in-tree, принятая цена fingerprint, критерий неразворачиваемости; O-B2 → суммарный бюджет барьера ≤8с; O-B3 → kill-switch W3 + rollback-window; O-M4 → галерейный opt-in `readiness:"barrier"`; O-M5 → аудит-класс + доказательство неизменности легаси-вердиктов; O-M6 → compose-строки + deploy-чеклист + смоук-ключи; O-M7/O-M8 → NOT NULL ключ, partial unique per-component, watchdog на старте+запросах; O-M9 → rollback-window по всем миграциям; O-M10 → W2 до амортизации feedback-3, числовой гейт; O-m11..m16 → FK v36, retention v34, гейт матрицей, матрица драйвер×сервер, замер на копии тома, откат W9; S-B1/S-B2 → честный скоуп overlay-поверхностей + эхо-receipt + changelog; S-B4/S-M4 → параллелизация переписана, W6a первым; S-M2 → фаза verify, честная граница KPI; S-M3 → W5 перед W4; S-M5 → таблица summary; S-M6 → reuse-search под-задача W8; S-M7 → процедура перевода W9; S-M8 → expiry advisory; S-M10 → W1a/W1b сплит; S-M11 → доопределены clipExpectation/tolerance/выравнивание/бюджет барьера/screenSpecHash/скелет; S-m1..m7 → KPI-проводка, root-clips-layout снят, копии драйвера поимённо, строки сериализации, provenance-валидация, .txt-миграция; C-m3..m6 → номера строк/ключей исправлены.
+- S-M1/M9 (частично): AC §4.4 сужен явно (changelog), shadow-режим W2 отклонён — вместо него явная цена + ранний деплой (§1.5).
+
+**Отклонено (с обоснованием):**
+- S-B3-альтернатива «recapture только по явному `--recapture`» — противоречит автоматическому каскаду (`recapture:policy_delta` — существующий контракт); принят вариант «пересъёмка одного кейса через существующий fall-through».
+- O-m14-буквально «отменить один деплой W2+W10» — набор остаётся одним PR-пакетом по общим файлам, но обоснование заменено (организационное, не skew).
+- S-M9 «shadow-режим барьера» — двойная стоимость съёмки и третий вариант политики; вместо этого числовой go/no-go гейт и kill-switch.
+- C-m2 — снята вместе с причиной (кадрового флага больше нет).
 
 ## Риски (сводно)
 
-R1/R2 (W1) — канва и `referenceExport` без ассета → `indeterminate`, не тихий pass. R3/R4 (W2) — стоимость барьера, переполнение манифеста. R5/R6 (W3) — лизы на длинном ране, overlay × nested slots. R7/R8 (W4) — зависшие фазы, откат образа с v34. R9 (W5) — недоказанный reuse = capture. R10 (W6) — 38 call-site'ов по одному. R11 (W9) — `safeParse` только под флагом. R12 — пять миграций: каждая своим деплоем, номера централизованы.
+R1 (W1a) — расхождение легаси-ветки вердикта: golden-тест байт-идентичности — гейт волны. R2 (W1b) — `rootBounds` при множественных корневых боксах: `not-measured`, не угадывание. R3 (W2) — стоимость барьера: замер go/no-go, суммарный бюджет. R4 (W2) — data-URI/внешние URL: cap + `resource_manifest_overflow`. R5 (W3) — GC/рестарт: durable-пин, тест с рестартом. R6 (W3) — overlay × nested slots: лимиты до резолва. R7 (W4) — зависшие фазы: watchdog на запросах. R8 (v33/v35) — rollback-window: правила §3.6. R9 (W5) — ложный reuse: кортеж CaptureExpected + themeContentHash + критерий неразворачиваемости; недоказанный reuse = capture. R10 (W6a) — 44 call-site'а одним механическим коммитом с тест-таблицей. R11 (W9) — kill-switch render-affecting: аварийный, процедура републикации. R12 — пять миграций: своя волна, свой бэкап, свой rollback-абзац.
