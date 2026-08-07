@@ -45,6 +45,8 @@ import { referencedArtifactShas } from "./acceptance/evidence";
 import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
 import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
+import { geometrySurfacesEnabled } from "./acceptance/gates/geometry2";
+import { runtimeDefaultsDisabled } from "./components/runtimeDefaults";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
 import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
@@ -299,6 +301,14 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // немой. Уже записанные пакеты и ссылки не трогаются: они metadata-only.
     if(!sourcePackageEnabled()) console.warn("[figma] EASYUI_SOURCE_PACKAGE_DISABLED=1: source packages off, /api/figma-source-packages* answers 404 and figma.sourcePackageId is refused");
     if(!suggestedPolicyEnabled()) console.warn("[acceptance] EASYUI_SUGGESTED_POLICY_DISABLED=1: suggested policy off, acceptance reports carry no suggestedPolicy and no policy_exception_stale warnings");
+    // W1a (план 2026-08-07 §1.1/§W11): kill-switch поверхностей геометрии. Новый путь вердикта
+    // откатывается на легаси-ветку целиком — `expectedSurfaces` перестают быть дискриминатором,
+    // per-surface вердиктов нет. Кадры не трогаются: замеры W1b аддитивны в обе стороны.
+    if(!geometrySurfacesEnabled()) console.warn("[acceptance] EASYUI_GEOMETRY_SURFACES_DISABLED=1: geometry surfaces off, verdicts fall back to the legacy expectedGeometry branch");
+    // W9 (план 2026-08-07 §1.6): **render-affecting** аварийный kill-switch — он меняет пиксели,
+    // не входя ни в один отпечаток, поэтому ран, снятый при поднятом флаге, внешне неотличим от
+    // честного. Отсюда предупреждение в логе старта и `runtime_defaults_disabled` в accept-status.
+    if(runtimeDefaultsDisabled()) console.warn("[components] EASYUI_RUNTIME_DEFAULTS_DISABLED=1: schema defaults are NOT applied at render; acceptance of families declaring capabilities.runtimeSchemaDefaults is invalid while this is set");
     // Watchdog фаз саги (триаж O-M7, R7): периодических таймеров в сервере нет, поэтому зависшая
     // фаза подметается на старте процесса — рядом с `failStagingPublishes` — и на каждом запросе
     // к набору. Сага, чей процесс умер в активной фазе, встаёт в `needs-<фаза>` и resumable.

@@ -44,10 +44,15 @@ import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { caseSetIdOf } from "./acceptance/caseSets";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
-  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
+  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, caseSetManifestSchema,
 } from "../src/acceptance/caseSetSchema";
 import { prototypeCandidateOverlayMax as PROTOTYPE_CANDIDATE_OVERLAY_MAX } from "./routes/screenshots";
+import { capabilities } from "./routes/meta";
+import { SNAP_PLAN_MAX_SCREENS } from "./prototypes/screenFrames";
+import { MIGRATION_COMMIT_PHASE_TIMEOUT_MS } from "./migration/commit";
+import { SOURCE_PACKAGE_MAX_EXPORTS } from "./figma/sourcePackage";
+import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../src/capture/readinessPolicy";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
 // Contract test (plan §G): every registered route contract is exercised through
@@ -738,6 +743,14 @@ describe("route contracts", () => {
       caseSetMaxCaseSizeDeltaPx: CASE_POLICY_MAX_SIZE_DELTA_PX,
       caseSetMaxCaseOverflowBudgetPx: CASE_POLICY_MAX_OVERFLOW_BUDGET_PX,
       prototypeCandidateOverlayMax: PROTOTYPE_CANDIDATE_OVERLAY_MAX,
+      // Волна 2026-08-07 (§W11): потолки, объявленные волнами W2–W8. Сверяются с теми же
+      // константами, что их энфорсят, — двойного хардкода в discovery нет по определению.
+      caseSetMaxOverlayNodes: CASE_SET_MAX_OVERLAY_NODES,
+      snapPlanMaxScreens: SNAP_PLAN_MAX_SCREENS,
+      migrationCommitPhaseTimeoutMs: MIGRATION_COMMIT_PHASE_TIMEOUT_MS,
+      sourcePackageMaxExports: SOURCE_PACKAGE_MAX_EXPORTS,
+      resourceBarrierMaxResources: RESOURCE_BARRIER_MAX_RESOURCES,
+      resourceBarrierBudgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
       surfaces: SURFACES_LIMIT,
     });
     // Продуктовая прекондиция §A2a: карусель способов оплаты — 9 детей default-слота, поэтому
@@ -814,11 +827,87 @@ describe("route contracts", () => {
       surfacesWrite: process.env.EASYUI_SURFACES === "1",
       // Write-политика композиций v3 — kill-switch EASYUI_COMPOSITION_V3 (D9, план 2026-08-03).
       compositionV3: process.env.EASYUI_COMPOSITION_V3 === "1",
+      // ── Волна 2026-08-07 (ретроспектива миграции YP v2). Тест поднимает handler с матричной
+      // приёмкой и без единого kill-switch'а волны, поэтому все флаги — их «включённое» значение;
+      // разведение по kill-switch'ам покрыто тестами самих волн. ──
+      geometrySurfacesV3: true,
+      resourceBarrier: true,
+      candidateDependencyOverlay: true,
+      impactedSnap: true,
+      migrationCommit: true,
+      suggestedPolicy: true,
+      figmaSourcePackage: true,
+      runtimeSchemaDefaults: true,
+      captureNoiseSummary: true,
       // План 2026-08-07 §W6b: версия схемы агентской квитанции драйвера (`envelope`) — число,
       // а не булев флаг: конверт печатается всегда, клиенту нужна его форма. Kill-switch'а нет.
       receiptEnvelopeVersion: 1,
     });
+    // §W11: версия readiness-политики — **чем снято**, а не «что умеет образ». Барьер W2 поднял
+    // дефолтный профиль до v3; `geometryContractVersion` при этом сознательно остаётся 2 (замеры
+    // W1b аддитивны и кадры не инвалидируют), и расхождение этих двух чисел — не дефект, а контракт.
+    expect(value.acceptance.readinessPolicyVersion).toBe(3);
+    expect(value.acceptance.geometryContractVersion).toBe(2);
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
+  });
+
+  /**
+   * §W11: kill-switch волны отвечает **и** за поведение ручки, **и** за флаг discovery — иначе
+   * агент читает «фича есть» и получает 404/422 уже после мутации. Проверяются те четыре
+   * тумблера, что читаются по месту вызова; `EASYUI_RESOURCE_BARRIER_DISABLED` сюда не входит
+   * намеренно — он читается один раз на процесс (политика входит в три отпечатка), и его
+   * по-профильный откат покрыт тестом `server/capture/resourceBarrier`.
+   */
+  test("GET /api/capabilities gasnet флаги волны 2026-08-07 своими kill-switch'ами", () => {
+    const flags = () => capabilities(db, "shadow", { acceptanceMatrix: true }).features as Record<string, unknown>;
+    const switches = {
+      EASYUI_GEOMETRY_SURFACES_DISABLED: "geometrySurfacesV3",
+      EASYUI_CANDIDATE_OVERLAY_DISABLED: "candidateDependencyOverlay",
+      EASYUI_SUGGESTED_POLICY_DISABLED: "suggestedPolicy",
+      EASYUI_SOURCE_PACKAGE_DISABLED: "figmaSourcePackage",
+      EASYUI_RUNTIME_DEFAULTS_DISABLED: "runtimeSchemaDefaults",
+      EASYUI_IMPACTED_SNAP_DISABLED: "impactedSnap",
+      EASYUI_MIGRATION_COMMIT_DISABLED: "migrationCommit",
+    } as const;
+    for (const [env, flag] of Object.entries(switches)) {
+      expect(flags()[flag]).toBe(true);
+      process.env[env] = "1";
+      try {
+        expect({ [flag]: flags()[flag] }).toEqual({ [flag]: false });
+      } finally {
+        delete process.env[env];
+      }
+    }
+    // Матрица гасит ровно те флаги волны, ручки которых живут внутри приёмки; `resourceBarrier`,
+    // `figmaSourcePackage`, `runtimeSchemaDefaults`, `impactedSnap` и `captureNoiseSummary` от неё
+    // не зависят — их поверхности к матричной приёмке не относятся.
+    const withoutMatrix = capabilities(db, "shadow", {}).features as Record<string, unknown>;
+    expect(withoutMatrix.geometrySurfacesV3).toBe(false);
+    expect(withoutMatrix.candidateDependencyOverlay).toBe(false);
+    expect(withoutMatrix.suggestedPolicy).toBe(false);
+    expect(withoutMatrix.migrationCommit).toBe(false);
+    expect(withoutMatrix.resourceBarrier).toBe(true);
+    expect(withoutMatrix.figmaSourcePackage).toBe(true);
+    expect(withoutMatrix.runtimeSchemaDefaults).toBe(true);
+    expect(withoutMatrix.impactedSnap).toBe(true);
+    expect(withoutMatrix.captureNoiseSummary).toBe(true);
+  });
+
+  /**
+   * §W11 (триаж O-M6): без строки в `docker-compose.yml` переменная в контейнер **не попадает**,
+   * поэтому «kill-switch есть в коде» и «kill-switch можно выключить в проде» — разные факты.
+   * Тест сторожит второй: восемь тумблеров волны объявлены поимённо и с пустым дефолтом
+   * (= фича включена), а не собраны в один общий выключатель.
+   */
+  test("docker-compose объявляет все восемь kill-switch'ей волны 2026-08-07", () => {
+    const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+    for (const name of [
+      "EASYUI_GEOMETRY_SURFACES_DISABLED", "EASYUI_RESOURCE_BARRIER_DISABLED", "EASYUI_CANDIDATE_OVERLAY_DISABLED",
+      "EASYUI_IMPACTED_SNAP_DISABLED", "EASYUI_MIGRATION_COMMIT_DISABLED", "EASYUI_SUGGESTED_POLICY_DISABLED",
+      "EASYUI_SOURCE_PACKAGE_DISABLED", "EASYUI_RUNTIME_DEFAULTS_DISABLED",
+    ]) {
+      expect(compose).toContain(`${name}: \${${name}:-}`);
+    }
   });
 
   // Фаза гейта — единственное поле discovery, которое зависит от конфигурации процесса.

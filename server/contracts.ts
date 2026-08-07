@@ -3282,6 +3282,17 @@ export const capabilitiesResponseSchema = z.object({
     caseSetMaxCaseSizeDeltaPx: z.number(), caseSetMaxCaseOverflowBudgetPx: z.number(),
     /** Подмен кандидатов на один прототипный кадр (план 2026-08-05 §B1). */
     prototypeCandidateOverlayMax: z.number(),
+    /**
+     * Волна 2026-08-07: узлов `candidateOverlay` в case-set-манифесте (§W3, не путать с
+     * `prototypeCandidateOverlayMax` — тот про swap опубликованных пинов прототипного кадра),
+     * экранов в одном плане импакт-съёмки (§W5), потолок жизни фазы саги миграционного коммита
+     * (§W4; sweep — на старте и на запросах, периодических таймеров в сервере нет), экспортов в
+     * пакете исходников Figma (§W8) и два потолка барьера ресурсов (§W2): манифест одной страницы
+     * и **суммарный** бюджет фазы, за которым поднимается `resource_barrier_timeout`.
+     */
+    caseSetMaxOverlayNodes: z.number(), snapPlanMaxScreens: z.number(),
+    migrationCommitPhaseTimeoutMs: z.number(), sourcePackageMaxExports: z.number(),
+    resourceBarrierMaxResources: z.number(), resourceBarrierBudgetMs: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
     surfaces: z.number(),
   }),
@@ -3384,6 +3395,49 @@ export const capabilitiesResponseSchema = z.object({
     /** `capture.surface:"viewport"` в case-set (план 2026-08-06 §W5). */
     captureViewportSurface: z.boolean(),
     /**
+     * Четыре поверхности геометрии случая (план 2026-08-07 §W1a): `expectedSurfaces`,
+     * `comparisonSurface`, `clipExpectation` и per-surface вердикты. Список поверхностей —
+     * `acceptance.comparisonSurfaces`; `acceptance.geometryContractVersion` при этом **остаётся 2**
+     * (замеры аддитивны, кадры не инвалидируются). false — при `EASYUI_GEOMETRY_SURFACES_DISABLED=1`
+     * (вердикт целиком на легаси-ветке) либо без матричной приёмки.
+     */
+    geometrySurfacesV3: z.boolean(),
+    /**
+     * Детерминированный барьер ресурсов — readiness v3 (план 2026-08-07 §W2): оба профиля приёмки,
+     * режим `reference` и опт-ин галерейной джобы `readiness:"barrier"`. Матрицей не гейтится.
+     * false — при `EASYUI_RESOURCE_BARRIER_DISABLED=1`: каждый профиль возвращается в **свою**
+     * доволновую политику, а опт-ин остаётся валидным no-op'ом. Чем снято — в
+     * `acceptance.readinessPolicyVersion`.
+     */
+    resourceBarrier: z.boolean(),
+    /**
+     * `candidateOverlay` в case-set-манифесте и overlay-форма slot-ребёнка (план 2026-08-07 §W3) —
+     * единственная durable-поверхность приёмки графа неопубликованных зависимостей. Гаснет матрицей
+     * и `EASYUI_CANDIDATE_OVERLAY_DISABLED=1` (`422 candidate_overlay_disabled`).
+     */
+    candidateDependencyOverlay: z.boolean(),
+    /**
+     * `suggestedPolicy` в отчёте рана и advisory `policy_exception_stale` (план 2026-08-07 §W7).
+     * Report-only: вердикт и promote от флага не зависят. false — при
+     * `EASYUI_SUGGESTED_POLICY_DISABLED=1` либо без матричной приёмки.
+     */
+    suggestedPolicy: z.boolean(),
+    /** `/api/figma-source-packages*` и ссылка `figma.sourcePackageId` (план 2026-08-07 §W8); false при `EASYUI_SOURCE_PACKAGE_DISABLED=1`. */
+    figmaSourcePackage: z.boolean(),
+    /**
+     * Хост применяет Zod-дефолты схемы к props компонента, объявившего
+     * `definition.capabilities.runtimeSchemaDefaults` (план 2026-08-07 §W9). Флаг отвечает
+     * «применяются ли дефолты сейчас», а не «умеет ли образ»: `EASYUI_RUNTIME_DEFAULTS_DISABLED=1` —
+     * аварийный render-affecting kill-switch, при котором приёмка флагнутых семей недействительна.
+     */
+    runtimeSchemaDefaults: z.boolean(),
+    /** Сводка подавленного шума капчура: `quality.suppressedCount` + `console.suppressed[]` (план 2026-08-07 §W10); kill-switch'а нет. */
+    captureNoiseSummary: z.boolean(),
+    /** `POST /api/prototypes/:id/snap-plan` — импакт-план галерейной съёмки (план 2026-08-07 §W5); false при `EASYUI_IMPACTED_SNAP_DISABLED=1`. */
+    impactedSnap: z.boolean(),
+    /** Сага миграционного коммита `/api/migration-commits*` (план 2026-08-07 §W4); гаснет матрицей и `EASYUI_MIGRATION_COMMIT_DISABLED=1`. */
+    migrationCommit: z.boolean(),
+    /**
      * Версия схемы агентской квитанции драйвера (`envelope`, план 2026-08-07 §1.4, W6b) —
      * **число**, а не булев флаг: конверт существует всегда, вопрос только в том, какую его
      * форму понимает эта пара «сервер × харнес». Растёт лишь при несовместимом изменении самого
@@ -3420,6 +3474,13 @@ export const capabilitiesResponseSchema = z.object({
      * `comparisonSurface` манифеста. Порядок совпадает с `divergingSurfaces[]` вердикта.
      */
     comparisonSurfaces: z.array(z.enum(GEOMETRY_SURFACES)),
+    /**
+     * Версия readiness-политики дефолтного профиля приёмки (план 2026-08-07 §W2/§1.5) — чем этот
+     * инстанс реально снимает кадры: `3` — строгая политика плюс барьер ресурсов. При
+     * `EASYUI_RESOURCE_BARRIER_DISABLED=1` здесь честно доволновое значение профиля
+     * (`default-v1` → `1`; `pixel-strict-v1` откатывается в `2`, поэтому одно число на всех соврало бы).
+     */
+    readinessPolicyVersion: z.number().int().positive(),
   }),
   /** Объявленный рендерер этой сборки (план renderer-contract-2 §5 R1). */
   renderer: rendererReportSchema,

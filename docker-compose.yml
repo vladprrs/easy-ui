@@ -46,6 +46,40 @@ services:
       # R9a: тёплый пул воркеров капчура; численный критерий прод-включения выполнен (warm p95 705 мс).
       EASYUI_RENDERER_POOL: ${EASYUI_RENDERER_POOL:-1}
       EASYUI_CAPTURE_CACHE: ${EASYUI_CAPTURE_CACHE:-}
+      # ── Kill-switch'и волны 2026-08-07 (ретроспектива миграции YP v2), §W11. Все восемь —
+      # аварийные, дефолт **пустой** (= фича включена); без строки здесь переменная в контейнер
+      # не попадает вовсе, и «выключить в Dokploy» было бы невозможно. Каждая перечислена
+      # поимённо, а не собрана в один тумблер: волны инвалидируют разные слои каскада, и общий
+      # выключатель гасил бы вместе с дефектом три здоровых фичи.
+      #
+      # W1a: новый путь вердикта геометрии (`expectedSurfaces`/per-surface) → легаси-ветка целиком.
+      EASYUI_GEOMETRY_SURFACES_DISABLED: ${EASYUI_GEOMETRY_SURFACES_DISABLED:-}
+      # W2: барьер ресурсов. Читается **один раз на процесс** (политика входит в `policyProfileHash`/
+      # `rendererFingerprint`), поэтому смена значения — рестарт сервера. Выключение возвращает
+      # каждый профиль в **свою** доволновую политику (default→v1, strict→v2, reference→v2) и
+      # сдвигает `rendererFingerprint` обратно: раны по обе стороны тумблера мультиран-promote
+      # не смешивать (`422 acceptance_renderer_mismatch`).
+      EASYUI_RESOURCE_BARRIER_DISABLED: ${EASYUI_RESOURCE_BARRIER_DISABLED:-}
+      # W3: candidate dependency overlay. Уже созданные overlay-раны не трогает — запрещает новые
+      # (`422 candidate_overlay_disabled`). Это же положение — режим rollback-window миграции v33.
+      EASYUI_CANDIDATE_OVERLAY_DISABLED: ${EASYUI_CANDIDATE_OVERLAY_DISABLED:-}
+      # W5: импакт-план съёмки. Гасит и ручку `snap-plan` (404), и запись кадров экранов — при
+      # откате образа в окне миграции v34 писать в несуществующую таблицу некуда.
+      EASYUI_IMPACTED_SNAP_DISABLED: ${EASYUI_IMPACTED_SNAP_DISABLED:-}
+      # W4: сага миграционного коммита (`/api/migration-commits*` → 404). Существующие саги
+      # остаются на своей фазе и продолжаются `advance` после обратного включения.
+      EASYUI_MIGRATION_COMMIT_DISABLED: ${EASYUI_MIGRATION_COMMIT_DISABLED:-}
+      # W7: suggested policy — слой report-only; гасит и предложение бюджета, и advisory
+      # `policy_exception_stale`. Ни вердикт, ни promote от него не зависят.
+      EASYUI_SUGGESTED_POLICY_DISABLED: ${EASYUI_SUGGESTED_POLICY_DISABLED:-}
+      # W8: пакеты исходников Figma (ручки → 404, `figma.sourcePackageId` → 422). Режим
+      # rollback-window миграции v36: старый образ о таблице не знает.
+      EASYUI_SOURCE_PACKAGE_DISABLED: ${EASYUI_SOURCE_PACKAGE_DISABLED:-}
+      # W9: **render-affecting** аварийный тумблер (в отпечатки не входит сознательно): хост
+      # перестаёт применять Zod-дефолты схемы. Приёмка флагнутых семей при нём недействительна
+      # (`runtime_defaults_disabled` в accept-status); штатный откат компонента — републикация
+      # исходника без `capabilities.runtimeSchemaDefaults`.
+      EASYUI_RUNTIME_DEFAULTS_DISABLED: ${EASYUI_RUNTIME_DEFAULTS_DISABLED:-}
     expose:
       - "8787"
     volumes:

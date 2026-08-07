@@ -43,12 +43,18 @@ import {
   CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
 } from "../../src/acceptance/caseSetSchema";
 import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
+import { candidateOverlayEnabled } from "../acceptance/caseSets";
+import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
+import { suggestedPolicyEnabled } from "../acceptance/suggest";
+import { RESOURCE_BARRIER_DISABLED } from "../capture/resourceBarrier";
+import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../../src/capture/readinessPolicy";
+import { runtimeDefaultsDisabled } from "../components/runtimeDefaults";
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { TEXT_AA_PRESETS } from "../acceptance/gates/visual";
 import { prototypeCandidateOverlayMax } from "./screenshots";
 import { impactedSnapEnabled, SNAP_PLAN_MAX_SCREENS } from "../prototypes/screenFrames";
 import { MIGRATION_COMMIT_PHASE_TIMEOUT_MS, migrationCommitEnabled } from "../migration/commit";
-import { SOURCE_PACKAGE_MAX_EXPORTS } from "../figma/sourcePackage";
+import { SOURCE_PACKAGE_MAX_EXPORTS, sourcePackageEnabled } from "../figma/sourcePackage";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -171,6 +177,16 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // не байты (экспорты ссылаются на реестр ассетов), но каждый экспорт стоит сверки dims/SHA
       // против реестра, поэтому потолок объявлен, а не выведен из размера тела.
       sourcePackageMaxExports: SOURCE_PACKAGE_MAX_EXPORTS,
+      // Барьер ресурсов (план 2026-08-07 §W2/§1.5): потолок манифеста одной страницы и **суммарный**
+      // бюджет фазы. Публикуются вместе, потому что отвечают на разные вопросы автора: 256 —
+      // когда кадр отвергнут `resource_manifest_overflow` (страница с data-URI-ковром), 8000 —
+      // сколько барьер имеет права стоить, прежде чем поднимет `resource_barrier_timeout` (и
+      // почему это меньше `JOB_DEADLINE_MS`: типизированный отказ обязан доехать наружу).
+      // Оба числа — свойство политики v3, поэтому объявлены **независимо** от kill-switch'а:
+      // выключенный барьер меняет версию политики (`acceptance.readinessPolicyVersion`), а не
+      // потолки, которыми он исполняется.
+      resourceBarrierMaxResources: RESOURCE_BARRIER_MAX_RESOURCES,
+      resourceBarrierBudgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,
@@ -312,6 +328,25 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // paintMargin 16, две ветки канвы сравнения).
       captureViewportSurface: options.acceptanceMatrix === true,
       // ── План 2026-08-07 (ретроспектива миграции YP v2) ──
+      // §W1a: четыре поверхности геометрии случая (`expectedSurfaces`/`comparisonSurface`/
+      // `clipExpectation`) и per-surface вердикты (`divergingSurfaces[]`, класс `surface-mismatch`).
+      // Список поверхностей — `acceptance.comparisonSurfaces`; версия контракта измерения при этом
+      // **остаётся 2** (замеры аддитивны, кадры не инвалидируются — §1.1). false — при
+      // `EASYUI_GEOMETRY_SURFACES_DISABLED=1`: вердикт целиком откатывается на легаси-ветку, и
+      // манифест с `expectedSurfaces` перестаёт что-либо менять в оценке.
+      geometrySurfacesV3: options.acceptanceMatrix === true && geometrySurfacesEnabled(),
+      // §W2: детерминированный барьер ресурсов — readiness v3 у обоих профилей приёмки, режима
+      // `reference` и опт-ина галерейной джобы (`readiness:"barrier"`). Матричной приёмкой **не**
+      // гейтится: опт-ин живёт на прототипной screenshot-ручке. false — при
+      // `EASYUI_RESOURCE_BARRIER_DISABLED=1`, и тогда каждый профиль возвращается в **свою**
+      // доволновую политику (default→v1, strict→v2, reference→v2), а параметр `readiness:"barrier"`
+      // остаётся валидным no-op'ом. Исполняемая версия политики — `acceptance.readinessPolicyVersion`.
+      resourceBarrier: !RESOURCE_BARRIER_DISABLED,
+      // §W3: `candidateOverlay` в case-set-манифесте + overlay-форма slot-ребёнка — единственная
+      // durable-поверхность приёмки графа неопубликованных зависимостей (потолок узлов —
+      // `limits.caseSetMaxOverlayNodes`). Гаснет матрицей (без неё кандидатов нет) и собственным
+      // `EASYUI_CANDIDATE_OVERLAY_DISABLED=1` (манифест с overlay — `422 candidate_overlay_disabled`).
+      candidateDependencyOverlay: options.acceptanceMatrix === true && candidateOverlayEnabled(),
       // §W5: `POST /api/prototypes/:id/snap-plan` — импакт-план галерейной съёмки (какие экраны
       // снимать и почему, какие переиспользуются с доказательством). Матричной приёмкой **не**
       // гейтится: галерея к ней не относится. false — при `EASYUI_IMPACTED_SNAP_DISABLED=1`, и
@@ -323,6 +358,28 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // `EASYUI_MIGRATION_COMMIT_DISABLED=1`; false — набор ручек отвечает 404. Честная граница:
       // сервер закрывает серверный хвост, агентские контрольные документы координатора он не пишет.
       migrationCommit: options.acceptanceMatrix === true && migrationCommitEnabled(),
+      // §W7: типизированная причина + `suggestedPolicy` в отчёте рана и advisory-предупреждения
+      // `policy_exception_stale`. Слой **report-only**: ни вердикт, ни promote от флага не зависят,
+      // поэтому его отсутствие безопасно — но клиент, который строит из предложения манифест, обязан
+      // знать, придёт оно или нет. false — при `EASYUI_SUGGESTED_POLICY_DISABLED=1` (гаснут обе
+      // производные сразу) либо без матричной приёмки (отчётов рана попросту нет).
+      suggestedPolicy: options.acceptanceMatrix === true && suggestedPolicyEnabled(),
+      // §W8: `/api/figma-source-packages*` — пакет исходников как единица переноса из Figma
+      // (потолок экспортов — `limits.sourcePackageMaxExports`) и ссылка `figma.sourcePackageId`.
+      // Матрицей не гейтится (пакет — provenance, а не приёмка); false — при
+      // `EASYUI_SOURCE_PACKAGE_DISABLED=1`: ручки отвечают 404, ссылка — `422 source_package_disabled`.
+      figmaSourcePackage: sourcePackageEnabled(),
+      // §W9: хост применяет Zod-дефолты схемы к props компонента, объявившего
+      // `definition.capabilities.runtimeSchemaDefaults`. Флаг discovery отвечает **не** «умеет ли
+      // образ», а «применяются ли дефолты прямо сейчас»: `EASYUI_RUNTIME_DEFAULTS_DISABLED=1` —
+      // аварийный render-affecting kill-switch (в отпечатки он не входит сознательно), и приёмка
+      // флагнутых семей при нём недействительна (`runtime_defaults_disabled` в accept-status).
+      runtimeSchemaDefaults: !runtimeDefaultsDisabled(),
+      // §W10: сводка подавленного инфраструктурного шума капчура — `quality.suppressedCount` и
+      // `console.suppressed[{signature,count}]` в receipt. Свойство кода, kill-switch'а нет:
+      // блок аддитивен, а сами capture-маршруты SPA вынесены из-под `AuthProvider`, поэтому
+      // источник шума удалён, а не подавлен.
+      captureNoiseSummary: true,
       // §W6b: версия схемы агентской квитанции драйвера (`envelope: {schemaVersion, command, ok,
       // summary, items, artifacts, warnings, nextActions}`) — число, а не булев флаг: конверт
       // печатается всегда, и клиенту нужна его **форма**, а не факт существования. Растёт только
@@ -354,6 +411,15 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // `comparisonSurface` случая. Порядок — тот же, что у `divergingSurfaces[]` вердикта:
       // от «что построил браузер» к «что прислал дизайнер». Все габариты объявляются в CSS px.
       comparisonSurfaces: [...GEOMETRY_SURFACES],
+      /**
+       * План 2026-08-07 §W2/§1.5: версия readiness-политики **дефолтного профиля приёмки** — та,
+       * которой этот инстанс реально снимает кадры, а не та, которую умеет код. `3` — строгая
+       * политика плюс барьер ресурсов; при `EASYUI_RESOURCE_BARRIER_DISABLED=1` здесь честно
+       * появляется доволновое значение профиля (`default-v1` → `1`), потому что профили
+       * откатываются каждый в своё (`pixel-strict-v1` → `2`), и одно число на всех соврало бы.
+       * Пара с `features.resourceBarrier`: флаг говорит «барьер включён», версия — «чем снято».
+       */
+      readinessPolicyVersion: ACCEPTANCE_POLICIES[DEFAULT_ACCEPTANCE_POLICY_ID].readiness.version,
     },
     // План renderer-contract-2 §5 R1: чем именно эта сборка рисует кадры. Агент (и приёмка
     // прода) обязаны иметь возможность сверить отпечаток с тем, что приехало в результате джобы,

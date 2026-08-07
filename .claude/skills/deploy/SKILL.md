@@ -66,9 +66,54 @@ curl -s -b "$jar" https://easy-ui.pay-offline.ru/api/capabilities   # flags in .
 Smoke keys after that wave: `features.figmaMultiSource/geometryContractV2/overlayScrollOwnership` are unconditional `true`; `features.geometryCaseTolerances/comparisonMatte/nestedSlotBindings/captureViewportSurface` follow `EASYUI_ACCEPTANCE_MATRIX`; plus top-level `textAaPresets["live-text-v1"]` and `acceptance.geometryContractVersion: 2`. Post-deploy expectations, not defects:
 
 - **First acceptance run of any existing case-set is a full recapture** — `geometryContractVersion` is a frame-fingerprint input, every pre-wave frame is invalidated by design (~4-6 s/case cold).
-- Live-text/clip measurement changed: case-sets that pinned an exact `expectedGeometry` under the old semantics may now honestly fail geometry. Inventory them with `node scripts/audit-geometry-contract.mjs --db <copy-of-prod-db>` (logical backups don't carry case-sets — take the volume DB) and re-issue manifests with `policy.perCase.sizeDeltaPx` where the delta is proven.
+- Live-text/clip measurement changed: case-sets that pinned an exact `expectedGeometry` under the old semantics may now honestly fail geometry. Inventory them with `bun scripts/audit-geometry-contract.mjs --db <copy-of-prod-db>` (logical backups don't carry case-sets — take the volume DB) and re-issue manifests with `policy.perCase.sizeDeltaPx` where the delta is proven.
 - `Overlay` overflow now clips (or scrolls with `scroll:true`) instead of leaking past the stage; the only pre-wave prod usage (hug-sheet below viewport) is unaffected, but audit new usages after content edits.
 - `builtinCatalogHash` shifted (new `scroll` prop is hashed): new prototype revisions get a new catalog hash and `renderInputDiff` legitimately reports it; pre-wave bundle imports decorate `formatTooNew` without blocking.
+
+### Wave 2026-08-07 (migration-retrospective wave, plan `docs/plans/2026-08-07-migration-feedback-wave.md`)
+
+Five migrations (**v32–v36**) and eight kill-switches. Do the pre-deploy block first — two of its items are go/no-go gates, not paperwork.
+
+**Smoke keys** (`GET /api/capabilities` with a session cookie, see above):
+
+- `features.geometrySurfacesV3`, `candidateDependencyOverlay`, `suggestedPolicy`, `migrationCommit` — `true` while `EASYUI_ACCEPTANCE_MATRIX=1` and the wave's own switch is clear.
+- `features.resourceBarrier`, `impactedSnap`, `figmaSourcePackage`, `runtimeSchemaDefaults` — `true`, matrix-independent; `captureNoiseSummary` — unconditional `true`; `receiptEnvelopeVersion: 1`.
+- `acceptance.readinessPolicyVersion: 3` — the **default profile's** policy, i.e. what frames are actually captured with. `1` here means `EASYUI_RESOURCE_BARRIER_DISABLED` is set somewhere (Dokploy env wins over the compose default).
+- `acceptance.geometryContractVersion: 2` — **not 3, and that is not a defect**: the wave's `rootBounds`/`referenceExportDims` measurements are additive facts, no frame fingerprint input was added and no capture corpus is invalidated by W1.
+- `limits.caseSetMaxOverlayNodes: 8`, `prototypeCandidateOverlayMax: 2`, `snapPlanMaxScreens: 256`, `sourcePackageMaxExports: 256`, `migrationCommitPhaseTimeoutMs: 600000`, `resourceBarrierMaxResources: 256`, `resourceBarrierBudgetMs: 8000`.
+
+**Before the deploy:**
+
+- **Named volume backup** `.backups/prod-migration-feedback-<YYYYMMDD>` — one object: `easy-ui.db` + `-wal` + `-shm` + `DATA_DIR/assets/`. Five forward-only migrations ride in this wave; logical backups do **not** carry case sets, so a logical dump is not a substitute.
+- **Prod audits on a restored copy of the volume** (never against live prod): `bun scripts/audit-geometry-contract.mjs --db <copy>` (W1b — which stored cases would now get a per-surface verdict / an honest `size-mismatch`) and `bun scripts/audit-runtime-defaults.mjs --db <copy>` (W9 — which published families drift between `??` defaults in code and `.default()` in the schema). Both are read-only inventories; run them **before** shipping, so a post-deploy failure is expected rather than investigated.
+- **Barrier cost go/no-go (W2).** The numeric gate is 64 cases x (~6 s + barrier) < `runDeadlineMs` 30 min, target <= 2 s/case. A local measurement on a restored volume copy gave **~0.5 s for 256 resources** — the reference figure; ship if the prod-shaped measurement stays in that order, hold if a case pays more than ~2 s.
+- **`EASYUI_PROMOTE_POLICY_STRICT` must stay off for the re-capture window.** W2 moves the readiness policy of both acceptance profiles, and that lands on **two independent axes** (plan §1.5): `policyProfileHash` (strict promote compares the run's hash with the *candidate's*, so a mixed pair — pre-wave run + post-wave candidate — refuses) and `rendererFingerprint` (the readiness policy is an input, so a multi-run promote mixing pre- and post-wave runs is `422 acceptance_renderer_mismatch`). Operational rule either way: **a family is promoted wholly from pre-wave artifacts, or wholly re-built (candidate + all its runs) after the wave** — never half of each.
+- **Full re-capture of the acceptance corpus is already pending** from the 2026-08-06 wave (`geometryContractVersion` moved). W2 deliberately ships **before** that re-capture is amortised, so the corpus is paid for once, not twice.
+
+**Rollback windows (per migration; the window is "the image can still be rolled back without restoring the volume"):**
+
+- **v32 (W1a, `expectedSurfaces` on manifests)** — while the window is open, do not persist manifests declaring `expectedSurfaces`/`comparisonSurface`/`clipExpectation`. The old image rejects such a manifest as `422 validation_failed` (strictObject), so a set published in the window becomes unrepublishable after a rollback.
+- **v33 (W3, `acceptance_runs.overlay_manifest_json`/`overlay_hash`)** — do **not** create overlay runs in the window: the old image would promote an overlay run **without** verifying the dependency graph. After the first overlay run, rolling the image back requires restoring the volume backup.
+- **v34 (W5, `prototype_screen_frames`)** — safe: the old image ignores the receipts and simply stops proving reuse. `EASYUI_IMPACTED_SNAP_DISABLED=1` additionally stops writing frames if the rollback has to happen with the new image still up.
+- **v35 (W4, `migration_commits`)** — do not start sagas in the window: a saga interrupted by a rollback keeps its phase row in a table the old image does not know, and promote (an irreversible phase) may already have happened with no receipt reachable.
+- **v36 (W8, `figma_source_packages`)** — do not upload packages and do not set `figma.sourcePackageId` in the window: the reference would survive the rollback pointing at a row the old image cannot read. `EASYUI_SOURCE_PACKAGE_DISABLED=1` is exactly this mode.
+
+**Kill-switches** (all eight are declared in `docker-compose.yml` with an empty default = feature on; set to `1` in Dokploy env to disable, and remember a Dokploy override beats the compose default): `EASYUI_GEOMETRY_SURFACES_DISABLED`, `EASYUI_RESOURCE_BARRIER_DISABLED` (**restart required** — the policy is read once per process and feeds three fingerprints), `EASYUI_CANDIDATE_OVERLAY_DISABLED`, `EASYUI_IMPACTED_SNAP_DISABLED`, `EASYUI_MIGRATION_COMMIT_DISABLED`, `EASYUI_SUGGESTED_POLICY_DISABLED`, `EASYUI_SOURCE_PACKAGE_DISABLED`, `EASYUI_RUNTIME_DEFAULTS_DISABLED` (**render-affecting and outside every fingerprint**: while it is set, acceptance of families declaring `capabilities.runtimeSchemaDefaults` is invalid — `runtime_defaults_disabled` shows up in `accept-status`; the supported per-component rollback is republishing the source without the capability).
+
+### KPI baseline of the 2026-08-07 wave (measure before deploying, re-measure after)
+
+No new telemetry was built — every number below comes out of data that already exists. Take the baseline **before** the wave ships; without it the after-number proves nothing.
+
+| KPI | Where the number comes from | Command |
+|---|---|---|
+| Revisions per shipped component | `summary.revision` of the `accept`/`accept-status` envelope — the candidate rev the family was accepted at, i.e. how many revisions it cost. Aggregate over the harness client cache: `<cache>/links.json` holds candidate → run → cases per component (`--cache-dir` / `EASYUI_CACHE_DIR`, see `.claude/skills/author/cache.mjs`); a five-line `jq`/node pass over that file is the whole "script" — do not build storage for it | `EASYUI_API=… node .claude/skills/author/driver.mjs accept-status <runId> --summary-json` → `summary.revision` |
+| Typed-cause coverage (`typedCausePct`) | W7: share of failed cases whose top cause is a typed code rather than an unclassified residual — `summary.topCauses[]` of the same envelope, or `causes[0].code` per case in `--json` | `node .claude/skills/author/driver.mjs accept-status <runId> --json` |
+| Captured vs reused screens | W5 snap plan — `captured`/`reused` of the `snap` summary; the plan itself names the reason per screen | `node .claude/skills/author/driver.mjs snap <prototype> --impacted --summary-json` |
+| Schema discovery calls = 0 | W6b: the envelope is self-describing, so an agent needs no extra schema fetch | `--summary-json` on any verb returns the full envelope; count `GET /api/schemas/*` in the session |
+| Publication tail | W4: target is **1 resumable server workflow + 1 agent receipt write**, not "zero manual steps" — the coordinator's own `WORKFLOW_STATE.md`/`BUILD_ORDER.md` are never written by the server | `migration-commit` receipt: `phasesDone` + one driver receipt file |
+| Inexpressible geometry surfaces = 0 | W1: every surface a case needs is declarable (`root`/`layoutUnion`/`paint`/`referenceExport`) | `acceptance.comparisonSurfaces` in capabilities; audit script for the stored corpus |
+
+"Premature publications = 0" has no server-side proxy and is measured by hand off the coordinator's `BUILD_ORDER.md` (share of lanes where a leaf was published only to accept its parent).
 
 ## Manual deploy / redeploy (no new commit)
 

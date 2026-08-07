@@ -565,8 +565,8 @@ node driver.mjs accept pay-payment-card --case-set cset_…   # ран по на
 ```bash
 node driver.mjs source-package upload package.json --design-system yandex-pay   # → packageId + deduplicated
 node driver.mjs source-package list --design-system yandex-pay --file-key PayAppCore
-node driver.mjs source-package show fsp_…                                       # пакет + манифест
-node driver.mjs source-package skeleton fsp_… --component pay-payment-card \
+node driver.mjs source-package show fsp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                                       # пакет + манифест
+node driver.mjs source-package skeleton fsp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --component pay-payment-card \
   --nodes 54863:9518,54863:9537 --out matrix.json                               # черновик case-set
 ```
 
