@@ -33,6 +33,9 @@ import {
   parseArgs,
   caseSetIdOfManifest,
   caseSetLimits,
+  sourcePackageLimits,
+  sourcePackageManifestIssues,
+  SOURCE_PACKAGE_LIMITS,
   caseSetManifestIssues,
   candidateOverlayIssues,
   resourceBarrierLine,
@@ -3622,5 +3625,167 @@ describe("author driver impacted snap (W5)", () => {
       screenId: "c", action: "reuse", reason: "proven-reuse", screenFrameFingerprint: "a".repeat(64),
       reuseReceipt: { screenId: "c", screenFrameFingerprint: "a".repeat(64), previousRev: 7, previousPngSha256: "b".repeat(64), provenAt: "2026-08-07T00:00:00.000Z" },
     })).toBe(`c: reuse (proven-reuse) fingerprint=${"a".repeat(64)} previousRev=7 previousPngSha256=${"b".repeat(64)}`);
+  });
+});
+
+/**
+ * Figma Source Package (план `docs/plans/2026-08-07-migration-feedback-wave.md` §W8) — драйверная
+ * половина: загрузка манифеста с дедупом, список/чтение, черновик case-set'а, отказ формы **до**
+ * сети и понятный отказ на сервере без набора роутов.
+ */
+describe("author driver source-package verb (W8)", () => {
+  /** Ассет реестра: пакет носит ссылки, а не байты, поэтому PNG уезжает обычным POST /api/assets. */
+  async function uploadAsset(api: string, width: number, height: number): Promise<{ id: string; sha256: string }> {
+    const response = await fetch(`${api}/assets`, { method: "POST", headers: { "content-type": "image/png" }, body: Buffer.from(png(width, height)) });
+    expect([200, 201]).toContain(response.status);
+    return await response.json() as { id: string; sha256: string };
+  }
+
+  async function manifestFile(directory: string, api: string, overrides: Record<string, unknown> = {}, name = "package.json") {
+    const asset = await uploadAsset(api, 686, 176);
+    const manifest = {
+      designSystem: "yandex-pay",
+      fileKey: "PayAppCore",
+      sourceRevision: "rev-1",
+      nodes: [
+        { nodeId: "10:20", name: "Pay button", componentKey: "key-pay-button", role: "payment-button", kind: "component" },
+        { nodeId: "10:21", name: "Pay button pressed", componentKey: "key-pay-button-pressed", role: "payment-button", kind: "instance" },
+      ],
+      exports: [{ nodeId: "10:20", assetId: asset.id, width: 686, height: 176, sha256: asset.sha256, scale: 2 }],
+      missing: [{ role: "exact-reference", nodeId: "10:21", note: "pressed state is not exported" }],
+      ...overrides,
+    };
+    const path = resolve(directory, name);
+    await writeFile(path, JSON.stringify(manifest, null, 2));
+    return { path, manifest, asset };
+  }
+
+  test("uploads, deduplicates, lists, shows and drafts a case-set skeleton", async () => {
+    const { api, directory } = await setup();
+    const { path, asset } = await manifestFile(directory, api);
+
+    const uploaded = await run(api, ["source-package", "upload", path, "--json"]);
+    expect(uploaded.exitCode).toBe(0);
+    const first = JSON.parse(uploaded.stdout);
+    expect(first).toMatchObject({
+      command: "source-package upload", deduplicated: false, designSystem: "yandex-pay",
+      fileKey: "PayAppCore", sourceRevision: "rev-1", exportCount: 1,
+    });
+    const packageId: string = first.packageId;
+    expect(packageId).toMatch(/^fsp_[0-9a-f]{64}$/);
+    // W6b: контракт summary верба — {packageId, deduplicated, exports, missing}.
+    expect(first.envelope.summary).toEqual({ packageId, deduplicated: false, exports: 1, missing: 1 });
+    expect(first.envelope.warnings).toEqual(["missing exact-reference: 10:21 (pressed state is not exported)"]);
+    expect(first.envelope.ok).toBe(true);
+
+    // Повтор того же манифеста идемпотентен: контентный адрес тот же, `deduplicated: true`.
+    // `--summary-json` печатает РОВНО конверт — без payload'а и без блока cache.
+    const repeat = await run(api, ["source-package", "upload", path, "--summary-json"]);
+    expect(repeat.exitCode).toBe(0);
+    const envelope = JSON.parse(repeat.stdout);
+    expect(Object.keys(envelope).sort()).toEqual(["artifacts", "command", "items", "nextActions", "ok", "schemaVersion", "summary", "warnings"]);
+    expect(envelope.summary).toEqual({ packageId, deduplicated: true, exports: 1, missing: 1 });
+    expect(envelope.nextActions).toEqual([`driver.mjs source-package skeleton ${packageId} --component <componentId>`]);
+
+    const list = await run(api, ["source-package", "list", "--design-system", "yandex-pay", "--file-key", "PayAppCore", "--json"]);
+    expect(list.exitCode).toBe(0);
+    const listed = JSON.parse(list.stdout);
+    expect(listed.packages).toEqual([expect.objectContaining({ packageId, exportCount: 1 })]);
+    // Список манифестов не тащит — поэтому exports/missing честно null, а не выдуманная сумма.
+    expect(listed.envelope.summary).toEqual({ packageId: null, deduplicated: null, exports: null, missing: null, packages: 1 });
+
+    const shown = await run(api, ["source-package", "show", packageId, "--json"]);
+    expect(shown.exitCode).toBe(0);
+    const view = JSON.parse(shown.stdout);
+    expect(view.manifest.nodes).toHaveLength(2);
+    expect(view.envelope.summary).toEqual({ packageId, deduplicated: null, exports: 1, missing: 1 });
+
+    const out = resolve(directory, "skeleton.json");
+    const skeleton = await run(api, ["source-package", "skeleton", packageId, "--component", "yp-pay-button", "--out", out, "--json"]);
+    expect(skeleton.exitCode).toBe(0);
+    const draft = JSON.parse(skeleton.stdout);
+    expect(draft).toMatchObject({ command: "source-package skeleton", componentId: "yp-pay-button", saved: false, path: out });
+    expect(draft.envelope.summary).toEqual({ packageId, deduplicated: null, exports: 1, missing: null, componentId: "yp-pay-button" });
+    expect(draft.envelope.artifacts).toEqual([out]);
+    // Черновик на диске — готовый вход `case-set put`: эталон и его габариты в CSS px (scale 2).
+    const written = JSON.parse(await readFile(out, "utf8"));
+    expect(written).toMatchObject({
+      manifestVersion: 1,
+      componentId: "yp-pay-button",
+      cases: [expect.objectContaining({
+        referenceAssetId: asset.id, props: {},
+        expectedSurfaces: { referenceExport: { width: 343, height: 88 } },
+      })],
+    });
+  }, 60_000);
+
+  test("refuses a malformed manifest before the network", async () => {
+    const { api, directory } = await setup();
+    // Экспорт ссылается на узел, которого в nodes[] нет, ассет назван не по форме реестра,
+    // а `missing.role` не из словаря — три претензии, ни одного запроса с манифестом.
+    const path = resolve(directory, "broken.json");
+    await writeFile(path, JSON.stringify({
+      designSystem: "yandex-pay", fileKey: "Pay App Core", sourceRevision: "rev-1",
+      nodes: [{ nodeId: "10:20" }],
+      exports: [{ nodeId: "10:99", assetId: "sha-of-something", width: 686, height: 176, sha256: "z".repeat(64) }],
+      missing: [{ role: "no-such-role" }],
+    }));
+    const refused = await run(api, ["source-package", "upload", path]);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("the manifest was not sent to the server");
+    expect(refused.stderr).toContain("fileKey must be url-safe");
+    expect(refused.stderr).toContain("exports[0].nodeId is not declared in nodes[]: 10:99");
+    expect(refused.stderr).toContain("exports[0].assetId must be an asset id");
+    expect(refused.stderr).toContain("missing[0].role must be one of");
+    // Ничего не создано: список пуст.
+    const list = await run(api, ["source-package", "list", "--design-system", "yandex-pay", "--json"]);
+    expect(JSON.parse(list.stdout).packages).toEqual([]);
+
+    // Потолок экспортов — из `limits.sourcePackageMaxExports` этого сервера.
+    expect(sourcePackageLimits({ limits: { sourcePackageMaxExports: 4 } }).maxExports).toBe(4);
+    expect(sourcePackageLimits(null).maxExports).toBe(SOURCE_PACKAGE_LIMITS.maxExports);
+    const tooMany = {
+      designSystem: "yandex-pay", fileKey: "PayAppCore", sourceRevision: "rev-1",
+      nodes: [{ nodeId: "10:20" }],
+      exports: Array.from({ length: 5 }, () => ({ nodeId: "10:20", assetId: `asset_${"a".repeat(64)}`, width: 10, height: 10, sha256: "b".repeat(64) })),
+    };
+    expect(sourcePackageManifestIssues(tooMany, sourcePackageLimits({ limits: { sourcePackageMaxExports: 4 } })))
+      .toContain("exports[] has 5 entries; this server allows 4 (limits.sourcePackageMaxExports)");
+  }, 30_000);
+
+  test("names the missing route on a server without the wave", async () => {
+    const { api, directory } = await setup();
+    const { path } = await manifestFile(directory, api, {}, "pre-wave.json");
+    process.env.EASYUI_SOURCE_PACKAGE_DISABLED = "1";
+    try {
+      const upload = await run(api, ["source-package", "upload", path]);
+      expect(upload.exitCode).toBe(1);
+      expect(upload.stderr).toContain("server has no figma-source-packages (deploy newer server)");
+      const list = await run(api, ["source-package", "list", "--design-system", "yandex-pay"]);
+      expect(list.exitCode).toBe(1);
+      expect(list.stderr).toContain("server has no figma-source-packages (deploy newer server)");
+      const skeleton = await run(api, ["source-package", "skeleton", `fsp_${"a".repeat(64)}`, "--component", "yp-pay-button"]);
+      expect(skeleton.exitCode).toBe(1);
+      expect(skeleton.stderr).toContain("deploy newer server");
+    } finally {
+      delete process.env.EASYUI_SOURCE_PACKAGE_DISABLED;
+    }
+  }, 30_000);
+
+  test("argument shapes are refused before any request", async () => {
+    const cases: [string[], string][] = [
+      [["source-package", "bogus"], "source-package requires a subcommand: upload | list | show | skeleton"],
+      [["source-package", "show", "not-a-package"], "takes a package id (fsp_<64 hex>)"],
+      [["source-package", "skeleton", `fsp_${"a".repeat(64)}`], "requires --component <componentId>"],
+      [["source-package", "upload", "m.json", "--file-key", "k"], "source-package upload has no --file-key"],
+      [["source-package", "skeleton", `fsp_${"a".repeat(64)}`, "--component", "c", "--out", "draft.txt"], "name it .json, not .txt"],
+    ];
+    for (const [argv, message] of cases) {
+      expect(() => parseArgs(argv)).toThrow(message);
+    }
+    // `--nodes` — одна выборка, разбираемая в список; пустая строка бессмысленна.
+    expect(parseArgs(["source-package", "skeleton", `fsp_${"a".repeat(64)}`, "--component", "c", "--nodes", "10:20,10:21"]).flags.nodes)
+      .toEqual(["10:20", "10:21"]);
+    expect(() => parseArgs(["source-package", "skeleton", `fsp_${"a".repeat(64)}`, "--component", "c", "--nodes", " , "])).toThrow("--nodes must list at least one nodeId");
   });
 });

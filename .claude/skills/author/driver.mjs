@@ -20,7 +20,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... [--no-barrier] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> [--overlay <json|file>] | case-set validate <manifest.json> [--overlay <json|file>] | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | migration-commit start <componentId> [--gallery <prototypeId>] [--screen <fragment.json>] [--candidate <candidateId>] [--acceptance-run <runId>]... [--expected-cases N] [--supersede auto|none] [--message <text>] [--audit-design-system <id>] [--idempotency-key <key>] [--receipt <file.json|file.txt>] [--timeout-sec N] [--dry-run] | migration-commit --status <commitId> | migration-commit --advance <commitId> | migration-commit --cancel <commitId> [--reason <text>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json, --summary-json (stdout carries ONLY the envelope receipt {schemaVersion, command, ok, summary, items, artifacts, warnings, nextActions} — the same object --json nests under `envelope`) and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap asks the server for the deterministic resource barrier (readiness: \"barrier\") by default because driver captures are SERVICE captures — --no-barrier is the rollback to the pre-wave v1 readiness; with --receipt snap/preview also print the barrier block (decoded/expected, fonts, stable frames, late resources, ms) and one summary line of suppressed console noise; case-set put/validate --overlay <json|file> merges the candidateOverlay map {\"<componentId>\": \"cand_...\"} into the manifest (accept has no --overlay: the graph belongs to the manifest); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure; migration-commit polls the SERVER-side saga (preflight \u2192 promote \u2192 gallery-save \u2192 verify \u2192 impacted-regression \u2192 audit): the idempotency key defaults to (component, headRev, sourceHash) so a repeat returns the same saga, a saga stopped in needs-<phase> exits 2 and is resumed with --advance or closed with --cancel, and --receipt writes the single agent record (.json = machine receipt, .txt = the printed lines)";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... [--no-barrier] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> [--overlay <json|file>] | case-set validate <manifest.json> [--overlay <json|file>] | case-set get <caseSetId> | case-set coverage <caseSetId> | source-package upload <manifest.json> [--design-system <id>] | source-package list [--design-system <id>] [--file-key <key>] [--limit N] | source-package show <packageId> | source-package skeleton <packageId> --component <componentId> [--nodes a,b] [--out file.json] | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | migration-commit start <componentId> [--gallery <prototypeId>] [--screen <fragment.json>] [--candidate <candidateId>] [--acceptance-run <runId>]... [--expected-cases N] [--supersede auto|none] [--message <text>] [--audit-design-system <id>] [--idempotency-key <key>] [--receipt <file.json|file.txt>] [--timeout-sec N] [--dry-run] | migration-commit --status <commitId> | migration-commit --advance <commitId> | migration-commit --cancel <commitId> [--reason <text>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json, --summary-json (stdout carries ONLY the envelope receipt {schemaVersion, command, ok, summary, items, artifacts, warnings, nextActions} — the same object --json nests under `envelope`) and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap asks the server for the deterministic resource barrier (readiness: \"barrier\") by default because driver captures are SERVICE captures — --no-barrier is the rollback to the pre-wave v1 readiness; with --receipt snap/preview also print the barrier block (decoded/expected, fonts, stable frames, late resources, ms) and one summary line of suppressed console noise; case-set put/validate --overlay <json|file> merges the candidateOverlay map {\"<componentId>\": \"cand_...\"} into the manifest (accept has no --overlay: the graph belongs to the manifest); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure; migration-commit polls the SERVER-side saga (preflight \u2192 promote \u2192 gallery-save \u2192 verify \u2192 impacted-regression \u2192 audit): the idempotency key defaults to (component, headRev, sourceHash) so a repeat returns the same saga, a saga stopped in needs-<phase> exits 2 and is resumed with --advance or closed with --cancel, and --receipt writes the single agent record (.json = machine receipt, .txt = the printed lines)\nsource-package uploads the Figma source manifest (nodes + exports by assetId, never bytes: upload the PNGs with POST /api/assets first) — the package id is the content address of the manifest, so re-uploading the same one answers deduplicated: true; the manifest form (required fields, exports ≤ limits.sourcePackageMaxExports, every referenced nodeId declared in nodes[]) is checked BEFORE the request, and 'source-package skeleton <packageId> --component <id>' asks the server for a DRAFT case-set manifest (empty props, no invented expectedGeometry) that --out file.json writes for 'case-set put'";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -318,6 +318,37 @@ export const flagSpecs = Object.freeze({
   // `--overlay` (план 2026-08-07 §W3) — карта неопубликованных зависимостей манифеста
   // (`put`/`validate`); у `get`/`coverage` она бессмысленна и отвергается арностью ниже.
   "case-set": { ...jsonFlag, "--overlay": { value: true, key: "overlay" } },
+  // §W8: пакет исходников Figma. Один набор флагов на четыре подкоманды (канон `case-set`),
+  // применимость каждого проверяется арностью ниже — «unknown flag» не объяснил бы, что флаг
+  // существует, но принадлежит другой подкоманде.
+  "source-package": {
+    ...jsonFlag,
+    "--design-system": { value: true, key: "designSystem" },
+    "--file-key": { value: true, key: "fileKey" },
+    "--component": { value: true, key: "component" },
+    "--out": { value: true, key: "out" },
+    "--limit": {
+      value: true,
+      key: "limit",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 1 || number > 100) invalid("--limit must be an integer from 1 to 100");
+        return number;
+      },
+    },
+    // `--nodes a,b` — подмножество узлов пакета для скелета. Список, а не повторяемый флаг:
+    // узлы называют одну выборку, и запись через запятую короче четырёх `--node`.
+    "--nodes": {
+      value: true,
+      key: "nodes",
+      parse(value) {
+        const ids = value.split(",").map((id) => id.trim()).filter((id) => id.length > 0);
+        if (ids.length === 0) invalid("--nodes must list at least one nodeId (comma-separated)");
+        if (ids.length > 256) invalid("--nodes lists more than 256 nodeIds");
+        return ids;
+      },
+    },
+  },
   accept: {
     ...jsonFlag,
     // §W3: у рана карты overlay нет — она живёт в манифесте набора. Флаг объявлен только затем,
@@ -485,6 +516,8 @@ const ranges = Object.freeze({
   "migration-commit": [0, 2],
   // `case-set put <componentId> <manifest.json>` (3) | `case-set get|coverage <caseSetId>` (2).
   "case-set": [2, 3],
+  // §W8: `source-package list` (1) | `upload <manifest.json>` / `show|skeleton <packageId>` (2).
+  "source-package": [1, 2],
   // 0 — каталожный sweep `audit --design-system`, 1 — подкоманда `audit reuse`.
   audit: [0, 1],
 });
@@ -579,6 +612,47 @@ export function parseArgs(argv) {
     // §W3: карта overlay — часть **манифеста**; читающим подкомандам её вносить некуда.
     if (flags.overlay !== undefined && subcommand !== "put" && subcommand !== "validate") {
       invalid("case-set --overlay applies to put and validate only: candidateOverlay is a field of the manifest being published");
+    }
+  }
+  // §W8: `source-package` — четыре подкоманды с общим набором флагов. Применимость флага и форма
+  // идентификатора проверяются до сети: `show <мусор>` иначе стоил бы round-trip'а ради 404, а
+  // 404 «пакет не найден» на строке, которая пакетом быть не может, — диагностика, вводящая в
+  // заблуждение.
+  if (command === "source-package") {
+    const [subcommand, second] = positionals;
+    if (!["upload", "list", "show", "skeleton"].includes(subcommand)) {
+      invalid("source-package requires a subcommand: upload | list | show | skeleton");
+    }
+    const only = (allowed, form) => {
+      for (const [key, flag] of Object.entries({ designSystem: "--design-system", fileKey: "--file-key", component: "--component", nodes: "--nodes", out: "--out", limit: "--limit" })) {
+        if (flags[key] !== undefined && !allowed.includes(key)) invalid(`source-package ${subcommand} has no ${flag} (usage: ${form})`);
+      }
+    };
+    if (subcommand === "upload") {
+      if (positionals.length !== 2) invalid("usage: source-package upload <manifest.json> [--design-system <id>]");
+      only(["designSystem"], "source-package upload <manifest.json> [--design-system <id>]");
+    } else if (subcommand === "list") {
+      if (positionals.length !== 1) invalid("usage: source-package list [--design-system <id>] [--file-key <key>] [--limit N]");
+      only(["designSystem", "fileKey", "limit"], "source-package list [--design-system <id>] [--file-key <key>] [--limit N]");
+      // Серверная ручка требует `designSystem`: пакеты принадлежат каталогу, сквозного списка нет.
+      if (flags.designSystem === undefined && process.env.EASYUI_DESIGN_SYSTEM === undefined) {
+        invalid("source-package list requires --design-system <id> (or EASYUI_DESIGN_SYSTEM): packages belong to a design system");
+      }
+      if (flags.designSystem === undefined) flags.designSystem = process.env.EASYUI_DESIGN_SYSTEM;
+    } else {
+      if (positionals.length !== 2) invalid(`usage: source-package ${subcommand} <packageId>${subcommand === "skeleton" ? " --component <componentId> [--nodes a,b] [--out file.json]" : ""}`);
+      if (!SOURCE_PACKAGE_ID_PATTERN.test(second)) invalid(`source-package ${subcommand} takes a package id (fsp_<64 hex>), got: ${second}`);
+      if (subcommand === "show") only([], "source-package show <packageId>");
+      else {
+        only(["component", "nodes", "out"], "source-package skeleton <packageId> --component <componentId> [--nodes a,b] [--out file.json]");
+        if (flags.component === undefined) invalid("source-package skeleton requires --component <componentId>: the skeleton is a case-set manifest, and a manifest names its component");
+        // W6b, правило файлов: расширение решает формат, и проверяется оно **до** сети. Скелет —
+        // машинный артефакт (его отдают в `case-set put`), поэтому текстовой половины у него нет:
+        // `.txt` отвергается по имени, а не молча пишется файлом, который никуда не отправить.
+        if (flags.out !== undefined && receiptFileFormat(flags.out, "source-package skeleton --out") !== "json") {
+          invalid(`source-package skeleton --out writes the draft case-set manifest: name it .json, not .txt (${flags.out})`);
+        }
+      }
     }
   }
   // §W3: `accept --overlay` не существует по построению — `POST /acceptance-runs` карты не
@@ -4389,6 +4463,290 @@ async function runMigrationCommit(args, flags) {
   await reportMigrationCommit(await pollMigrationCommit(created, { deadlineMs }), flags, "start");
 }
 
+// ───────────────────── Figma Source Package (§W8) ─────────────────────
+
+/**
+ * Потолки манифеста пакета — те же числа, что публикует сервер (`server/figma/sourcePackage.ts`).
+ * Локальные значения нужны, чтобы отказ формы случился **до** сети даже там, где capabilities
+ * прочитать не удалось: пакет на 300 экспортов — это мегабайты, отправленные ради 422.
+ */
+export const SOURCE_PACKAGE_LIMITS = Object.freeze({ maxExports: 256, maxNodes: 1024, maxRefs: 1024, maxNotes: 256 });
+
+/** Потолки этого сервера: сборка могла поднять `limits.sourcePackageMaxExports` (или опустить). */
+export function sourcePackageLimits(capabilities) {
+  const limits = capabilities?.limits ?? {};
+  const number = (value, fallback) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
+  return { ...SOURCE_PACKAGE_LIMITS, maxExports: number(limits.sourcePackageMaxExports, SOURCE_PACKAGE_LIMITS.maxExports) };
+}
+
+const SOURCE_PACKAGE_MISSING_ROLES = Object.freeze([
+  "exact-reference", "instance-override", "runtime-leaf", "raw-reference", "text-run", "other",
+]);
+const SOURCE_PACKAGE_NODE_KINDS = Object.freeze(["component", "componentSet", "instance", "frame", "text", "vector", "other"]);
+export const SOURCE_PACKAGE_ID_PATTERN = /^fsp_[0-9a-f]{64}$/;
+
+/**
+ * Структурная проверка манифеста пакета **до** сети — зеркало `sourcePackageManifestSchema` +
+ * `validateSourcePackage` в той их части, которую клиент может проверить сам (форма, потолки,
+ * замкнутость ссылок на `nodes[]`). Байтовые инварианты (SHA/dims против реестра ассетов,
+ * существование `assetId`, владение дизайн-системой) остаются за сервером: их клиенту не из чего
+ * вывести, и притворяться, что он их проверил, было бы враньём.
+ *
+ * Возвращает список строк-претензий; пустой список не обещает 201, он обещает лишь, что запрос
+ * стоит отправлять.
+ */
+export function sourcePackageManifestIssues(manifest, limits = SOURCE_PACKAGE_LIMITS) {
+  const issues = [];
+  if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
+    return ["manifest must be a JSON object"];
+  }
+  const known = new Set(["designSystem", "fileKey", "sourceRevision", "nodes", "exports",
+    "instanceProperties", "textRuns", "effects", "usageContexts", "missing", "anomalies"]);
+  for (const key of Object.keys(manifest)) if (!known.has(key)) issues.push(`unknown field: ${key}`);
+  const text = (value, field, max) => {
+    if (typeof value !== "string" || value.length === 0) { issues.push(`${field} is required (non-empty string)`); return false; }
+    if (value.length > max) { issues.push(`${field} is longer than ${max} characters`); return false; }
+    return true;
+  };
+  text(manifest.designSystem, "designSystem", 64);
+  if (text(manifest.fileKey, "fileKey", 128) && !/^[A-Za-z0-9_-]+$/.test(manifest.fileKey)) {
+    issues.push("fileKey must be url-safe ([A-Za-z0-9_-])");
+  }
+  text(manifest.sourceRevision, "sourceRevision", 128);
+
+  const nodes = manifest.nodes;
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    issues.push("nodes[] is required and must list at least one node");
+    return issues;
+  }
+  if (nodes.length > limits.maxNodes) issues.push(`nodes[] has ${nodes.length} entries; this server allows ${limits.maxNodes}`);
+  const declared = new Set();
+  const componentKeys = new Set();
+  const isNodeId = (value) => typeof value === "string" && value.length > 0 && value.length <= 64 && /^[A-Za-z0-9:._-]+$/.test(value);
+  nodes.forEach((node, index) => {
+    if (node === null || typeof node !== "object" || Array.isArray(node)) { issues.push(`nodes[${index}] must be an object`); return; }
+    if (!isNodeId(node.nodeId)) { issues.push(`nodes[${index}].nodeId must be a safe id ([A-Za-z0-9:._-], 1..64)`); return; }
+    if (declared.has(node.nodeId)) issues.push(`nodes[${index}].nodeId is declared twice: ${node.nodeId}`);
+    declared.add(node.nodeId);
+    if (node.componentKey !== undefined) {
+      if (typeof node.componentKey !== "string" || !/^[A-Za-z0-9:._-]{1,128}$/.test(node.componentKey)) {
+        issues.push(`nodes[${index}].componentKey must be a safe key ([A-Za-z0-9:._-], 1..128)`);
+      } else if (componentKeys.has(node.componentKey)) {
+        issues.push(`nodes[${index}].componentKey is declared twice: ${node.componentKey}`);
+      } else componentKeys.add(node.componentKey);
+    }
+    if (node.role !== undefined && (typeof node.role !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(node.role))) {
+      issues.push(`nodes[${index}].role must be a slug ([a-z0-9][a-z0-9._-]*, 1..64)`);
+    }
+    if (node.kind !== undefined && !SOURCE_PACKAGE_NODE_KINDS.includes(node.kind)) {
+      issues.push(`nodes[${index}].kind must be one of: ${SOURCE_PACKAGE_NODE_KINDS.join(", ")}`);
+    }
+  });
+
+  const exports = manifest.exports ?? [];
+  if (!Array.isArray(exports)) issues.push("exports must be an array");
+  else {
+    if (exports.length > limits.maxExports) {
+      issues.push(`exports[] has ${exports.length} entries; this server allows ${limits.maxExports} (limits.sourcePackageMaxExports)`);
+    }
+    const exported = new Set();
+    exports.forEach((entry, index) => {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) { issues.push(`exports[${index}] must be an object`); return; }
+      if (!isNodeId(entry.nodeId)) issues.push(`exports[${index}].nodeId must be a safe id`);
+      else if (!declared.has(entry.nodeId)) issues.push(`exports[${index}].nodeId is not declared in nodes[]: ${entry.nodeId}`);
+      else if (exported.has(entry.nodeId)) issues.push(`exports[${index}].nodeId is exported twice: ${entry.nodeId}`);
+      else exported.add(entry.nodeId);
+      if (typeof entry.assetId !== "string" || !/^asset_[0-9a-f]{64}$/.test(entry.assetId)) {
+        issues.push(`exports[${index}].assetId must be an asset id (asset_<64 hex>); upload the PNG with POST /api/assets first`);
+      }
+      if (typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)) issues.push(`exports[${index}].sha256 must be a sha256 hex digest`);
+      for (const side of ["width", "height"]) {
+        const value = entry[side];
+        if (!Number.isInteger(value) || value < 1 || value > 16384) issues.push(`exports[${index}].${side} must be an integer from 1 to 16384`);
+      }
+      if (entry.scale !== undefined && ![1, 2, 3].includes(entry.scale)) issues.push(`exports[${index}].scale must be 1, 2 or 3`);
+    });
+  }
+
+  // Ссылочные секции: любой упомянутый узел обязан быть объявлен — тот же инвариант, что сервер
+  // проверяет в `validateSourcePackage`, и ровно тот, из-за которого пакет вообще имеет смысл.
+  for (const field of ["instanceProperties", "textRuns", "effects", "usageContexts"]) {
+    const rows = manifest[field];
+    if (rows === undefined) continue;
+    if (!Array.isArray(rows)) { issues.push(`${field} must be an array`); continue; }
+    if (rows.length > limits.maxRefs) issues.push(`${field}[] has ${rows.length} entries; the server allows ${limits.maxRefs}`);
+    rows.forEach((entry, index) => {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) { issues.push(`${field}[${index}] must be an object`); return; }
+      if (!isNodeId(entry.nodeId)) issues.push(`${field}[${index}].nodeId must be a safe id`);
+      else if (!declared.has(entry.nodeId)) issues.push(`${field}[${index}].nodeId is not declared in nodes[]: ${entry.nodeId}`);
+    });
+  }
+  for (const field of ["missing", "anomalies"]) {
+    const rows = manifest[field];
+    if (rows === undefined) continue;
+    if (!Array.isArray(rows)) { issues.push(`${field} must be an array`); continue; }
+    if (rows.length > limits.maxNotes) issues.push(`${field}[] has ${rows.length} entries; the server allows ${limits.maxNotes}`);
+    rows.forEach((entry, index) => {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) { issues.push(`${field}[${index}] must be an object`); return; }
+      if (entry.nodeId !== undefined) {
+        if (!isNodeId(entry.nodeId)) issues.push(`${field}[${index}].nodeId must be a safe id`);
+        else if (!declared.has(entry.nodeId)) issues.push(`${field}[${index}].nodeId is not declared in nodes[]: ${entry.nodeId}`);
+      }
+      if (field === "missing") {
+        if (!SOURCE_PACKAGE_MISSING_ROLES.includes(entry.role)) issues.push(`missing[${index}].role must be one of: ${SOURCE_PACKAGE_MISSING_ROLES.join(", ")}`);
+        if (entry.componentKey !== undefined && !componentKeys.has(entry.componentKey)) {
+          issues.push(`missing[${index}].componentKey is not declared in nodes[]: ${entry.componentKey}`);
+        }
+      } else if (typeof entry.code !== "string" || entry.code.length === 0) issues.push(`anomalies[${index}].code is required`);
+    });
+  }
+  return issues;
+}
+
+/**
+ * Совместимость со старым сервером: набор `/api/figma-source-packages` появился волной W8, и на
+ * образе до неё (или с `EASYUI_SOURCE_PACKAGE_DISABLED=1`) диспетчер отвечает общим `404 not_found`
+ * — без предметного кода. Это не «пакет не найден», и печатать так было бы враньём: отказ обязан
+ * называть причину и действие. Предметные 404 (`source_package_not_found`) уходят наверх как есть.
+ */
+function sourcePackageRouteMissing(response) {
+  return response.status === 404 && (errorCode(response) === undefined || errorCode(response) === "not_found");
+}
+
+const sourcePackageAbsent = (step) => new CliError(
+  `${step}: server has no figma-source-packages (deploy newer server); this build predates plan 2026-08-07 §W8 or runs with EASYUI_SOURCE_PACKAGE_DISABLED=1`,
+);
+
+/** Общий вход всех подкоманд: 404 набора переводится в объяснимый отказ, остальное — как обычно. */
+async function sourcePackageCall(step, method, path, body) {
+  const response = await call(method, path, body);
+  if (sourcePackageRouteMissing(response)) throw sourcePackageAbsent(step);
+  return requireOk(step, response, method === "POST" && path === "/figma-source-packages" ? [200, 201] : [200]);
+}
+
+async function runSourcePackageUpload(args, flags) {
+  const [, manifestPath] = args;
+  const manifest = await readJsonArgument(manifestPath, "source package manifest");
+  // `--design-system` **дополняет** манифест, но не переписывает его: пакет, у которого поле уже
+  // стоит, и флаг, называющий другую систему, — это два разных намерения, и молчаливый выбор
+  // одного из них стоил бы пакета, приписанного чужому каталогу.
+  if (flags.designSystem !== undefined && manifest !== null && typeof manifest === "object" && !Array.isArray(manifest)) {
+    if (manifest.designSystem === undefined) manifest.designSystem = flags.designSystem;
+    else if (manifest.designSystem !== flags.designSystem) {
+      throw new CliError(`--design-system ${flags.designSystem} contradicts the manifest (designSystem: ${JSON.stringify(manifest.designSystem)}); drop the flag or fix the file`);
+    }
+  }
+  // Порядок как у `case-set validate`: сначала структура по локальным потолкам — при битой форме
+  // сети не касаемся вовсе, — и только потом уточнение потолков у сервера (сборка могла поднять
+  // `limits.sourcePackageMaxExports` или опустить). Недоступность capabilities не отменяет отказ:
+  // локальные дефолты — тот же контракт, просто без уточнения этой сборки.
+  const refuse = (issues) => {
+    if (issues.length === 0) return;
+    throw new CliError([`source-package upload refused locally (${issues.length} issue(s)); the manifest was not sent to the server:`,
+      ...issues.map((issue) => `  ${issue}`)].join("\n"));
+  };
+  refuse(sourcePackageManifestIssues(manifest, SOURCE_PACKAGE_LIMITS));
+  let capabilities = null;
+  try {
+    const response = await call("GET", "/capabilities");
+    if (response.status === 200) capabilities = response.json;
+  } catch { capabilities = null; }
+  refuse(sourcePackageManifestIssues(manifest, sourcePackageLimits(capabilities)));
+  const result = await sourcePackageCall("source-package upload", "POST", "/figma-source-packages", { manifest });
+  const deduplicated = result.deduplicated === true;
+  const missing = (manifest.missing ?? []).length;
+  await cache.receipt("source-package", result.packageId, {
+    packageId: result.packageId, designSystem: result.designSystem, fileKey: result.fileKey,
+    sourceRevision: result.sourceRevision, exportCount: result.exportCount, deduplicated,
+  });
+  report([
+    `source package ${result.packageId} for ${result.designSystem} (${result.fileKey} @ ${result.sourceRevision}):`
+    + ` ${result.exportCount} exports, ${manifest.nodes.length} nodes${deduplicated ? " (deduplicated: an identical manifest was already uploaded)" : ""}`,
+    ...(missing === 0 ? [] : [`missing: ${missing} declared gap(s) in the source — acceptance of those nodes compares against an approximate reference`]),
+  ], { command: "source-package upload", deduplicated, ...result }, {
+    command: "source-package upload", ok: true,
+    items: manifest.exports ?? [],
+    warnings: (manifest.missing ?? []).map((entry) => `missing ${entry.role}: ${entry.nodeId ?? entry.componentKey ?? "?"}${entry.note ? ` (${entry.note})` : ""}`),
+    nextActions: [`driver.mjs source-package skeleton ${result.packageId} --component <componentId>`],
+    summary: { packageId: result.packageId, deduplicated, exports: result.exportCount, missing },
+  });
+}
+
+async function runSourcePackageList(flags) {
+  const query = new URLSearchParams({ designSystem: flags.designSystem });
+  if (flags.fileKey !== undefined) query.set("fileKey", flags.fileKey);
+  if (flags.limit !== undefined) query.set("limit", String(flags.limit));
+  const result = await sourcePackageCall("source-package list", "GET", `/figma-source-packages?${query.toString()}`);
+  const packages = result.packages ?? [];
+  report([
+    `source packages in ${result.designSystem}: ${packages.length}`,
+    ...packages.map((row) => `  ${row.packageId} ${row.fileKey} @ ${row.sourceRevision}: ${row.exportCount} exports, by ${row.createdBy} on ${row.createdAt}`),
+  ], { command: "source-package list", ...result }, {
+    command: "source-package list", ok: true, items: packages,
+    // Список не тащит манифесты (сервер их снимает), поэтому `exports`/`missing` этого документа
+    // не знает: честный `null` вместо суммы, которую пришлось бы выдумать из `exportCount`.
+    summary: { packageId: null, deduplicated: null, exports: null, missing: null, packages: packages.length },
+  });
+}
+
+async function runSourcePackageShow(args) {
+  const [, packageId] = args;
+  const result = await sourcePackageCall("source-package show", "GET", `/figma-source-packages/${encodeURIComponent(packageId)}`);
+  const manifest = result.manifest ?? {};
+  const missing = (manifest.missing ?? []).length;
+  report([
+    `source package ${result.packageId} for ${result.designSystem} (${result.fileKey} @ ${result.sourceRevision}):`
+    + ` ${result.exportCount} exports, ${(manifest.nodes ?? []).length} nodes, by ${result.createdBy} on ${result.createdAt}`,
+    ...(manifest.missing ?? []).map((entry) => `  missing ${entry.role}: ${entry.nodeId ?? entry.componentKey ?? "?"}${entry.note ? ` (${entry.note})` : ""}`),
+  ], { command: "source-package show", ...result }, {
+    command: "source-package show", ok: true, items: manifest.exports ?? [],
+    // `deduplicated` — свойство загрузки, а не пакета: у чтения его нет по построению.
+    summary: { packageId: result.packageId, deduplicated: null, exports: result.exportCount, missing },
+  });
+}
+
+async function runSourcePackageSkeleton(args, flags) {
+  const [, packageId] = args;
+  const result = await sourcePackageCall("source-package skeleton", "POST",
+    `/figma-source-packages/${encodeURIComponent(packageId)}/case-set-skeleton`, {
+      componentId: flags.component,
+      ...(flags.nodes === undefined ? {} : { nodeIds: flags.nodes }),
+    });
+  const manifest = result.manifest ?? {};
+  const cases = (manifest.cases ?? []).length;
+  if (flags.out !== undefined) {
+    await mkdir(dirname(flags.out), { recursive: true });
+    await writeFile(flags.out, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  report([
+    `case-set skeleton for ${result.componentId} from ${result.packageId}: ${cases} case(s), saved: ${result.saved === true}`,
+    `capture: ${manifest.capture?.viewport?.width ?? "?"}x${manifest.capture?.viewport?.height ?? "?"}`,
+    ...(manifest.cases ?? []).map((entry) => `  ${entry.id}: reference ${entry.referenceAssetId} ${entry.expectedSurfaces?.referenceExport?.width ?? "?"}x${entry.expectedSurfaces?.referenceExport?.height ?? "?"} css px`),
+    ...(flags.out === undefined
+      ? ["draft only: props are empty and expectedGeometry is not invented — fill them in before 'case-set put'"]
+      : [`wrote ${flags.out}`]),
+  ], { command: "source-package skeleton", path: flags.out ?? null, ...result }, {
+    command: "source-package skeleton", ok: true, items: manifest.cases ?? [],
+    artifacts: flags.out === undefined ? [] : [flags.out],
+    nextActions: [`driver.mjs case-set put ${result.componentId} ${flags.out ?? "<manifest.json>"}`],
+    // Скелет ничего не загружает и о дырах источника не отчитывается: `missing` принадлежит
+    // пакету, и его печатает `show`.
+    summary: { packageId: result.packageId, deduplicated: null, exports: cases, missing: null, componentId: result.componentId },
+  });
+}
+
+/**
+ * `source-package` (§W8) — пакет исходников Figma как единица переноса. Подкоманда в первом
+ * позиционале (канон `catalog list|search|get`, `case-set put|get`).
+ */
+async function runSourcePackage(args, flags) {
+  const [subcommand] = args;
+  if (subcommand === "upload") return runSourcePackageUpload(args, flags);
+  if (subcommand === "list") return runSourcePackageList(flags);
+  if (subcommand === "show") return runSourcePackageShow(args);
+  return runSourcePackageSkeleton(args, flags);
+}
+
 /**
  * KPI-инструмент RFC §9: сколько публичных версий стоил каждый компонент. Читает
  * `GET /api/components/:id/versions` и сводит статусы; `versionsPerComponent` — та самая
@@ -4753,6 +5111,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "impact") await runImpact(args, flags);
   else if (cmd === "migration-commit") await runMigrationCommit(args, flags);
   else if (cmd === "case-set") await runCaseSet(args, flags);
+  else if (cmd === "source-package") await runSourcePackage(args, flags);
   else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : flags.versions ? runVersionsAudit(flags) : runAudit(flags));
 }
 

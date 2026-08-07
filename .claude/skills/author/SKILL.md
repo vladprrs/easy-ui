@@ -558,6 +558,39 @@ node driver.mjs accept pay-payment-card --case-set cset_…   # ран по на
 - **Слоты в отпечатке.** `slotBindings` входят во **frame**-слой отпечатка случая (`CASE_FINGERPRINT_ALGO_VERSION` 6 → 7): смена версии, порядка или props ребёнка — это пересъёмка, а не пересчёт. Бесслотовые случаи хешируются побайтово как раньше, но общий bump алгоритма один раз инвалидирует накопленный **вердиктный** reuse на всём инстансе.
 - **`content-hug` объявляется вместе с `expectedGeometry`.** Корень канвы берётся из `expectedGeometry`, а без него — из `layoutBounds`, измеренного **в этом же ране**. Случай, кадр которого приехал из кэша (re-diff), свежих `layoutBounds` не приносит, и гейт честно отдаёт `indeterminate` с `reason: "reference_canvas_unresolved"`. Набор без `expectedGeometry` пройдёт на холодном кэше и упадёт на первом повторе; PUT предупреждает об этом в `warnings[]`, но не отказывает.
 
+### Пакет исходников Figma: `source-package`
+
+Половина потерь миграции — про доступ к источнику: какой именно мастер, какие override'ы инстанса, каких экспортов вовсе нет. Пакет делает источник **проверяемым**: манифест несёт узлы (`nodeId` + `componentKey` + семантическая роль), экспорты **ссылками на ассеты реестра** (байтов в пакете нет никогда — PNG уезжают обычным `POST /api/assets`) и честные `missing[]`/`anomalies[]`.
+
+```bash
+node driver.mjs source-package upload package.json --design-system yandex-pay   # → packageId + deduplicated
+node driver.mjs source-package list --design-system yandex-pay --file-key PayAppCore
+node driver.mjs source-package show fsp_…                                       # пакет + манифест
+node driver.mjs source-package skeleton fsp_… --component pay-payment-card \
+  --nodes 54863:9518,54863:9537 --out matrix.json                               # черновик case-set
+```
+
+```jsonc
+{
+  "designSystem": "yandex-pay", "fileKey": "PayAppCore", "sourceRevision": "2026-08-07-rev12",
+  "nodes": [
+    { "nodeId": "54863:9518", "name": "PaymentCard", "componentKey": "key-payment-card", "role": "payment-card", "kind": "componentSet" }
+  ],
+  "exports": [
+    { "nodeId": "54863:9518", "assetId": "asset_<sha256>", "width": 280, "height": 192, "sha256": "<sha256>", "scale": 2 }
+  ],
+  "missing": [{ "role": "exact-reference", "nodeId": "54863:9537", "note": "pressed state is not exported" }]
+}
+```
+
+- **Адрес пакета — контентный** (`fsp_<sha256>` канонизованного манифеста): повторная загрузка того же манифеста идемпотентна и отвечает `deduplicated: true` (HTTP 200 вместо 201). Смена `sourceRevision` — это **новый** пакет, а не правка старого.
+- **Форма проверяется до сети.** Обязательные поля, url-safe `fileKey`, потолок `exports[] ≤ limits.sourcePackageMaxExports` (256) и замкнутость ссылок (любой `nodeId`, упомянутый в `exports`/`missing`/`textRuns`/…, обязан быть объявлен в `nodes[]`) — локально; байтовые инварианты (существование `assetId`, совпадение `sha256` и габаритов с реестром) проверяет сервер: `422 source_package_export_sha_mismatch` / `source_package_export_dimension_mismatch` / `asset_not_found`.
+- `--design-system` **дополняет** манифест, но не переписывает: флаг, называющий другую систему, чем поле в файле, — отказ, а не тихий выбор.
+- **`skeleton` — черновик, он ничего не сохраняет** (`saved: false`). Один случай на экспорт: `referenceAssetId` — экспортированный ассет, `expectedSurfaces.referenceExport` — его габариты, **пересчитанные из `scale` в CSS px**. `props` остаются пустыми, а `expectedGeometry` не выдумывается — пакет знает только свои экспорты. `--out file.json` пишет черновик готовым входом для `case-set put` (только `.json`: это машинный артефакт).
+- **Связка с компонентом — `figma.sourcePackageId`, metadata-only.** Ссылка не входит **ни в один** отпечаток приёмки; она лишь говорит «этот компонент собран из этого пакета». Пакет с `missing[{role:"exact-reference"}]` на узле компонента даёт префлайт-**warning** (`missing_exact_reference`) до сборки набора, а не проваленное сравнение после.
+- **Reuse search.** `componentKey` и роли из пакета едут сигналом ранжирования в поиск кандидатов — они поднимают компонент из того же мастера Figma, но гейтом переиспользования не являются.
+- Набора роутов может не быть (сборка до волны W8 или `EASYUI_SOURCE_PACKAGE_DISABLED=1`) — команда отвечает `server has no figma-source-packages (deploy newer server)`, а не «пакет не найден».
+
 ### Клиентский кэш ответов: `--cache-dir`
 
 Глобальные флаги (работают с любым вербом): `--cache-dir <dir>` (или `EASYUI_CACHE_DIR`) включает локальный кэш read-only ответов, `--cache-refresh` (или `EASYUI_CACHE_REFRESH=1`) форсирует промах и перезапись записи с `refreshReason`.
@@ -781,8 +814,9 @@ node driver.mjs accept pay-payment-card --case-set cset_… --summary-json | jq 
 | `geometry` | `verdict` (`clean\|warn\|error`), `divergingSurfaces`, `gaps` |
 | `audit` | `exitCode`, `deprecatedInUse`, `unused` |
 | `migration-commit` | `commitId`, `phase`, `phasesDone[]`, `regressionMode` |
+| `source-package` | `packageId`, `deduplicated`, `exports`, `missing` |
 
-Честные `null` в этих полях — не пробел, а отсутствие факта, и подставлять вместо них догадку драйвер не будет: `accept-status` не знает ревизию кандидата (вид рана её не содержит, а голова компонента могла уйти вперёд), `accept-status --case` не знает счётчиков рана (читался один случай), а `geometry` не считает пер-поверхностные вердикты — `divergingSurfaces` там всегда `null`, потому что поверхности (`root`/`layoutUnion`/`paint`/`referenceExport`) живут в приёмке случая, и `[]` читалось бы как «поверхности сошлись».
+Честные `null` в этих полях — не пробел, а отсутствие факта, и подставлять вместо них догадку драйвер не будет: `accept-status` не знает ревизию кандидата (вид рана её не содержит, а голова компонента могла уйти вперёд), `accept-status --case` не знает счётчиков рана (читался один случай), а `geometry` не считает пер-поверхностные вердикты — `divergingSurfaces` там всегда `null`, потому что поверхности (`root`/`layoutUnion`/`paint`/`referenceExport`) живут в приёмке случая, и `[]` читалось бы как «поверхности сошлись». По той же причине у `source-package list` три поля из четырёх — `null` (список манифестов не тащит), а `deduplicated` есть только у `upload`: это свойство загрузки, а не пакета.
 
 **Правило файлов: `.json` — всегда JSON, текст — `.txt`.** Расширение — единственное, что видно до открытия файла, поэтому формат выводится из него, а незнакомое расширение отвергается **до** работы (`--receipt r.receipt` — ошибка аргументов, а не потерянная съёмка). У `migration-commit --receipt` оба формата законны: `.json` — квитанция сервера как есть, `.txt` — те же строки, что напечатаны человеку; у `snap`/`preview --receipt` — только `.json` (это документ capture receipt).
 

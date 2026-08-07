@@ -439,4 +439,26 @@ declare module "*/author/driver.mjs" {
     overlayRefs?: ReadonlySet<string>,
   ): string[];
   export function caseSetIdOfManifest(manifest: unknown): string;
+  /**
+   * Figma Source Package (план 2026-08-07 §W8). Потолки манифеста, известные драйверу офлайн:
+   * `maxExports` уточняется из `limits.sourcePackageMaxExports` этого сервера, остальные —
+   * константы схемы (`server/figma/sourcePackage.ts`).
+   */
+  export interface DriverSourcePackageLimits {
+    maxExports: number;
+    maxNodes: number;
+    /** Потолок ссылочных секций (`instanceProperties`/`textRuns`/`effects`/`usageContexts`). */
+    maxRefs: number;
+    /** Потолок заметок источника (`missing`/`anomalies`). */
+    maxNotes: number;
+  }
+  export const SOURCE_PACKAGE_LIMITS: Readonly<DriverSourcePackageLimits>;
+  export const SOURCE_PACKAGE_ID_PATTERN: RegExp;
+  export function sourcePackageLimits(capabilities: unknown): DriverSourcePackageLimits;
+  /**
+   * Локальная проверка формы манифеста пакета до сети: обязательные поля, потолки и замкнутость
+   * ссылок на `nodes[]`. Байтовые инварианты (SHA/dims против реестра ассетов, существование
+   * `assetId`, владение дизайн-системой) остаются серверными и здесь не проверяются.
+   */
+  export function sourcePackageManifestIssues(manifest: unknown, limits?: DriverSourcePackageLimits): string[];
 }
