@@ -264,7 +264,11 @@ test("layout, который продолжает двигаться, ⇒ layout
   expect(readiness.metrics.layout!.elementKey).not.toBeNull();
 });
 
-test("строгость приходит политикой профиля: под default-v1 те же фикстуры кодов не дают", async ({ request }) => {
+test("строгость приходит политикой профиля: после W2 default-v1 несёт readiness v3 и ловит те же коды", async ({ request }) => {
+  // До волны 2026-08-07 профиль default-v1 ехал на readiness v1 (layout не меряется, строгих
+  // кодов нет) и этот тест доказывал контраст с pixel-strict-v1. W2 (§1.5 плана) перевела ОБА
+  // профиля на v3 (strict + barrier) через ACCEPTANCE_POLICIES — контраст исчез by design,
+  // доволновая мягкость достижима только EASYUI_RESOURCE_BARRIER_DISABLED (покрыто юнитами W2).
   test.setTimeout(600_000);
   await ensureDesignSystem(request, LAYOUT_DS);
   await ensureComponent(request, LAYOUT_DS, LAYOUT_ID, "StrictLayout", LAYOUT_SOURCE);
@@ -273,7 +277,8 @@ test("строгость приходит политикой профиля: п�
   const readiness = readinessOf(cases[0]!);
 
   expect(readiness.metrics.policyHash).toBe(readiness.metrics.expectedPolicyHash);
-  // v1 не меряет layout повторно и не заводит строгих кодов — поведение доволновое.
-  expect(readiness.metrics.layout).toBeNull();
-  expect(codesOf(cases[0]!)).not.toContain("layout_unstable");
+  expect(readiness.status).toBe("fail");
+  expect(codesOf(cases[0]!)).toContain("layout_unstable");
+  expect(readiness.metrics.layout).toMatchObject({ stable: false });
+  expect(readiness.metrics.layout!.attempts).toBeLessThanOrEqual(3);
 });
