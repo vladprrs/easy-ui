@@ -15,6 +15,7 @@ import { getDesignSystemVersion, getLatestDesignSystemContent } from "../designS
 import type { ThemeContent } from "../designSystemsMeta";
 import { ApiError } from "../http";
 import { ensureDraftCandidate, getCandidateForRev, type DraftCandidate } from "../components/validate";
+import { runtimeDefaultsDisabled } from "../components/runtimeDefaults";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { componentManifestHashOf, docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
@@ -350,7 +351,7 @@ export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult 
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; runtimeDefaultsDisabled?: true; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
@@ -1245,6 +1246,11 @@ export class ScreenshotService {
       // R4: манифест шрифтов темы — вход правила required-faces (T-M10). Пустой манифест уезжает
       // тоже: «тема есть, шрифтов в ней нет» и «манифест не приехал» — разные факты.
       if (job.fonts !== undefined) workerJob.bootstrap.fonts = job.fonts;
+      // W9 (§1.6): аварийный kill-switch runtime-дефолтов доезжает до страницы полем bootstrap'а —
+      // другого канала у серверного env к браузеру нет. Поле кладётся **только** при поднятом
+      // флаге: штатный bootstrap обязан остаться байт-в-байт прежним (в отпечатки оно не входит,
+      // потому и обязано отсутствовать, а не ехать как `false`).
+      if (runtimeDefaultsDisabled()) workerJob.bootstrap.runtimeDefaultsDisabled = true;
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
       if (!result.ok) {
         job.status = "error";

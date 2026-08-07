@@ -57,6 +57,7 @@ import {
   groupSuggestion, policyExceptionWarnings, suggestedPolicyEnabled,
   type PolicyExceptionWarning, type SuggestGate, type SuggestedPolicy,
 } from "../acceptance/suggest";
+import { runtimeDefaultsWarnings, type RuntimeDefaultsDisabledWarning } from "../components/runtimeDefaults";
 
 /** Опции §19.1 фидбэка, отклонённые триажем (A2: `manifestAssetId` не поддерживается никогда). */
 const UNSUPPORTED_TOP_LEVEL = ["concurrency", "manifestAssetId"] as const;
@@ -216,6 +217,24 @@ function runWarnings(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orchestr
 }
 
 /**
+ * Предупреждения рана, посчитанные **вне** `runWarnings`, потому что требуют I/O (чтение записи
+ * кандидата) и потому асинхронны. Сегодня их ровно одно — `runtime_defaults_disabled` (§W9).
+ */
+type RunExtraWarning = RuntimeDefaultsDisabledWarning;
+
+/**
+ * Предупреждения волны W9: kill-switch runtime-дефолтов поднят, а семья флаг объявляет ⇒ вердикты
+ * этого рана относятся к рендеру, которого продукт не поставляет. При опущенном флаге (штатный
+ * режим) не делается ни одного обращения к диску — см. `runtimeDefaultsWarnings`.
+ */
+const extraRunWarnings = (
+  dataDir: string,
+  run: AcceptanceRunRow,
+  orchestrator: AcceptanceOrchestrator,
+): Promise<RunExtraWarning[]> =>
+  runtimeDefaultsWarnings(dataDir, run, orchestrator.repo.candidate(run.candidate_id)?.source_hash ?? null);
+
+/**
  * Предложение на группу ремедиаций (W7): у группы, все участники которой предлагают правку одного
  * вида, — одна правка на всех. Считается на чтении из уже сохранённых предложений случаев: группы
  * персистятся терминализацией, предложения живут в гейтах, и склейка не добавляет ни того, ни
@@ -256,7 +275,12 @@ function bySeverity(left: AcceptanceCaseRow, right: AcceptanceCaseRow): number {
   return left.case_id < right.case_id ? -1 : left.case_id > right.case_id ? 1 : 0;
 }
 
-function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orchestrator: AcceptanceOrchestrator): Record<string, unknown> {
+function runView(
+  run: AcceptanceRunRow,
+  cases: AcceptanceCaseRow[],
+  orchestrator: AcceptanceOrchestrator,
+  extraWarnings: RunExtraWarning[] = [],
+): Record<string, unknown> {
   const stored = parseJson(run.progress_json);
   // `remediationGroups` хранятся внутри `progress_json` (там их пишет терминализация), но в ответе
   // это самостоятельный раздел отчёта: смешивать группы причин со счётчиками прогресса нельзя.
@@ -300,7 +324,9 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orchestrator
     // случаев). Пустой массив у ещё не терминализованного рана — не «причин нет», а «отчёт не собран».
     remediationGroups: Array.isArray(remediationGroups) ? groupsWithSuggestions(remediationGroups, cases) : [],
     // W7 (AC §9.3): advisory-предупреждения рана. Пустой массив — «нечего перепроверять».
-    warnings: runWarnings(run, cases, orchestrator),
+    // W9: сюда же приходит `runtime_defaults_disabled` — предупреждение о поднятом аварийном
+    // kill-switch'е, из-за которого приёмка флагнутой семьи недействительна (§1.6).
+    warnings: [...runWarnings(run, cases, orchestrator), ...extraWarnings],
     evidenceManifestHash: run.evidence_manifest_hash,
     createdAt: run.created_at,
     startedAt: run.started_at,
@@ -402,7 +428,12 @@ function summaryRefreshPlan(plan: unknown): string {
  * 3. **Метрики случая не повторяются**: `raw`/`aa` — два числа визуального гейта, всё остальное
  *    (regions, bestOffset, thresholds) берётся точечно через `/cases?case=<id>`.
  */
-function runSummaryView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orchestrator: AcceptanceOrchestrator): Record<string, unknown> {
+function runSummaryView(
+  run: AcceptanceRunRow,
+  cases: AcceptanceCaseRow[],
+  orchestrator: AcceptanceOrchestrator,
+  extraWarnings: RunExtraWarning[] = [],
+): Record<string, unknown> {
   const stored = parseJson(run.progress_json);
   // `eta` в сводке не нужен (ран терминален чаще, чем нет), `remediationGroups` едут отдельным
   // разделом — как и в полном виде.
@@ -438,7 +469,11 @@ function runSummaryView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[], orche
     failedCases: cases.filter(isFailedCase).sort(bySeverity).map(summaryFailedCase),
     remediationGroups: groups,
     // W7: предупреждения — по строке на случай, как и всё остальное в сводке.
-    warnings: runWarnings(run, cases, orchestrator).map((item) => `${item.code}: ${item.caseId} (${item.exceptions.join(", ")})`),
+    warnings: [
+      ...runWarnings(run, cases, orchestrator).map((item) => `${item.code}: ${item.caseId} (${item.exceptions.join(", ")})`),
+      // W9: у kill-switch-предупреждения нет случая — оно про весь ран, поэтому строка иная.
+      ...extraWarnings.map((item) => `${item.code}: ${item.componentId} (${item.candidateId})`),
+    ],
     evidenceUrl: `/api/acceptance-runs/${run.run_id}/evidence`,
   };
 }
@@ -792,7 +827,10 @@ export async function routeAcceptance(
     }
     const run = requireOwnedRun(db, runId, principal, orchestrator);
     const cases = orchestrator.repo.cases(runId);
-    return json(view === "summary" ? runSummaryView(run, cases, orchestrator) : runView(run, cases, orchestrator), 200, noStore);
+    const extra = await extraRunWarnings(dataDir, run, orchestrator);
+    return json(view === "summary"
+      ? runSummaryView(run, cases, orchestrator, extra)
+      : runView(run, cases, orchestrator, extra), 200, noStore);
   }
   if (segments.length === 3 && segments[2] === "cases") {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
@@ -816,7 +854,8 @@ export async function routeAcceptance(
     if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     requireOwnedRun(db, runId, principal, orchestrator);
     const cancelled = orchestrator.cancelQueuedRun(runId);
-    return json(runView(cancelled, orchestrator.repo.cases(runId), orchestrator), 200, noStore);
+    return json(runView(cancelled, orchestrator.repo.cases(runId), orchestrator,
+      await extraRunWarnings(dataDir, cancelled, orchestrator)), 200, noStore);
   }
   throw new ApiError(404, "not_found", "API route not found");
 }

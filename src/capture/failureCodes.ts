@@ -65,7 +65,14 @@ export type CaptureFailureCode =
    * нашего доказательства, а не дефект страницы, и валить им кадр значило бы наказывать компонент
    * за наш cap. `ref` — фактическое число ресурсов.
    */
-  | "resource_manifest_overflow";
+  | "resource_manifest_overflow"
+  /**
+   * Props элемента не сошлись со схемой компонента, объявившего `capabilities.runtimeSchemaDefaults`
+   * (план 2026-08-07 §1.6, §W9). **Всегда `warning`**: рендер состоялся сырыми props, кадр пригоден,
+   * и валить его этим кодом значило бы поменять контракт волны («рендер важнее строгости») на
+   * противоположный. `ref` — имя компонента; `detail` — путь и сообщение первой проблемы.
+   */
+  | "runtime_props_parse_failed";
 
 /**
  * `severity` — не украшение: `warning` означает «зафиксировано, вердикта не меняет» (напр.
@@ -85,6 +92,7 @@ export const CAPTURE_FAILURE_CODES: readonly CaptureFailureCode[] = [
   "renderer_mismatch", "navigation_failed", "runtime_error",
   "surface_mismatch", "dimensions_irreconcilable",
   "resource_barrier_timeout", "resource_decode_failed", "resource_late_after_barrier", "resource_manifest_overflow",
+  "runtime_props_parse_failed",
 ] as const;
 
 export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCode =>
@@ -98,7 +106,7 @@ export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCod
 export interface CaptureCodeOrigin {
   code: CaptureFailureCode;
   emitter: string;
-  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2";
+  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2" | "W9";
 }
 
 export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
@@ -117,6 +125,7 @@ export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
   { code: "resource_decode_failed", emitter: "src/capture/readiness.ts settleResourceBarrier (decode)", wave: "W2" },
   { code: "resource_late_after_barrier", emitter: "src/capture/readiness.ts settleResourceBarrier (manifest re-diff)", wave: "W2" },
   { code: "resource_manifest_overflow", emitter: "src/capture/readiness.ts collectResourceManifest (cap)", wave: "W2" },
+  { code: "runtime_props_parse_failed", emitter: "src/player/easyUiRuntime.tsx (applyRuntimeSchemaDefaults) → src/capture/readiness.ts", wave: "W9" },
 ] as const;
 
 /**

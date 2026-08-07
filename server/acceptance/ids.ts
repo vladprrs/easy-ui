@@ -118,6 +118,27 @@ export const CASE_POLICY_HASH_V0 = "case-policy-v0";
  */
 export const COMPARISON_PAINT_MARGIN_PX = 64;
 
+/**
+ * **История входов сборочного отпечатка — почему W9 его не трогала.**
+ *
+ * Волна runtime schema defaults (план 2026-08-07 §1.6, §W9) вводит опт-ин
+ * `capabilities.runtimeSchemaDefaults`, который меняет то, какие props доезжают до компонента, —
+ * то есть меняет пиксели. Естественным рефлексом было бы добавить его сюда четвёртым входом.
+ * Этого делать **не нужно и нельзя**: capability объявляется в **исходнике** компонента, значит
+ * уже учтён `sourceHash`, значит `buildFingerprint` и производный `candidateId` сдвигаются сами.
+ * Отдельное поле было бы вторым учётом того же факта — и первым в этом файле входом, который
+ * невозможно получить из артефактов сборки (пришлось бы тащить сюда разобранную meta).
+ *
+ * Требование AC §11.2 («default semantics входят в candidate fingerprint») выполнено этим же
+ * путём; дифференциальный тест «добавление флага в исходник сдвигает candidate id» стоит в
+ * `ids.test.ts` и доказывает именно механизм `sourceHash`, а не совпадение чисел.
+ *
+ * Аварийный `EASYUI_RUNTIME_DEFAULTS_DISABLED` в отпечатки не входит **сознательно**
+ * (render-affecting, триаж O-m16): env — не свойство сборки, и хэшировать окружение процесса
+ * значило бы делать отпечатки невоспроизводимыми. Цена названа и оплачена в другом месте —
+ * предупреждением `runtime_defaults_disabled` в `accept-status`
+ * (`server/components/runtimeDefaults.ts`).
+ */
 export interface BuildFingerprintInput {
   sourceHash: string;
   bundleHash: string;

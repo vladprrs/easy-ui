@@ -3,7 +3,8 @@ import type { z } from "zod";
 import type { ComponentOwnership, ComponentScope } from "../../src/designSystems/scope";
 import type { AtomicLevel, ComponentLayout } from "../../src/designSystems/types";
 
-export type ComponentCapabilities = { typedEvents?: true; namedSlots?: true };
+/** `runtimeSchemaDefaults` (§W9): хост применяет Zod-дефолты к props перед рендером. */
+export type ComponentCapabilities = { typedEvents?: true; namedSlots?: true; runtimeSchemaDefaults?: true };
 
 /**
  * Architecture metadata (план 2026-07-27, волна 2 §2.1) — additive и полностью

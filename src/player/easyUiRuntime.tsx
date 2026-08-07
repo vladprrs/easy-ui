@@ -1,6 +1,7 @@
 import { Children, createContext, useContext, useMemo, type ComponentType, type ReactNode } from "react";
 import { useRepeatScope, type BaseComponentProps } from "@json-render/react";
 import type { ComponentDefinition } from "../catalog/definitions";
+import { applyRuntimeSchemaDefaults, runtimeDefaultsDisabled } from "../catalog/runtimeDefaults";
 import type { ElementMetadata } from "../prototype/runtimeSpec";
 import { EUI_KEY_PROP } from "../prototype/runtimeSpec";
 import { EasyUiActionRuntime, type EmitContext, type RawAction } from "./actionRuntime";
@@ -82,12 +83,22 @@ export function wrapCustomComponent(name: string, Component: ComponentType<EasyU
     const repeatScope = useRepeatScope();
     const rawProps = libraryProps.props as Record<string, unknown>;
     const euiKey = typeof rawProps[EUI_KEY_PROP] === "string" ? (rawProps[EUI_KEY_PROP] as string) : undefined;
-    const props = stripEuiProps(rawProps);
+    const stripped = stripEuiProps(rawProps);
 
     const meta = euiKey ? context?.metadata[euiKey] : undefined;
     const on = meta?.on;
     const runtime = context?.runtime ?? null;
     const definition = context?.definitions[name];
+
+    // Runtime schema defaults (§W9): opt-in по компоненту через `capabilities.runtimeSchemaDefaults`.
+    // Компонент без флага не проходит через схему **вовсе** — ни парса, ни аллокации: его рендер
+    // обязан остаться байт-в-байт доволновым, и доказывается это дифференциальным тестом, а не
+    // рассуждением. Kill-switch читается здесь же, на каждом рендере (он аварийный).
+    const props = useMemo(() => (
+      definition?.capabilities?.runtimeSchemaDefaults === true && !runtimeDefaultsDisabled()
+        ? applyRuntimeSchemaDefaults(name, definition.props, stripped)
+        : stripped
+    ), [definition, stripped]);
     const onErrorFromContext = context?.onError;
     const reportError = useMemo(() => onErrorFromContext ?? (() => {}), [onErrorFromContext]);
 

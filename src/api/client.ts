@@ -270,7 +270,7 @@ export interface SerializedComponentDefinition {
   description?: string;
   events: string[];
   eventPayloads?: Record<string, unknown>;
-  capabilities?: { typedEvents?: true; namedSlots?: true };
+  capabilities?: { typedEvents?: true; namedSlots?: true; runtimeSchemaDefaults?: true };
   slots: string[];
   example?: Record<string, unknown>;
   examples?: Record<string, Record<string, unknown>>;
@@ -325,7 +325,7 @@ export interface ComponentPreviewData {
   props: Record<string, unknown>;
   /** `slots`/`capabilities` нужны построителю дерева превью для слот-плейсхолдеров. */
   slots: string[];
-  capabilities?: { typedEvents?: true; namedSlots?: true };
+  capabilities?: { typedEvents?: true; namedSlots?: true; runtimeSchemaDefaults?: true };
 }
 
 // --- Граф использования компонентов (волна 3 §3.1) ---

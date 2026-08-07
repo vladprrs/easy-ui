@@ -3,10 +3,20 @@ import type { ComponentOwnership, ComponentScope } from "../designSystems/scope"
 import { layoutSpacingProps, spaceTokens, type AtomicLevel, type ComponentLayout, type LayoutJsonScalar } from "../designSystems/types";
 import { isJsonScalar, zodObjectShape, zodScalarValues } from "./zodIntrospect";
 
-/** Capabilities a custom definition may opt into. Both require host ABI v2 or newer. */
+/** Capabilities a custom definition may opt into. `typedEvents`/`namedSlots` require host ABI v2+. */
 export type ComponentCapabilities = {
   typedEvents?: true;
   namedSlots?: true;
+  /**
+   * Хост применяет Zod-дефолты схемы к props перед рендером (план 2026-08-07 §1.6, §W9):
+   * `props.safeParse(props)` успешен ⇒ в компонент едет `.data`. Провал парса **не** отменяет
+   * рендер — едут сырые props плюс предупреждение `runtime_props_parse_failed` в receipt.
+   *
+   * ABI не поднимает намеренно: модуль компонента от этого не меняет ни одного импорта, а на
+   * хосте до волны флаг просто инертен (компонент рендерится ровно как раньше, со своими `??`).
+   * Механика — `src/catalog/runtimeDefaults.ts`, процедура перевода — `docs/agent-authoring-policy.md`.
+   */
+  runtimeSchemaDefaults?: true;
 };
 
 /**

@@ -8,7 +8,9 @@ import type { ComponentDefinition } from "../../src/catalog/normalize";
 import { COMPONENT_SCOPES } from "../../src/designSystems/scope";
 
 const atomicLevel=z.enum(["atom","molecule","organism","template","page"]);
-const capabilitiesSchema=z.strictObject({typedEvents:z.literal(true).optional(),namedSlots:z.literal(true).optional()});
+// §W9: `runtimeSchemaDefaults` — третья capability каталога; strict-схемы правятся комплектом
+// (эта — и для definition в дочернем процессе, и для сериализованной meta).
+const capabilitiesSchema=z.strictObject({typedEvents:z.literal(true).optional(),namedSlots:z.literal(true).optional(),runtimeSchemaDefaults:z.literal(true).optional()});
 const jsonScalar=z.union([z.string(),z.number(),z.boolean(),z.null()]);
 const domain=z.array(jsonScalar);
 const flowSchema=z.strictObject({kind:z.literal("flex"),direction:z.union([z.enum(["vertical","horizontal"]),z.strictObject({prop:z.string(),vertical:domain,horizontal:domain,none:domain.optional()})]),wrap:z.strictObject({prop:z.string(),enabled:domain}).optional(),slot:z.string().optional()});
@@ -67,6 +69,34 @@ async function assertLayoutNeutralConformance(mod:{default:unknown},metadata:{pr
   if(!html.includes(sentinel)) throw new Error("definition.layoutNeutral SSR conformance failed: component must render its default slot/children");
 }
 
+/**
+ * Дрейф runtime-дефолтов (план 2026-08-07 §1.6, §W9): имена props, для которых **схема** даёт
+ * значение при отсутствии ключа (`.default()`/`.prefault()`/`.catch()`), — то есть ровно те
+ * значения, которые хост до этой волны не применял и компонент компенсировал сам (`props.x ?? …`).
+ *
+ * Считается **по ключу**, а не через `props.safeParse({})`: тот путь (единственный, что был в этом
+ * файле до волны, — `assertLayoutNeutralConformance`) отвечает `false` на любом обязательном
+ * соседе, и компонент с одним required-полем выглядел бы «без дефолтов вовсе». Для аудита нужен
+ * противоположный ответ: какие поля дефолт **объявляют**, независимо от соседей.
+ *
+ * Порядок — объявления в схеме: warning сравнивают между ревизиями глазами.
+ */
+function runtimeDefaultDrift(props:z.ZodType):string[] {
+  let current:unknown=props;
+  for(let depth=0;depth<8;depth+=1) {
+    if(current instanceof z.ZodOptional||current instanceof z.ZodNullable||current instanceof z.ZodDefault||current instanceof z.ZodReadonly) { current=current.unwrap(); continue; }
+    break;
+  }
+  if(!(current instanceof z.ZodObject)) return [];
+  const names:string[]=[];
+  for(const [name,schema] of Object.entries(current.shape as Record<string,unknown>)) {
+    if(!(schema instanceof z.ZodType)) continue;
+    const parsed=schema.safeParse(undefined);
+    if(parsed.success&&parsed.data!==undefined) names.push(name);
+  }
+  return names;
+}
+
 async function child(sourcePath:string,resultPath:string,smoke:boolean) {
   let result:unknown;
   try {
@@ -104,6 +134,13 @@ async function child(sourcePath:string,resultPath:string,smoke:boolean) {
         else if(!examples||Object.keys(examples).length===0) warnings.push("Render smoke skipped: definition.example is not provided");
         for(const [name,input] of Object.entries(examples??{})) smokeOne(input,name);
       }
+    }
+    // W9: сплошной drift-аудит — считается для **каждого** извлечения, а не только под `smoke`:
+    // предупреждение обязано быть видно и на validate-префлайте, и на publish, и разовому скрипту
+    // `scripts/audit-runtime-defaults.mjs`, который гоняет то же извлечение по корпусу.
+    if(metadata.capabilities?.runtimeSchemaDefaults!==true) {
+      const drift=runtimeDefaultDrift(metadata.props);
+      if(drift.length>0) warnings.push(`runtime_default_drift: definition.props declares defaults the host does not apply (${drift.join(", ")}); either declare capabilities.runtimeSchemaDefaults and drop the duplicating \`??\` fallbacks, or drop the .default() from the schema`);
     }
     result={ok:true,meta:definitionMeta({...metadata,examples}),...(metadata.conformanceProps!==undefined?{serverOnly:{conformanceProps:true}}:{}),warnings};
   } catch(error) { result={ok:false,warnings:[],error:error instanceof Error?error.message:String(error)}; }

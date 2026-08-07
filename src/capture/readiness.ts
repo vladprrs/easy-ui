@@ -20,6 +20,7 @@
  * изображения — единственный вход класса «сменилась только версия темы» в импакт-анализе W6. Без
  * них частичная пересъёмка невозможна в принципе.
  */
+import { drainRuntimePropsWarnings } from "../catalog/runtimeDefaults";
 import { collectCaptureEnv, type CaptureEnv } from "./env";
 import { codesFromReadinessReasons, READINESS_REASON_CODES, type CaptureCode } from "./failureCodes";
 import {
@@ -841,6 +842,20 @@ export async function collectReadiness(
     for (const reason of outcome.reasons) if (!reasons.includes(reason)) reasons.push(reason);
   }
   const barrierMs = phase();
+
+  // W9 (§1.6): сток предупреждений рантайма о props, не сошедшихся со схемой флагнутого
+  // компонента. Дренируется **здесь**, а не в receipt: сборка доказательства — единственное место,
+  // которое исполняется после рендера и до кадра, и единственное, чей результат уезжает наружу.
+  // `severity: "warning"` осознанно: `met` от них не зависит (в `reasons` они не попадают), кадр
+  // остаётся пригодным, а факт — виден в receipt'е.
+  for (const warning of drainRuntimePropsWarnings()) {
+    strictCodes.push({
+      code: "runtime_props_parse_failed",
+      severity: "warning",
+      detail: warning.count > 1 ? `${warning.detail} (×${warning.count})` : warning.detail,
+      ref: warning.component,
+    });
+  }
 
   // Ресурсы собираются **после** ожидания: нужны те, что действительно попали в готовый кадр.
   const themeResources: ReadinessThemeResources = {

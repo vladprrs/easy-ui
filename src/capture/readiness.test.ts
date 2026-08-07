@@ -7,6 +7,7 @@ import {
   type ResourceDecodeOutcome,
 } from "./readiness";
 import type { CaptureFontFaceDeclaration } from "./protocol";
+import { clearRuntimePropsWarningsForTests, recordRuntimePropsWarning } from "../catalog/runtimeDefaults";
 import {
   BARRIER_READINESS_POLICY, canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy,
   perResourceTimeoutMs, readinessPolicyHash, STRICT_READINESS_POLICY, type ReadinessPolicy,
@@ -120,6 +121,32 @@ describe("readiness evidence", () => {
 
     delete (globalThis as { __easyUiShared?: unknown }).__easyUiShared;
     root.remove();
+  });
+
+  /**
+   * W9 (план 2026-08-07 §1.6): предупреждения рантайма о props, не сошедшихся со схемой флагнутого
+   * компонента, дренируются сборкой доказательства и едут в receipt **предупреждением**. Проверяем
+   * ровно то, что делает контракт волны отличным от контракта событий: `met` не падает.
+   */
+  it("дренирует предупреждения runtime-дефолтов, не роняя met", async () => {
+    clearRuntimePropsWarningsForTests();
+    recordRuntimePropsWarning("Badge", "label: expected string");
+    recordRuntimePropsWarning("Badge", "label: expected string");
+    const report = await collectReadiness(surface("<span>text</span>"), {
+      ...DEFAULT_READINESS_POLICY, timeoutMs: 2_000, network: { quietMs: 0, scope: "component-owned" },
+    });
+    expect(report.met).toBe(true);
+    expect(report.reason).toBeUndefined();
+    expect(report.codes).toEqual([{
+      code: "runtime_props_parse_failed", severity: "warning",
+      detail: "label: expected string (×2)", ref: "Badge",
+    }]);
+
+    // Сток опустошён: следующий кадр той же страницы не наследует чужие предупреждения.
+    const next = await collectReadiness(surface("<span>text</span>"), {
+      ...DEFAULT_READINESS_POLICY, timeoutMs: 2_000, network: { quietMs: 0, scope: "component-owned" },
+    });
+    expect(next.codes).toEqual([]);
   });
 
   /**

@@ -36,6 +36,8 @@ const REACHABILITY: Record<CaptureFailureCode, { kind: "unit"; codes: () => stri
   resource_decode_failed: { kind: "fixture", where: "src/capture/readiness.ts#settleResourceBarrier → src/capture/readiness.test.ts" },
   resource_late_after_barrier: { kind: "fixture", where: "src/capture/readiness.ts#settleResourceBarrier → src/capture/readiness.test.ts" },
   resource_manifest_overflow: { kind: "fixture", where: "src/capture/readiness.ts#collectResourceManifest → src/capture/readiness.test.ts" },
+  // W9 (план 2026-08-07 §W9): эмитент — адаптер рантайма, сток дренируется сборкой readiness.
+  runtime_props_parse_failed: { kind: "fixture", where: "src/player/easyUiRuntime.tsx → src/player/__tests__/runtimeDefaults.test.tsx + src/capture/readiness.test.ts" },
 };
 
 describe("capture failure codes", () => {
@@ -54,7 +56,7 @@ describe("capture failure codes", () => {
       } else if (plan.kind === "fixture") {
         expect(plan.where.length, `${code} обязан называть файл с фикстурой`).toBeGreaterThan(0);
         // Волна происхождения — R3 (typed codes) либо R4 (строгая readiness посадила эмитент).
-        expect(["R3", "R4", "W1a", "W1b", "W2"]).toContain(origin.wave);
+        expect(["R3", "R4", "W1a", "W1b", "W2", "W9"]).toContain(origin.wave);
       } else {
         // Отложенный код обязан согласовываться с реестром: волна в одном месте, а не в двух.
         expect(origin.wave).toBe(plan.wave);
