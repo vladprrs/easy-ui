@@ -31,6 +31,7 @@ import { catalogManifestQuerySchema, parseQuery } from "./contracts";
 import { getIncludingRetired } from "./designSystems";
 import { LoginRateLimiter, routeAuth } from "./routes/auth";
 import { routeUsers } from "./routes/users";
+import { routeAdminSnapshot } from "./routes/adminSnapshot";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 import { sweepStagingModules } from "./components/pipeline";
 import { gcCandidates, overlayLeasePins, setCandidatePinProvider } from "./components/candidates";
@@ -193,6 +194,8 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const auth=await routeAuth(request,db,segments.slice(1),{principal,publicOrigin,clientAddress,limiter}); if(auth) return finish(auth);
         assertMutationAllowed(db,request.method,decodedPath);
         const users=await routeUsers(request,db,segments.slice(1),principal); if(users) return finish(users);
+        // Физический снимок БД для бэкапа (admin-only, VACUUM INTO): рядом с админскими users-роутами.
+        const snapshot=await routeAdminSnapshot(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"); if(snapshot) return finish(snapshot);
         const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal,{validateDisabled:options.validateDisabled===true,acceptanceMatrix:options.acceptance!==undefined}); if(shot) return finish(shot);
         const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),principal,options.visual); if(vis) return finish(vis);
         const share=await routeShares(request,db,segments.slice(1),principal,{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);

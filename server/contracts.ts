@@ -2788,6 +2788,23 @@ export const reuseAuditContract = registerContract({
   ],
 });
 
+/**
+ * Физический снимок SQLite-базы для бэкапа (admin-only). База работает в WAL, поэтому копия файла
+ * на живом сервере не консистентна: снимок снимает сам движок (`VACUUM INTO` во временный файл
+ * внутри DATA_DIR), отдаётся целиком как attachment и временный файл удаляется после отдачи.
+ * Логический экспорт (`GET /api/bundles/export`) его не заменяет — там только владельческий срез.
+ */
+export const adminDbSnapshotContract = registerContract({
+  method: "GET", path: "/api/admin/db-snapshot",
+  summary: "Admin-only consistent physical snapshot of the server SQLite database (VACUUM INTO), streamed as an attachment for backups. Not a substitute for the logical bundle export.",
+  contentType: "application/octet-stream",
+  errors: [
+    { status: 401, code: "unauthorized", description: "authentication is required" },
+    { status: 403, code: "forbidden", description: "administrator access required; share/capture principals are rejected" },
+    errorCatalog.methodNotAllowed,
+  ],
+});
+
 export const componentPreviewContract = registerContract({
   method: "GET", path: "/api/components/{id}/versions/{version}/preview",
   summary: "Preview data for one published component version: the resolved example props plus bundle coordinates, slots and capabilities. `selector=legacy` uses definition.example, `selector=named&name=` a named example. Never returns source or props schemas.",

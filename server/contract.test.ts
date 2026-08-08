@@ -187,6 +187,7 @@ function orderedCases(): [string, Case][] {
     ["POST /api/users", { run: async () => { const response = await call("POST", "/api/users", { name: "Contract Operator", password: "operator password", isAdmin: false }); state.operatorId = ((await response.clone().json()) as { id: string }).id; return response; }, expected: ok(201) }],
     ["PATCH /api/users/{id}", { run: () => call("PATCH", `/api/users/${state.operatorId}`, { isAdmin: true }), expected: ok() }],
     ["GET /api/users", { run: () => call("GET", "/api/users"), expected: ok() }],
+    ["GET /api/admin/db-snapshot", { run: () => call("GET", "/api/admin/db-snapshot"), expected: ok(200, "application/octet-stream") }],
     ["POST /api/auth/login", { run: () => call("POST", "/api/auth/login", { name: "Login Fixture", password: "contract password" }), expected: ok() }],
     ["GET /api/auth/me", { run: () => call("GET", "/api/auth/me"), expected: ok() }],
     // Design systems

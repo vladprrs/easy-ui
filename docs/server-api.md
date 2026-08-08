@@ -41,6 +41,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 | `POST /users` | admin-only `{name,password,isAdmin?}` → 201 `{id,name,isAdmin,createdAt}` |
 | `GET /users` | admin-only `{users:[...]}` |
 | `PATCH /users/:id` | admin-only `{isAdmin}` → `{id,name,isAdmin,createdAt}`; bootstrap-админа `user_admin` понизить нельзя (409) |
+| `GET /admin/db-snapshot` | admin-only консистентный физический снимок БД для бэкапов: `VACUUM INTO` во временный файл внутри `DATA_DIR/tmp` (база в WAL — копия файла на живом сервере не консистентна), ответ `application/octet-stream` + `attachment; filename="easy-ui-db-snapshot-<yyyymmdd-hhmmss>.sqlite"`, `no-store`; временный файл удаляется после отдачи, действие пишется в аудит (`admin.db_snapshot`). Логический экспорт `GET /bundles/export` его не заменяет |
 
 ## Trust boundary и threat model
 

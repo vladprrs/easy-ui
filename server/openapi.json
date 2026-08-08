@@ -2644,6 +2644,51 @@
         "x-easyui-validated": false
       }
     },
+    "/api/admin/db-snapshot": {
+      "get": {
+        "operationId": "get_admin_db_snapshot",
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unauthorized (authentication is required)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (administrator access required; share/capture principals are rejected)"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "Admin-only consistent physical snapshot of the server SQLite database (VACUUM INTO), streamed as an attachment for backups. Not a substitute for the logical bundle export.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/assets": {
       "get": {
         "operationId": "get_assets",
