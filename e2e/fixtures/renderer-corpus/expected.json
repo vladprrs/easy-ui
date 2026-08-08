@@ -843,7 +843,7 @@
       "rendererFingerprint": "6f26771d0af697603dddcdcda3540eeaf24988f3bed3681cf308f90c979ec7aa",
       "rendererSource": "manifest",
       "determinismFlags": "1",
-      "recordedAt": "2026-08-04T03:11:30.419Z",
+      "recordedAt": "2026-08-08T06:04:53.265Z",
       "truncated": false,
       "pixel": {
         "corpus-text-ys": {
@@ -1051,140 +1051,140 @@
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-1-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-1-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-412x915": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-3-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-3-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-3-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-1-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-1-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-1-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-412x915": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-3-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-3-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-3-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           }
         },
@@ -1193,140 +1193,140 @@
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-1-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-1-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-2-412x915": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-3-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-3-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "l-3-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-1-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-1-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-1-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-2-412x915": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-3-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-3-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           },
           "d-3-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 2,
+            "consoleErrors": 1,
             "pageErrors": 0
           }
         },
@@ -1335,140 +1335,140 @@
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-1-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-1-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-2-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-2-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-2-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-2-412x915": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-3-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-3-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "l-3-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-1-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-1-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-1-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-2-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-2-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-2-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-2-412x915": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-3-390x844": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-3-391x845": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           },
           "d-3-360x640": {
             "status": "done",
             "failureCode": null,
             "imageProduced": true,
-            "consoleErrors": 1,
+            "consoleErrors": 0,
             "pageErrors": 0
           }
         }
