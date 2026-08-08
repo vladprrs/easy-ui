@@ -72,6 +72,8 @@ Smoke keys after that wave: `features.figmaMultiSource/geometryContractV2/overla
 
 ### Wave 2026-08-07 (migration-retrospective wave, plan `docs/plans/2026-08-07-migration-feedback-wave.md`)
 
+> **Выполнено 2026-08-08** (деплоймент `d2fdd59`, verify 5×PASS, все смоук-ключи PASS; `receiptEnvelopeVersion` живёт **внутри `features`**). Бэкап и прод-аудиты — `.backups/prod-migration-feedback-20260808/NOTES.md` (geometry: 0 семей `legacy-branch-order-sensitive`; runtime-defaults: 156/174 дрейфуют; барьер GO). Гейт `renderer-corpus` при первом пуше честно упал об доволновые outcome-ожидания (W10 убрал `auth/me`-шум из сервисной съёмки, consoleErrors −1) — ожидания адоптированы CI-артефактом (`d2fdd59`).
+
 Five migrations (**v32–v36**) and eight kill-switches. Do the pre-deploy block first — two of its items are go/no-go gates, not paperwork.
 
 **Smoke keys** (`GET /api/capabilities` with a session cookie, see above):
@@ -128,6 +130,12 @@ Triggers `compose.deploy` (pull `ghcr.io/vladprrs/easy-ui:latest` + up) and watc
 ```bash
 node .claude/skills/deploy/driver.mjs status   # composeStatus + last 3 deployments
 ```
+
+## Backup (перед волнами с миграциями)
+
+Канон с 2026-08-08 — **без SSH**: `GET /api/admin/db-snapshot` (admin-сессия) отдаёт консистентный физический снимок SQLite (`VACUUM INTO` ⇒ standalone-файл, `-wal`/`-shm` не нужны; пишет audit-событие `admin.db_snapshot`). Ассеты добираются по `GET /api/assets/:id` (список id + sha256 — из таблицы `assets` снимка, sha сверять). Материализованные модули компонентов в снимок не входят — их пересоздаёт публикация из исходников в БД. Снимок + assets класть одним объектом в `.backups/<имя>`; этот же снимок — вход для прод-аудитов (`--db`).
+
+Ловушка логического экспорта: bulk `GET /api/bundles/export` отвергается целиком (`422 prototype_head_tracking`), пока у вызывающего есть хоть один `track:"head"`-док — 143-байтовый «zip» в старых бэкапах это тело этой ошибки. Экспортировать поэлементно, трекающие доки пропускать.
 
 ## Rollback
 
