@@ -6,6 +6,7 @@ import { designSystems } from "../../src/designSystems";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
 import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { assertPinnedTrack, PrototypeRepo, type PrototypeLifecyclePatch } from "../repos/prototypes";
 import { parseWith, prototypeKindSchema, prototypeLifecycleSchema } from "../contracts";
 import { collectAndValidateAssetRefs, expandPrototypeForSave, snapshotDefinitions, themesForDoc } from "../validation";
@@ -73,10 +74,34 @@ function message(body:Record<string,unknown>):string|undefined { if(body.message
  */
 export const surfacesWriteEnabled = (raw:string|undefined=process.env.EASYUI_SURFACES):boolean => raw==="1";
 
+/**
+ * Первый элемент документа (в порядке экранов и ключей), объявивший `overflowOwnership` — путём для
+ * `issues`. `null` — деклараций нет вовсе, и запись остаётся доволновой.
+ *
+ * Ищется и элементное поле (канон — в него компилируется и composition layout-токен), и
+ * одноимённый prop — оборонительно: рукописный документ, положивший декларацию в props, обязан
+ * упереться в тот же тумблер, а не проехать мимо него молча.
+ */
+function firstOverflowOwnershipPath(doc:PrototypeDoc):(string|number)[]|null {
+  for(const screen of doc.screens??[]) {
+    for(const [key,element] of Object.entries(screen.spec?.elements??{})) {
+      const item=element as {overflowOwnership?:unknown;props?:Record<string,unknown>};
+      if(item.overflowOwnership!==undefined) return ["screens",screen.id,"spec","elements",key,"overflowOwnership"];
+      if(item.props?.overflowOwnership!==undefined) return ["screens",screen.id,"spec","elements",key,"props","overflowOwnership"];
+    }
+  }
+  return null;
+}
+
 function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
   const parsed=inputPrototypeDocSchema.safeParse(value);
   if(!parsed.success) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:parsed.error.issues});
   if(parsed.data.surfaces&&!surfacesWriteEnabled()) throw new ApiError(422,"surfaces_disabled","Multi-surface documents are disabled on this server (EASYUI_SURFACES)",{issues:[{path:["surfaces"],message:"doc.surfaces requires EASYUI_SURFACES=1 on the server"}]});
+  // BR-09 (план 2026-08-08 §9): `overflowOwnership` — персистируемая форма в строгом allowlist, и
+  // документ с ней старый образ не прочитает вовсе. Поэтому **запись** гейтится kill-switch'ем
+  // группы владения геометрией, а чтение stored-документов — никогда (канон `doc.surfaces`).
+  const owner=firstOverflowOwnershipPath(parsed.data);
+  if(owner!==null&&!geometryOwnershipEnabled()) throw new ApiError(422,"flow_overflow_ownership_disabled","FlowRoot overflow ownership is disabled on this server (EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1)",{issues:[{path:owner,message:"elements[].overflowOwnership requires the geometry ownership wave to be enabled"}]});
   if(pathId!==undefined&&parsed.data.id!==pathId) throw new ApiError(422,"validation_failed","Document id must match path id",{issues:[{path:["id"],message:"must match path id"}]});
   return parsed.data;
 }

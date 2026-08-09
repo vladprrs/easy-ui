@@ -18,6 +18,20 @@
  */
 export const GEOMETRY_CONTRACT_VERSION = 2;
 
+/**
+ * Версия контракта измерения для случая, объявившего `cases[].geometryOwnership`
+ * (EUI-BR-05, план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §5).
+ *
+ * Отдельная константа, а не подъём `GEOMETRY_CONTRACT_VERSION`: **аддитивные** факты волны
+ * (`preTransformBounds`, матрица, `postTransformPaintBounds`, причины участия в поверхностях) в
+ * отпечаток не входят вовсе — прецедент W1a, — поэтому кейс **без** декларации обязан остаться на
+ * версии 2 и сохранить свои кадры байт-в-байт. Кейс **с** декларацией — другое дело: он требует
+ * кадра, снятого под новым контрактом измерения (доволновой кадр не несёт `preTransformBounds`, и
+ * decoration-семантику по нему не восстановить), поэтому `3` кладётся в `frameFingerprint`
+ * условным спредом по манифестному факту (`server/acceptance/ids.ts#frameFingerprint`).
+ */
+export const GEOMETRY_OWNERSHIP_CONTRACT_VERSION = 3;
+
 /** Round browser geometry without leaking device-pixel noise into the API. */
 export const roundCssPx = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -74,7 +88,7 @@ export function unionArea(rects) {
  * Structural analysis over the raw browser measurements. Pure on purpose: the
  * worker runs it outside the page so it stays unit-testable without a DOM.
  */
-export function analyzeGeometry({ frame, content, scroll, roleRects } = {}) {
+export function analyzeGeometry({ frame, content, scroll, roleRects, overflowOwners } = {}) {
   const roles = roleRects ?? {};
   const frameBox = frame ?? null;
   const frameArea = frameBox ? rectArea(frameBox) : 0;
@@ -103,17 +117,37 @@ export function analyzeGeometry({ frame, content, scroll, roleRects } = {}) {
   };
 
   const issues = [];
+  // BR-09 (план 2026-08-08 §9): владельцы перелива, объявленные документом. Их вклад в `content`
+  // уже ограничен границей scrollport'а на сборе, поэтому здесь остаётся ровно **незаявленный**
+  // перелив — и именно он получает своё имя.
+  const declaredOwners = overflowOwners ?? [];
   if (frameBox && content) {
     const overflowBottom = roundCssPx(rectBottom(content) - rectBottom(frameBox));
     const overflowRight = roundCssPx(rectRight(content) - rectRight(frameBox));
     if (overflowBottom > GEOMETRY_EPSILON || overflowRight > GEOMETRY_EPSILON) {
       issues.push({
-        code: "content-clipped-by-frame",
+        // Доволновой документ (деклараций нет вовсе) сохраняет прежний код байт-в-байт: смена
+        // имени у него означала бы, что все накопленные замеры сменили диагноз без причины.
+        code: declaredOwners.length > 0 ? "unowned-overflow" : "content-clipped-by-frame",
         severity: "warn",
-        message: `content extends past the frame by ${Math.max(overflowRight, 0)}px horizontally and ${Math.max(overflowBottom, 0)}px vertically`,
+        message: declaredOwners.length > 0
+          ? `content extends past the frame by ${Math.max(overflowRight, 0)}px horizontally and ${Math.max(overflowBottom, 0)}px vertically outside any declared overflowOwnership`
+          : `content extends past the frame by ${Math.max(overflowRight, 0)}px horizontally and ${Math.max(overflowBottom, 0)}px vertically`,
         detail: { overflowRight: Math.max(overflowRight, 0), overflowBottom: Math.max(overflowBottom, 0) },
       });
     }
+  }
+  // Владелец объявлен по одной оси, а поддерево переливается по **другой**: декларация не покрывает
+  // этот спилл, и молча списывать его на владение нельзя — это и была бы дыра «объявил x, спрятал y».
+  for (const owner of declaredOwners) {
+    if (!owner || !(owner.crossAxisOverflowPx > GEOMETRY_EPSILON)) continue;
+    issues.push({
+      code: "owned-overflow-exceeds-axis",
+      severity: "warn",
+      message: `${owner.key} declares overflowOwnership on the ${owner.axis} axis, but its content also extends`
+        + ` ${owner.crossAxisOverflowPx}px past its scrollport on the ${owner.axis === "x" ? "y" : "x"} axis`,
+      detail: { key: owner.key, axis: owner.axis, crossAxisOverflowPx: owner.crossAxisOverflowPx },
+    });
   }
   const present = GEOMETRY_ROLES.filter((role) => role !== "frame" && roles[role]);
   for (let i = 0; i < present.length; i++) {
@@ -148,7 +182,10 @@ export function analyzeGeometry({ frame, content, scroll, roleRects } = {}) {
  * serializes this function for page.evaluate, so it must not close over module
  * bindings. The same function is imported by DOM unit tests.
  */
-export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overlayAwareRoot = false } = {}) {
+export function collectGeometry({
+  limit = 2000, roleKeys = {}, detailKeys, overlayAwareRoot = false,
+  decorationOwnership = false, geometryOwnership = null, overflowOwnership = null,
+} = {}) {
   const markerSelector = "[data-eui-key]";
   const surface = document.querySelector("#eui-capture-surface");
   if (!(surface instanceof Element)) throw new Error("#eui-capture-surface not found");
@@ -290,13 +327,6 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
     }
   }
   const frame = roleRects.frame ?? { x: 0, y: 0, width: round(surfaceRect.width), height: round(surfaceRect.height), source: "surface" };
-  const contentBoxes = rows
-    .filter((row) => !row.hidden && row.width > 0 && row.height > 0)
-    .map((row) => ({ left: row.x, top: row.y, right: row.x + row.width, bottom: row.y + row.height }));
-  const contentUnion = rectUnion(contentBoxes);
-  const content = contentUnion
-    ? { x: round(contentUnion.left), y: round(contentUnion.top), width: round(contentUnion.width), height: round(contentUnion.height) }
-    : { x: 0, y: 0, width: 0, height: 0 };
   const scroll = { width: round(surface.scrollWidth ?? 0), height: round(surface.scrollHeight ?? 0) };
   const probe = document.createElement("div");
   probe.setAttribute("aria-hidden", "true");
@@ -344,6 +374,68 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
     x: round(rect.left - surfaceRect.left), y: round(rect.top - surfaceRect.top),
     width: round(rect.right - rect.left), height: round(rect.bottom - rect.top),
   });
+  // --- BR-05 (план 2026-08-08 §5): pre-transform геометрия ------------------------------------
+  /**
+   * Начало отсчёта offset-системы для поверхности съёмки. `getBoundingClientRect` у
+   * трансформированного узла возвращает bbox **после** матрицы, и восстановить из него исходную
+   * коробку нельзя (bbox повёрнутого ≠ повёрнутый bbox), поэтому pre-transform факт снимается
+   * единственной системой, которая матрицу не видит вовсе, — `offsetLeft/offsetTop/offsetWidth`.
+   *
+   * `null` — offset-системы нет (SVG-узел, отсоединённое поддерево): тогда pre-transform факт не
+   * публикуется, и авто-правило decoration по такому узлу не срабатывает. «Факта нет» здесь
+   * честнее выдуманной коробки: на этом факте стоит решение «прозрачен для root'а».
+   */
+  const offsetOriginOf = (element) => {
+    let x = 0;
+    let y = 0;
+    for (let current = element; current; current = current.offsetParent) {
+      if (typeof current.offsetLeft !== "number" || typeof current.offsetTop !== "number") return null;
+      x += current.offsetLeft;
+      y += current.offsetTop;
+    }
+    return { x, y };
+  };
+  const surfaceOffsetOrigin = offsetOriginOf(surface);
+  /** Коробка узла **до** трансформаций, в тех же координатах поверхности, что и `boxOf`. */
+  const offsetBoxOf = (element) => {
+    if (surfaceOffsetOrigin === null) return null;
+    const origin = offsetOriginOf(element);
+    if (origin === null) return null;
+    const width = element.offsetWidth;
+    const height = element.offsetHeight;
+    if (typeof width !== "number" || typeof height !== "number") return null;
+    if (width <= 0 && height <= 0) return null;
+    return {
+      x: round(origin.x - surfaceOffsetOrigin.x), y: round(origin.y - surfaceOffsetOrigin.y),
+      width: round(width), height: round(height),
+    };
+  };
+  /** Вложенность коробки в коробку с тем же допуском, что у клипа: суб-пиксель не решает роль. */
+  const boxContains = (outer, inner) => outer !== null && inner !== null
+    && inner.x >= outer.x - CLIP_EPSILON && inner.y >= outer.y - CLIP_EPSILON
+    && inner.x + inner.width <= outer.x + outer.width + CLIP_EPSILON
+    && inner.y + inner.height <= outer.y + outer.height + CLIP_EPSILON;
+  /**
+   * Совпадение узла с ключом декларации `cases[].geometryOwnership`.
+   *
+   * Форма ключа — `"<elementKey>"` либо `"<elementKey>//<суффикс elementPath>"`. Одного
+   * `elementKey` мало по построению: внутренние узлы компонента своего маркера не имеют и
+   * наследуют ключ ближайшего (`ownerKey`), поэтому у тултипа и пузырь, и хвост — `pay-tooltip`.
+   * Суффикс сравнивается с хвостом `elementPath` (`div.bubble>i.tail`), а не целиком: полный путь
+   * зависит от обёрток поверхности съёмки и ломался бы от смены сцены.
+   */
+  const ownershipRoleOf = (fact) => {
+    if (!geometryOwnership) return null;
+    for (const [selector, value] of Object.entries(geometryOwnership)) {
+      const separator = selector.indexOf("//");
+      const key = separator === -1 ? selector : selector.slice(0, separator);
+      const suffix = separator === -1 ? "" : selector.slice(separator + 2);
+      if (key !== fact.elementKey) continue;
+      if (suffix !== "" && fact.elementPath !== suffix && !fact.elementPath.endsWith(`>${suffix}`)) continue;
+      return value && value.role ? value.role : "decoration";
+    }
+    return null;
+  };
   // Читается и цепочкой клипа (восходящей, ниже), и нисходящим стеком W2: «клип объявлен, но не
   // замечен» — молчаливо неверный вердикт, поэтому шорткат `overflow` разбирается наравне с осевыми.
   const clipDeclarationOf = (style) => {
@@ -393,12 +485,18 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
    * бокс маркера и объявил компонент размером 0×0.
    *
    * Больше одного бокса искать незачем: два и есть ответ «корня нет» (Fragment-корень).
+   *
+   * BR-05: узел, классифицированный как **decoration** (`skip`), для этого спуска прозрачен —
+   * ровно как обёртка `display:contents`. Хвост-сиблинг тултипа был вторым боксом первого
+   * поколения и делал корень «неизмеримым» (`rootBounds: null` ⇒ поверхность `root` навсегда
+   * `not-measured` ⇒ вечный `indeterminate`) — это и есть маршрут 4 диагностики V0-D3.
    */
-  const boxedGeneration = (element, out) => {
+  const boxedGeneration = (element, out, skip) => {
     for (const child of element.children) {
       if (out.length > 1) return out;
       if (isHidden(child)) continue;
-      if (getComputedStyle(child).display === "contents") { boxedGeneration(child, out); continue; }
+      if (skip && skip.has(child)) continue;
+      if (getComputedStyle(child).display === "contents") { boxedGeneration(child, out, skip); continue; }
       out.push(child);
     }
     return out;
@@ -413,15 +511,48 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
    * `not-measured` у поверхности `root`. Догадка «возьмём union» здесь была бы ровно той подменой
    * одной величины другой, ради устранения которой заводились четыре поверхности.
    */
-  const rootBoxOf = (root) => {
+  const rootBoxOf = (root, skip) => {
     if (isHidden(root)) return null;
     if (getComputedStyle(root).display !== "contents") return root;
-    const boxed = boxedGeneration(root, []);
+    const boxed = boxedGeneration(root, [], skip);
     return boxed.length === 1 ? boxed[0] : null;
+  };
+  /**
+   * Восходящая цепочка клипа от `from` до поверхности включительно. `effective` — не «свойство
+   * объявлено», а «оно реально режет» переданную краску; `painted === null` — краски не считали, и
+   * тогда каждое звено честно неэффективно (у BR-09 предмет — сам факт клипа, а не его действие).
+   */
+  const ascendingClipChain = (from, painted) => {
+    const chain = [];
+    for (let current = from; current instanceof Element; current = current.parentElement) {
+      const declaration = clipDeclarationOf(getComputedStyle(current));
+      if (declaration) {
+        const { overflowX, overflowY, clipPath } = declaration;
+        const rect = current.getBoundingClientRect();
+        const cuts = painted !== null && (painted.left < rect.left - CLIP_EPSILON || painted.top < rect.top - CLIP_EPSILON
+          || painted.right > rect.right + CLIP_EPSILON || painted.bottom > rect.bottom + CLIP_EPSILON);
+        chain.push({
+          key: ownerKey(current), elementPath: nodePath(current),
+          property: clipPath ? "clip-path" : "overflow",
+          value: clipPath ?? `${overflowX} ${overflowY}`,
+          effective: Boolean(cuts),
+          rect: boxOf(rect),
+        });
+      }
+      if (current === surface) break;
+    }
+    return chain;
   };
   const detailOf = (marker, { scrollAwareRoot = false } = {}) => {
     const boxes = [];
     const sources = [];
+    // BR-05: узлы, выпавшие из потока (`position:absolute|fixed`) либо трансформированные. Список
+    // ведётся **всегда** — это чистое расширение замера (прецедент W1a), и дифференциальный тест
+    // доказывает, что `frameFingerprint` от него не двигается. Роль (`decoration`) на нём считается
+    // ниже и только при включённой семантике владения.
+    const flowExcluded = [];
+    /** Декларации, наложенные на in-flow контейнер с layout-детьми (см. `visit`). */
+    const ownershipViolations = [];
     const push = (element, cause, rect) => {
       if (sources.length >= DETAIL_SOURCE_LIMIT) return;
       sources.push({ elementKey: ownerKey(element), elementPath: nodePath(element), cause, rect: boxOf(rect) });
@@ -457,6 +588,26 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
       // Атрибуция: всё, что красит за пределами своей border-box либо выпало из потока.
       if (outOfFlow) push(element, `position:${position}`, rect);
       if (transformed) push(element, `transform:${transform}`, rect);
+      // BR-05: тот же узел, но одной записью на **узел**, а не на причину, и с pre-transform
+      // коробкой. Корень измерения исключён по построению: он не «выпал из потока», он и есть поток.
+      if (!isRoot && (outOfFlow || transformed) && flowExcluded.length < DETAIL_SOURCE_LIMIT) {
+        const causes = [];
+        if (outOfFlow) causes.push(`position:${position}`);
+        if (transformed) causes.push(`transform:${transform}`);
+        flowExcluded.push({
+          element,
+          fact: {
+            elementKey: ownerKey(element),
+            elementPath: nodePath(element),
+            causes,
+            // Не трансформированный узел свою pre-transform коробку и показывает: матрицы нет,
+            // и второй способ её посчитать был бы вторым способом соврать.
+            preTransformBounds: transformed ? offsetBoxOf(element) : boxOf(rect),
+            transform: transformed ? transform : null,
+            postTransformPaintBounds: boxOf(rect),
+          },
+        });
+      }
       if (style.filter && style.filter !== "none") push(element, `filter:${style.filter}`, rect);
       if (style.boxShadow && style.boxShadow !== "none") push(element, `box-shadow:${style.boxShadow}`, rect);
       if (style.outlineStyle && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth || "0") > 0) {
@@ -467,6 +618,28 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
       // overlay-корня (`position:absolute`, у `center` ещё и `transform`) старая форма отбрасывала
       // весь бокс и мерила пустоту (§W5 T5c.3).
       const keeps = isRoot || (inFlow && !outOfFlow && !transformed);
+      // BR-05: злоупотребление декларацией. Объявить декорацией **in-flow контейнер с layout-
+      // детьми** — это не «объяснить краску», а спрятать раскладку: такой узел держит габариты, и
+      // выкинуть его из union значило бы объявить компонент меньше, чем он есть. Факт снимается
+      // здесь (в браузере знают и поток, и детей), а отказ `geometry_ownership_invalid` выносит
+      // сервер — `server/acceptance/gates/audit.ts#geometryOwnershipViolations`.
+      if (geometryOwnership && keeps && !isRoot) {
+        const candidate = { elementKey: ownerKey(element), elementPath: nodePath(element) };
+        if (ownershipRoleOf(candidate) !== null) {
+          let layoutChildren = 0;
+          for (const child of element.children) {
+            if (isHidden(child)) continue;
+            const childStyle = getComputedStyle(child);
+            const childPosition = childStyle.position ?? "static";
+            if (childPosition === "absolute" || childPosition === "fixed") continue;
+            const childTransform = childStyle.transform ?? "";
+            if (childTransform !== "" && childTransform !== "none") continue;
+            if (childStyle.display === "contents") continue;
+            layoutChildren += 1;
+          }
+          if (layoutChildren > 0) ownershipViolations.push({ ...candidate, reason: "in-flow-container", layoutChildren });
+        }
+      }
       if (keeps && style.display !== "contents" && (rect.right - rect.left > 0 || rect.bottom - rect.top > 0)) {
         keep({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, clips);
       }
@@ -494,28 +667,36 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
     // Цепочка клипа: предки с overflow hidden|clip либо clip-path. `effective` — не «свойство
     // объявлено», а «оно реально режет»: иначе `blur внутри overflow:hidden` и `blur наружу`
     // выглядели бы для политики одинаково.
-    const clipChain = [];
-    for (let current = marker.parentElement; current instanceof Element; current = current.parentElement) {
-      const declaration = clipDeclarationOf(getComputedStyle(current));
-      if (declaration) {
-        const { overflowX, overflowY, clipPath } = declaration;
-        const rect = current.getBoundingClientRect();
-        const cuts = painted !== null && (painted.left < rect.left - CLIP_EPSILON || painted.top < rect.top - CLIP_EPSILON
-          || painted.right > rect.right + CLIP_EPSILON || painted.bottom > rect.bottom + CLIP_EPSILON);
-        clipChain.push({
-          key: ownerKey(current), elementPath: nodePath(current),
-          property: clipPath ? "clip-path" : "overflow",
-          value: clipPath ?? `${overflowX} ${overflowY}`,
-          effective: Boolean(cuts),
-          rect: boxOf(rect),
-        });
-      }
-      if (current === surface) break;
-    }
+    const clipChain = ascendingClipChain(marker.parentElement, painted);
     // --- W1b (план 2026-08-07 §1.1): безусловный замер корневого бокса ------------------------
     // Замер аддитивен: `layoutBounds` не трогается, PNG не меняется, ни один вход
     // `frameFingerprint` не добавляется — поэтому `GEOMETRY_CONTRACT_VERSION` остаётся 2.
-    const rootBox = rootBoxOf(marker);
+    // --- BR-05 (план 2026-08-08 §5): классификация decoration ---------------------------------
+    // Правило: узел вне потока, чья **pre-transform** коробка вложена в union остального
+    // поддерева, — декорация. Именно «остального»: `union` считается по in-flow боксам, из
+    // которых такой узел исключён по построению, поэтому теста «вложен сам в себя» не бывает.
+    // Декларация случая (`geometryOwnership`) сильнее авто-правила и работает даже там, где
+    // коробка не вложена (маршруты 3/5: неоднозначный DOM и объявленные по макету поверхности).
+    const layoutBox = union ? boxOf(union) : null;
+    const decorationElements = new Set();
+    const outOfFlowNodes = flowExcluded.map(({ element, fact }) => {
+      const declaredRole = ownershipRoleOf(fact);
+      const auto = declaredRole === null && decorationOwnership && boxContains(layoutBox, fact.preTransformBounds);
+      const decoration = declaredRole === "decoration" || auto;
+      if (decoration) decorationElements.add(element);
+      return {
+        ...fact,
+        ...(decoration ? { role: "decoration", roleSource: declaredRole === null ? "auto" : "declared" } : {}),
+        // Причина участия/неучастия в каждой поверхности — читаемая по сохранённому кадру, без
+        // похода в код: ровно ради этого волна и заводит факты, а не один булев флаг.
+        participation: {
+          layoutUnion: decoration ? "excluded:decoration" : "excluded:out-of-flow",
+          root: decoration ? "excluded:decoration" : "counted",
+          paint: "included",
+        },
+      };
+    });
+    const rootBox = rootBoxOf(marker, decorationElements.size > 0 ? decorationElements : null);
     const rootRect = rootBox ? rootBox.getBoundingClientRect() : null;
     // Вырожденный бокс не публикуется как измерение: «0×0» — это отсутствие факта, а не факт.
     const rootBounds = rootRect && rootRect.right - rootRect.left > 0 && rootRect.bottom - rootRect.top > 0
@@ -543,6 +724,10 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
         : null,
       effectSources: sources,
       clipChain,
+      // BR-05: аддитивный факт замера — вне отпечатка (`GEOMETRY_CONTRACT_VERSION` остаётся 2).
+      outOfFlowNodes,
+      // Условный ключ: у случая без декларации его нет вовсе, и `geometry.json` корпуса не растёт.
+      ...(geometryOwnership ? { ownershipViolations } : {}),
     };
   };
   /**
@@ -565,13 +750,95 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overl
       const marker = markers.find((candidate) => (candidate.getAttribute("data-eui-key") ?? "") === key);
       return marker
         ? detailOf(marker)
-        : { key, instance: 0, layoutBounds: null, rootBounds: null, rootClip: null, effectSources: [], clipChain: [] };
+        : { key, instance: 0, layoutBounds: null, rootBounds: null, rootClip: null, effectSources: [], clipChain: [], outOfFlowNodes: [] };
     });
+
+  // --- BR-09 (план 2026-08-08 §9): владение переливом ------------------------------------------
+  // Вклад поддерева объявленного владельца в габарит экрана ограничивается **границей его
+  // scrollport'а по объявленной оси**. Сам перелив никуда не девается: он записывается фактами
+  // (`scrollportBounds`/`scrollContentBounds`/`ownedOverflow`) и остаётся читаемым — меняется
+  // ровно одно, кому он принадлежит. `rects[]` при этом не трогается: на нём стоят существующие
+  // потребители probe'а, и переписывать их числа под новой семантикой значило бы сменить контракт.
+  const overflowOwners = [];
+  const scrollportOf = (marker, declaration) => {
+    const ownerKeyName = typeof declaration.viewportOwner === "string" ? declaration.viewportOwner : null;
+    const element = ownerKeyName === null
+      ? rootBoxOf(marker, null)
+      : markers.find((candidate) => candidate.getAttribute("data-eui-key") === ownerKeyName) ?? null;
+    if (!element) return null;
+    const port = getComputedStyle(element).display === "contents" ? rootBoxOf(element, null) : element;
+    if (!port || isHidden(port)) return null;
+    const rect = port.getBoundingClientRect();
+    return rect.right - rect.left > 0 || rect.bottom - rect.top > 0 ? relative(rect) : null;
+  };
+  const contentBoxes = rows
+    .filter((row) => !row.hidden && row.width > 0 && row.height > 0)
+    .map((row) => {
+      const box = { left: row.x, top: row.y, right: row.x + row.width, bottom: row.y + row.height };
+      const declaration = overflowOwnership ? overflowOwnership[row.key] ?? null : null;
+      if (!declaration) return box;
+      const marker = markers.find((candidate) => (candidate.getAttribute("data-eui-key") ?? "") === row.key
+        && (instanceByMarker.get(candidate) ?? 0) === row.instance);
+      const port = marker ? scrollportOf(marker, declaration) : null;
+      if (!port) return box;
+      const portBox = { left: port.x, top: port.y, right: port.x + port.width, bottom: port.y + port.height };
+      const axis = declaration.axis === "y" ? "y" : "x";
+      const owned = axis === "x"
+        ? round(Math.max(0, box.right - portBox.right) + Math.max(0, portBox.left - box.left))
+        : round(Math.max(0, box.bottom - portBox.bottom) + Math.max(0, portBox.top - box.top));
+      const crossAxisOverflowPx = axis === "x"
+        ? round(Math.max(0, box.bottom - portBox.bottom) + Math.max(0, portBox.top - box.top))
+        : round(Math.max(0, box.right - portBox.right) + Math.max(0, portBox.left - box.left));
+      overflowOwners.push({
+        key: row.key, instance: row.instance, axis, mode: "scroll",
+        scrollportBounds: { ...port },
+        scrollContentBounds: { x: row.x, y: row.y, width: row.width, height: row.height },
+        ownedOverflowPx: owned,
+        crossAxisOverflowPx,
+        clipChain: marker ? ascendingClipChain(marker, null) : [],
+        ...(declaration.expectedContentOverflow === undefined
+          ? {}
+          : { expectedContentOverflow: declaration.expectedContentOverflow, contentOverflowObserved: owned > 0 }),
+      });
+      // Клип по объявленной оси; другая ось остаётся как есть — владения по ней не объявляли.
+      return axis === "x"
+        ? { ...box, left: Math.max(box.left, portBox.left), right: Math.min(box.right, portBox.right) }
+        : { ...box, top: Math.max(box.top, portBox.top), bottom: Math.min(box.bottom, portBox.bottom) };
+    });
+  const contentUnion = rectUnion(contentBoxes);
+  const content = contentUnion
+    ? { x: round(contentUnion.left), y: round(contentUnion.top), width: round(contentUnion.width), height: round(contentUnion.height) }
+    : { x: 0, y: 0, width: 0, height: 0 };
+
+  // --- BR-05 маршрут 1 (план 2026-08-08 §5, механизм 3): probe различает габариты --------------
+  // `content` — union `getClientRects()` **всех** потомков, то есть paint-габарит: он включает
+  // декоративный хвост, тень и всё, что вылезло из потока. Ровно это число автор кейса читал у
+  // `preview --probe geometry` и писал в `expectedGeometry`, получая безусловный `layout-overflow`
+  // (маршрут 1b диагностики). Рядом теперь едет **layout-габарит** — union тех же in-flow боксов,
+  // по которым считается вердикт. Аддитивно: `content` не переименован и не пересчитан.
+  //
+  // Считается по корневым маркерам: поддерево корневого маркера уже содержит вложенные, поэтому
+  // union по ним равен union'у по всем — а обход стоит одного прохода на корень, а не на маркер.
+  const layoutBoxes = [];
+  for (const marker of markers) {
+    if (nearestMarker(marker) !== null || isHidden(marker)) continue;
+    const bounds = detailOf(marker).layoutBounds;
+    if (bounds && (bounds.width > 0 || bounds.height > 0)) {
+      layoutBoxes.push({ left: bounds.x, top: bounds.y, right: bounds.x + bounds.width, bottom: bounds.y + bounds.height });
+    }
+  }
+  const layoutUnion = rectUnion(layoutBoxes);
+  const layout = layoutUnion
+    ? { x: round(layoutUnion.left), y: round(layoutUnion.top), width: round(layoutUnion.width), height: round(layoutUnion.height) }
+    : { x: 0, y: 0, width: 0, height: 0 };
 
   const bounded = Math.max(0, Math.floor(limit));
   return {
     rects: rows.slice(0, bounded), truncated: rows.length > bounded, total: rows.length,
-    safeArea, roleRects, frame, content, scroll,
+    safeArea, roleRects, frame, content, layout, scroll,
+    // BR-09: факты владения переливом. Условный ключ — документ без деклараций отдаёт ровно
+    // доволновой замер, и `analyzeGeometry` читает отсутствие как «владельцев нет».
+    ...(overflowOwners.length === 0 ? {} : { overflowOwners }),
     // Отсутствует у обычного `probe:"geometry"` — контракт существующих ручек не меняется.
     ...(wantDetails ? { details, detailKeys: requestedKeys } : {}),
   };

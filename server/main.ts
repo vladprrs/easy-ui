@@ -52,6 +52,7 @@ import { candidateOverlayEnabled } from "./acceptance/caseSets";
 import { acceptanceResumeEnabled } from "./acceptance/orchestrator";
 import { blockerFingerprintEnabled } from "./acceptance/disposition";
 import { captureV4Enabled } from "./capture/captureV4";
+import { geometryOwnershipEnabled } from "./capture/geometryOwnership";
 import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
@@ -309,6 +310,13 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // процесс и питает `policyProfileHash`, `readinessPolicyHash` и `rendererFingerprint`.
     if(!RESOURCE_BARRIER_DISABLED && RESOURCE_BARRIER_V4_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_V4_DISABLED=1: resource barrier runs the pre-BR-03 v3 policy byte-for-byte (no registry phase, no srcset/pseudo/font/icon-registry channels, no per-resource records, readiness verdict stays fail on barrier codes)");
     if(!captureV4Enabled()) console.warn("[capture] EASYUI_CAPTURE_V4_DISABLED=1: per-side paint padding and exact content-hug canvas off, case sets declaring paintPaddingPx are refused (422 capture_padding_disabled) and comparisons fall back to the pre-wave dimension tolerance");
+    // BR-05/BR-09 (план 2026-08-08 §5/§9): **общий** kill-switch группы владения геометрией. Обе
+    // фичи меняют интерпретацию одних и тех же фактов замера, поэтому тумблер один: два независимых
+    // дали бы состояние «декорация прозрачна для корня, но её перелив всё ещё поднимает warning».
+    // Слой отпечатков — вердиктный (`geometryOwnershipPolicyVersion` в снимке политики): включение
+    // стоит recompute'а, а не пересъёмки. Персистируемые формы волны — `cases[].geometryOwnership`
+    // (case-set) и `overflowOwnership` (документ прототипа): под свитчем обе отвергаются на записи.
+    if(!geometryOwnershipEnabled()) console.warn("[capture] EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1: decoration-aware geometry and FlowRoot overflow ownership off, case sets declaring geometryOwnership are refused (422 geometry_ownership_disabled), documents declaring overflowOwnership are refused (422 flow_overflow_ownership_disabled), and geometry collection/verdict stay pre-wave byte-for-byte");
     if(!blockerFingerprintEnabled()) console.warn("[acceptance] EASYUI_BLOCKER_FINGERPRINT_DISABLED=1: blocker fingerprint off, GET /api/acceptance-runs/:id/retry-disposition answers 404 and runs carry no blockerFingerprint");
     // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —
     // ручку плана (404) и запись кадров экранов на горячем пути съёмки, — потому что писать в

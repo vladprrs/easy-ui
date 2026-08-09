@@ -1252,6 +1252,23 @@ export function analyzeGeometryGaps(screen, definitions, geometry) {
 
 const formatRect = (rect) => (rect ? `${rect.x},${rect.y} ${rect.width}x${rect.height}` : "-");
 
+/**
+ * BR-05 (план 2026-08-08 §5, маршрут 1): габариты замера **двумя числами**.
+ *
+ * `content` — union `getClientRects()` всех потомков, то есть **paint**-габарит: он включает
+ * декоративный хвост, тень и всё, что вылезло из потока. Именно это число автор кейса читал здесь
+ * и переносил в `expectedGeometry`, получая безусловный `layout-overflow`. `layout` — union тех же
+ * in-flow боксов, по которым вердикт и считается. Строка печатается, только когда сервер прислал
+ * `layout` (доволновой сервер его не шлёт).
+ */
+function geometryBoundsLine(result) {
+  if (!result || typeof result !== "object" || !result.layout || !result.content) return null;
+  const same = result.layout.width === result.content.width && result.layout.height === result.content.height;
+  return `bounds: layout=${result.layout.width}x${result.layout.height} (declare THIS as expectedGeometry/expectedSurfaces.layoutUnion)`
+    + ` paint=${result.content.width}x${result.content.height}`
+    + (same ? " (identical: no decoration outside the flow)" : " (includes decorations/effects outside the flow)");
+}
+
 async function runGeometry(args) {
   const [id, screenId] = args;
   const encoded = encodeURIComponent(id);
@@ -1275,6 +1292,8 @@ async function runGeometry(args) {
   const gapRows = analyzeGeometryGaps(screen, definitions, state.result);
   const gaps = new Map(gapRows.map((item) => [`${item.key}\u0000${item.instance}`, item]));
   out(`geometry ${id}/${screenId} rev=${state.result.resolvedRev} viewport=${state.result.viewport.width}x${state.result.viewport.height} dpr=${state.result.dpr} rects=${state.result.rects.length}/${state.result.total}${state.result.truncated ? " truncated" : ""}`);
+  const boundsLine = geometryBoundsLine(state.result);
+  if (boundsLine) out(boundsLine);
   const safeArea = state.result.safeArea;
   if (safeArea) out(`safeArea: top=${safeArea.top} right=${safeArea.right} bottom=${safeArea.bottom} left=${safeArea.left}`);
   for (const [role, rect] of Object.entries(state.result.roleRects ?? {})) out(`role ${role}: ${formatRect(rect)} (${rect.source})`);
@@ -2121,6 +2140,8 @@ async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFact
   }
   const target = result.draftRev === undefined ? `v${result.version}` : `draft rev ${result.draftRev}`;
   out(`preview ${id} ${target} probe=geometry bundleHash=${result.bundleHash ?? "-"} designSystemMetaVersion=${result.designSystemMetaVersion ?? system.latestMetaVersion ?? "-"} viewport=${viewport.width}x${viewport.height} dsf=${deviceScaleFactor} rects=${result.rects.length}/${result.total}${result.truncated ? " truncated" : ""}`);
+  const previewBounds = geometryBoundsLine(result);
+  if (previewBounds) out(previewBounds);
   for (const rect of result.rects) {
     out(`${rect.key}#${rect.instance} parent=${rect.parentKey === undefined ? "-" : `${rect.parentKey}#${rect.parentInstance}`} dom=${rect.domIndex} rect=${rect.x},${rect.y} ${rect.width}x${rect.height}${rect.hidden ? " hidden" : ""}`);
     out(`  layoutContext: ${rect.layoutContext ? JSON.stringify(rect.layoutContext) : "null"}`);

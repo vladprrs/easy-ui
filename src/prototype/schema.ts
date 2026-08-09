@@ -76,6 +76,42 @@ const repeatSchema = z.strictObject({
   key: z.string().min(1).optional(),
 });
 
+/**
+ * **Владение прокруткой/переливом** (EUI-BR-09, план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §9,
+ * capability `flowOverflowOwnershipV1`).
+ *
+ * Диагностика: warning `content-clipped-by-frame` считался union'ом **всех** маркеров против кадра,
+ * без осей и без владельцев, — поэтому экран `FlowRoot` шириной 390 px с двумя горизонтальными
+ * rail'ами по 552 px контента получал top-level предупреждение о переливе, хотя перелив тут и есть
+ * дизайн: rail прокручивается внутри своего scrollport'а, а сцену за собой не двигает.
+ *
+ * Декларация говорит ровно это: «поддерево этого элемента переливается по объявленной оси **внутрь
+ * своего окна**». Вклад поддерева в габарит экрана ограничивается границей scrollport'а, а сам
+ * перелив записывается отдельными фактами (`scrollportBounds`/`scrollContentBounds`/`ownedOverflow`)
+ * — он не исчезает из замера, он перестаёт быть безадресным обвинением экрана.
+ *
+ * - `axis` — **одна** ось. Двухосевая прокрутка в контракте v1 невыразима намеренно: «переливается
+ *   во все стороны» — это не владение, а отсутствие ограничений.
+ * - `mode: "scroll"` — единственный режим: клип без прокрутки владением не является (он и так
+ *   виден `clipChain`), а `auto` от `scroll` замер не отличает.
+ * - `viewportOwner` — ключ элемента, чьё окно считать границей, если сам объявивший элемент
+ *   scrollport'ом не является (обёртка объявляет, прокручивает ребёнок). Опущено — окном служит
+ *   корневой бокс самого элемента.
+ * - `expectedContentOverflow` — «перелив по этой оси ожидается»: без него владение объявлено, но
+ *   отсутствие перелива тоже законно, и отличить «rail пуст» от «rail не собрался» нечем.
+ *
+ * **Персистируемая форма в строгом allowlist документа.** Документ с полем не читается старым
+ * образом (`strictObject` ⇒ 422), поэтому **запись** гейтится kill-switch'ем группы
+ * (`EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` ⇒ `422 flow_overflow_ownership_disabled` на save);
+ * чтение stored-документов не гейтится никогда — тот же канон, что у `doc.surfaces`.
+ */
+export const overflowOwnershipSchema = z.strictObject({
+  axis: z.enum(["x", "y"]),
+  mode: z.literal("scroll"),
+  viewportOwner: z.string().min(1).max(64).optional(),
+  expectedContentOverflow: z.boolean().optional(),
+});
+
 export const elementSchema = z.strictObject({
   type: z.string().min(1),
   props: z.record(z.string(), z.unknown()),
@@ -87,6 +123,11 @@ export const elementSchema = z.strictObject({
   // Named-slot placement: routes this child into a parent custom component's slot
   // (see validate.ts — parent must be a custom component with capabilities.namedSlots).
   slot: slugSchema.optional(),
+  /**
+   * BR-09: владение переливом поддерева по объявленной оси. Строго `.optional()` без `.default()`:
+   * документ без поля обязан сохранять свой байт-в-байт прежний вид и своё прежнее чтение.
+   */
+  overflowOwnership: overflowOwnershipSchema.optional(),
 });
 
 /**

@@ -32,7 +32,11 @@ export interface GeometryViewportOwnership {
   unownedPct: number;
 }
 export interface GeometryIssue {
-  code: "content-clipped-by-frame" | "overlapping-regions" | "footer-owns-page";
+  code: "content-clipped-by-frame" | "overlapping-regions" | "footer-owns-page"
+    /** BR-09: перелив за пределами объявленных `overflowOwnership` (прежний `content-clipped-by-frame`). */
+    | "unowned-overflow"
+    /** BR-09: владелец объявлен по одной оси, а поддерево переливается по другой. */
+    | "owned-overflow-exceeds-axis";
   severity: "warn";
   message: string;
   detail: Record<string, unknown>;
@@ -58,6 +62,39 @@ export interface GeometryClipLink {
   /** Клип реально режет объединение layout-боксов и источников эффектов. */
   effective: boolean;
   rect: GeometryBox;
+}
+/**
+ * Узел, выпавший из потока (`position:absolute|fixed`) либо трансформированный (BR-05, план
+ * 2026-08-08 §5). Одна запись на **узел**, а не на причину: `effectSources` перечисляет причины
+ * (хвост тултипа фигурирует там дважды), а роль в поверхностях — свойство узла.
+ *
+ * Замер **аддитивен**: `GEOMETRY_CONTRACT_VERSION` он не двигает и в `frameFingerprint` не входит
+ * (прецедент W1a, дифференциальный тест `server/acceptance/ids.test.ts`).
+ */
+export interface GeometryOutOfFlowNode {
+  elementKey: string;
+  elementPath: string;
+  /** `position:absolute`, `transform:matrix(…)` — в порядке объявления, ≥ 1. */
+  causes: string[];
+  /**
+   * Коробка **до** трансформаций, в координатах поверхности (offset-геометрия). `null` — offset-
+   * системы у узла нет (SVG, отсоединённое поддерево): факта нет, и авто-правило не срабатывает.
+   */
+  preTransformBounds: GeometryBox | null;
+  /** Вычисленная матрица (`style.transform`); `null` у узла без трансформации. */
+  transform: string | null;
+  /** `getBoundingClientRect` узла — то, чем он реально красит. */
+  postTransformPaintBounds: GeometryBox;
+  /** Классификация волны; отсутствует у узла, декорацией **не** признанного. */
+  role?: "decoration";
+  /** Чем узел признан декорацией: авто-правилом вложенности или `cases[].geometryOwnership`. */
+  roleSource?: "auto" | "declared";
+  /** Причина участия/неучастия в каждой поверхности — читается по сохранённому кадру. */
+  participation: {
+    layoutUnion: "excluded:decoration" | "excluded:out-of-flow";
+    root: "excluded:decoration" | "counted";
+    paint: "included";
+  };
 }
 /** Детальное измерение одного маркера: честный layout-контур + причины выхода краски за него. */
 export interface GeometryDetail {
@@ -89,6 +126,8 @@ export interface GeometryDetail {
   rootClip: { property: "overflow" | "clip-path"; value: string } | null;
   effectSources: GeometryEffectSource[];
   clipChain: GeometryClipLink[];
+  /** BR-05: узлы вне потока с pre-transform геометрией и ролью. Аддитивный факт, вне отпечатка. */
+  outOfFlowNodes: GeometryOutOfFlowNode[];
   /**
    * `"overlay"` — корнем измерения стала контентная обёртка host-примитива `Overlay`
    * (`[data-eui-overlay-content]`, план 2026-08-06 §W5 T5c.3). Поле присутствует только на этой
@@ -104,8 +143,17 @@ export interface GeometryMeasurements {
   safeArea: GeometrySafeArea;
   roleRects: Partial<Record<GeometryRole, GeometryRoleRect>>;
   frame: GeometryRoleRect;
+  /** **Paint-габарит**: union `getClientRects()` всех потомков маркеров (включая декорации). */
   content: GeometryBox;
+  /**
+   * **Layout-габарит** (BR-05, маршрут 1): union тех же in-flow боксов, по которым считается
+   * вердикт геометрии. Аддитивен к `content` — тот не переименован и не пересчитан; смысл поля в
+   * том, чтобы автор кейса перестал писать декорированное число в `expectedGeometry`.
+   */
+  layout: GeometryBox;
   scroll: { width: number; height: number };
+  /** BR-09: владельцы перелива. Отсутствует у замера без деклараций — доволновой байт-в-байт. */
+  overflowOwners?: GeometryOverflowOwner[];
   /** Присутствует только когда запрошен `detailKeys` (режим `probe:"paint"`, W3). */
   details?: GeometryDetail[];
   detailKeys?: string[];
@@ -119,6 +167,40 @@ export interface GeometryCollection extends GeometryMeasurements {
  * `frameFingerprint`: смена значения инвалидирует накопленные кадры.
  */
 export const GEOMETRY_CONTRACT_VERSION: number;
+/**
+ * Версия контракта измерения для случая с объявленным `geometryOwnership` (BR-05). Кладётся в
+ * `frameFingerprint` **условным спредом** по манифестному факту: кейс без декларации остаётся на
+ * версии 2 и сохраняет кадры байт-в-байт.
+ */
+export const GEOMETRY_OWNERSHIP_CONTRACT_VERSION: number;
+/**
+ * BR-09: факт владения переливом одного маркера. Перелив не исчезает из замера — он перестаёт
+ * быть безадресным обвинением экрана: `scrollContentBounds` хранит полный габарит поддерева,
+ * `scrollportBounds` — окно, `ownedOverflowPx` — сколько принадлежит владельцу по его оси.
+ */
+export interface GeometryOverflowOwner {
+  key: string;
+  instance: number;
+  axis: "x" | "y";
+  mode: "scroll";
+  scrollportBounds: GeometryBox;
+  scrollContentBounds: GeometryBox;
+  ownedOverflowPx: number;
+  /** Перелив по **другой** оси: декларация его не покрывает (`owned-overflow-exceeds-axis`). */
+  crossAxisOverflowPx: number;
+  clipChain: GeometryClipLink[];
+  expectedContentOverflow?: boolean;
+  contentOverflowObserved?: boolean;
+}
+/** Декларация владения переливом одного элемента документа (`elements[].overflowOwnership`). */
+export interface OverflowOwnershipDeclaration {
+  axis: "x" | "y";
+  mode: "scroll";
+  viewportOwner?: string;
+  expectedContentOverflow?: boolean;
+}
+/** Декларация владения узлом (`cases[].geometryOwnership`), как её видит сбор. */
+export type GeometryOwnershipDeclaration = Record<string, { role: "decoration"; participatesIn: readonly ["paint"] }>;
 export const GEOMETRY_ROLES: GeometryRole[];
 export const FOOTER_OWNERSHIP_RATIO: number;
 export function roundCssPx(value: number): number;
@@ -130,6 +212,8 @@ export function analyzeGeometry(input?: {
   content?: GeometryBox | null;
   scroll?: { width: number; height: number } | null;
   roleRects?: Partial<Record<GeometryRole, GeometryBox>>;
+  /** BR-09: владельцы перелива из замера; без них `content-clipped-by-frame` остаётся прежним. */
+  overflowOwners?: GeometryOverflowOwner[];
 }): {
   viewportOwnership: GeometryViewportOwnership;
   issues: GeometryIssue[];
@@ -144,4 +228,14 @@ export function collectGeometry(options?: {
    * — сбор ведёт себя ровно как до волны; включено и оверлей ровно один — корнем становится он.
    */
   overlayAwareRoot?: boolean;
+  /**
+   * BR-05: включить **авто-правило** decoration (узел вне потока, чья pre-transform коробка
+   * вложена в union остального поддерева, прозрачен для `rootBounds`). Выключено — сбор ведёт
+   * себя байт-в-байт доволново; тумблер приезжает из `EASYUI_GEOMETRY_OWNERSHIP_DISABLED`.
+   */
+  decorationOwnership?: boolean;
+  /** BR-05: декларации случая (`cases[].geometryOwnership`); сильнее авто-правила. */
+  geometryOwnership?: GeometryOwnershipDeclaration | null;
+  /** BR-09: `elementKey → overflowOwnership` снимаемого экрана (из документа, через джобу). */
+  overflowOwnership?: Record<string, OverflowOwnershipDeclaration> | null;
 }): GeometryMeasurements;

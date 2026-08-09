@@ -419,6 +419,47 @@ const paintPaddingSide = z.number().int().min(0).max(CASE_MAX_PAINT_PADDING_PX);
  */
 export const CASE_SET_MAX_PRELOAD_ASSETS = 64;
 
+/**
+ * **Владение геометрией узла** (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §5,
+ * EUI-BR-05, capability `geometryDecorationOwnershipV1`).
+ *
+ * Диагностика V0-D3 показала четыре маршрута, которыми декоративный хвост тултипа доводил кейс до
+ * блокера. Два из них авто-правило замера закрывает само (вложенная в контур pre-transform коробка
+ * ⇒ узел прозрачен для `rootBounds` и его краска объяснена). Два оставшихся требуют **декларации**:
+ * DOM неоднозначен (коробка не вложена), либо автор объявил `expectedSurfaces` по макету и получил
+ * `surface-mismatch` на `paint`, который не снимается ни одним допуском.
+ *
+ * Форма ключа — `"<elementKey>"` либо `"<elementKey>//<суффикс elementPath>"`. Одного `elementKey`
+ * мало по построению: внутренние узлы компонента собственного маркера не имеют и наследуют ключ
+ * ближайшего (`ownerKey`, `src/capture/geometry.mjs`), поэтому у тултипа и пузырь, и хвост — оба
+ * `pay-tooltip`. Суффикс сравнивается с **хвостом** `elementPath` (`div.bubble>i.tail`), а не
+ * целиком: полный путь зависит от обёрток поверхности съёмки и ломался бы от смены сцены.
+ *
+ * Инварианты именно схемы:
+ *
+ * 1. **`role` и `participatesIn` — литералы.** Единственная выразимая декларация: «узел —
+ *    декорация, участвует только в краске». Свободный набор поверхностей означал бы «участвует в
+ *    layout, но не в root», то есть четвёртый способ соврать про габариты.
+ * 2. **`.optional()` без `.default()`** (C6/C25, тот же инвариант, что у `paintPaddingPx`):
+ *    `caseSetIdOf` хэширует `parsed.data`, и zod-дефолт сменил бы контентный адрес **всех** уже
+ *    опубликованных манифестов.
+ * 3. **Злоупотребление судит сервер, а не схема.** Метка на in-flow контейнере с layout-детьми —
+ *    `422 geometry_ownership_invalid` гейта `audit` **по фактам замера**: схема про форму ключа,
+ *    а «этот узел на самом деле держит раскладку» — утверждение о снятом кадре.
+ */
+export const CASE_SET_MAX_GEOMETRY_OWNERSHIP = 16;
+export const GEOMETRY_OWNERSHIP_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,64}(?:\/\/[A-Za-z0-9._:#>[\]()-]{1,192})?$/;
+
+export const caseSetGeometryOwnershipSchema = z.record(
+  z.string().regex(GEOMETRY_OWNERSHIP_KEY_PATTERN, "must be \"<elementKey>\" or \"<elementKey>//<elementPath suffix>\""),
+  z.strictObject({
+    role: z.literal("decoration"),
+    participatesIn: z.tuple([z.literal("paint")]),
+  }),
+).refine((value) => Object.keys(value).length > 0, "declare at least one node")
+  .refine((value) => Object.keys(value).length <= CASE_SET_MAX_GEOMETRY_OWNERSHIP,
+    `at most ${CASE_SET_MAX_GEOMETRY_OWNERSHIP} declared nodes per case`);
+
 export const caseSetCaseSchema = z.strictObject({
   id: caseId,
   props: z.record(z.string(), z.unknown()),
@@ -520,6 +561,13 @@ export const caseSetCaseSchema = z.strictObject({
    * подсказка автора меняла бы кадр, ничего не меняя на пикселях.
    */
   preloadAssets: z.array(z.string()).max(CASE_SET_MAX_PRELOAD_ASSETS).optional(),
+  /**
+   * Владение геометрией узлов случая (BR-05, см. `caseSetGeometryOwnershipSchema`). Слой —
+   * **`frame` + `verdict`**: декларация меняет и съёмочную интерпретацию (объявленный узел
+   * перестаёт быть кандидатом в корень и выпадает из сверки поверхностей), и вердикт (краска узла
+   * перестаёт блокировать). Отсутствие поля — старые отпечатки байт-в-байт (условный спред).
+   */
+  geometryOwnership: caseSetGeometryOwnershipSchema.optional(),
 });
 
 export const caseSetManifestSchema = z.strictObject({
@@ -557,5 +605,6 @@ export type CaseSetCase = z.infer<typeof caseSetCaseSchema>;
 export type CaseSetCapture = z.infer<typeof caseSetCaptureSchema>;
 export type CaseSetCasePolicy = z.infer<typeof caseSetCasePolicySchema>;
 export type CaseSetComparison = z.infer<typeof caseSetComparisonSchema>;
+export type CaseSetGeometryOwnership = z.infer<typeof caseSetGeometryOwnershipSchema>;
 // `CaseSetSlotChild`/`CaseSetSlotBindings` объявлены выше вручную: рекурсивная схема (`z.lazy`)
 // инференс не переживает, а экспортируемый тип обязан оставаться читаемым.

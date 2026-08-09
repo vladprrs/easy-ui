@@ -94,6 +94,13 @@ export type CaptureFailureCode =
    * случая пропускаются и кадр **не** становится визуальным доказательством (`readinessBlocksVisual`).
    * `ref` — первая барьерная причина с указателем (`<code>(<ref>)`), если она известна.
    */
+  /**
+   * Декларация `cases[].geometryOwnership` наложена на **in-flow контейнер с layout-детьми**
+   * (план 2026-08-08 §5, EUI-BR-05). Объявить декорацией узел, который держит раскладку, — не
+   * объяснение краски, а сокрытие габаритов: исключив его, вердикт объявил бы компонент меньше,
+   * чем он есть. `ref` — путь узла; проверка ведётся по фактам замера, а не по форме манифеста.
+   */
+  | "geometry_ownership_invalid"
   | "resource_barrier_incomplete";
 
 /**
@@ -117,6 +124,7 @@ export const CAPTURE_FAILURE_CODES: readonly CaptureFailureCode[] = [
   "runtime_props_parse_failed",
   "paint_capture_clipped",
   "resource_barrier_incomplete",
+  "geometry_ownership_invalid",
 ] as const;
 
 export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCode =>
@@ -130,7 +138,7 @@ export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCod
 export interface CaptureCodeOrigin {
   code: CaptureFailureCode;
   emitter: string;
-  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2" | "W9" | "BR-02" | "BR-03";
+  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2" | "W9" | "BR-02" | "BR-03" | "BR-05";
 }
 
 export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
@@ -152,6 +160,7 @@ export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
   { code: "runtime_props_parse_failed", emitter: "src/player/easyUiRuntime.tsx (applyRuntimeSchemaDefaults) → src/capture/readiness.ts", wave: "W9" },
   { code: "paint_capture_clipped", emitter: "server/acceptance/gates/geometry2.ts (paintClippedCodes ← geometryPolicy.paintClipped)", wave: "BR-02" },
   { code: "resource_barrier_incomplete", emitter: "server/acceptance/gates/readiness.ts (barrier-only met:false → indeterminate)", wave: "BR-03" },
+  { code: "geometry_ownership_invalid", emitter: "server/acceptance/gates/geometry2.ts (← audit.ts#geometryOwnershipViolationCodes)", wave: "BR-05" },
 ] as const;
 
 /**

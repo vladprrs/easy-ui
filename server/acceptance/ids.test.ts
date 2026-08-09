@@ -435,6 +435,8 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   // `report-only` (проверки слоёв ниже, дифференциальные golden'ы — в блоке BR-02).
   paintPaddingPx: { top: 0, right: 0, bottom: 0, left: 0 },
   preloadAssets: [],
+  // BR-05 (план 2026-08-08 §5): владение геометрией — двухслойное поле (frame+verdict).
+  geometryOwnership: {},
 };
 
 test("каждое поле политики, случая и поверхности классифицировано по слоям (D3)", () => {
@@ -578,6 +580,58 @@ test("BR-02: paintPaddingPx — чистый кадровый слой, и ег�
   expect(layerOf("paintPaddingPx")).toEqual(["frame"]);
   // BR-03: hint предзагрузки не входит ни в один отпечаток — сервер обязан обнаружить ресурсы сам.
   expect(layerOf("preloadAssets")).toEqual(["report-only"]);
+});
+
+// ------------------- BR-05: владение геометрией (план 2026-08-08 §5)
+
+const OWNERSHIP = { "pay-tooltip//i.tail": { role: "decoration" as const, participatesIn: ["paint"] as const } };
+
+test("BR-05: geometryOwnership — слой frame+verdict, и его отсутствие байт-в-байт прежнее", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+  const owned = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, geometryOwnership: OWNERSHIP });
+  // Кадр: декларация требует кадра, снятого волной (контракт измерения 3), — переиспользовать под
+  // неё доволновой кадр нельзя, в нём нет `preTransformBounds`.
+  expect(owned.frame).not.toBe(base.frame);
+  // Вердикт: она же меняет прочтение фактов — краска декорации перестаёт блокировать.
+  expect(owned.verdictPolicy).not.toBe(base.verdictPolicy);
+  expect(owned.verdictPolicySnapshot.geometryOwnership).toEqual(OWNERSHIP);
+  // Канву сравнения владение не двигает: поверхность сравнения остаётся comparison-owned.
+  expect(owned.comparison).toBe(base.comparison);
+
+  // Кейс с декларацией и есть кейс с `geometryContractVersion: 3` — и это ровно тот кадр, что
+  // получился бы явной передачей версии (условность **манифестная**, известна до съёмки).
+  const declaredInput = { ...GOLDEN_FRAME_INPUT, geometryOwnership: OWNERSHIP };
+  expect(frameFingerprint(declaredInput)).toBe(frameFingerprint(declaredInput, 3));
+  expect(frameFingerprint(declaredInput)).not.toBe(frameFingerprint({ ...GOLDEN_FRAME_INPUT }, 3));
+
+  // Дифференциальный инвариант волны: аддитивные факты замера (`preTransformBounds`, роли узлов)
+  // в отпечаток не входят вовсе, поэтому доволновой кадр байт-в-байт прежний.
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT)).toBe(GOLDEN_FRAME);
+  expect(frameFingerprint({ ...GOLDEN_FRAME_INPUT, geometryOwnership: undefined })).toBe(GOLDEN_FRAME);
+  expect(fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, geometryOwnership: null }).frame).toBe(base.frame);
+
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("geometryOwnership")).toEqual(["frame", "verdict"]);
+});
+
+test("BR-05: geometryOwnershipPolicyVersion — вердиктный вход авто-правила, ALGO не двигается", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+  expect(base.verdictPolicySnapshot.geometryOwnershipPolicyVersion).toBe(1);
+  const previous = process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED;
+  process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = "1";
+  try {
+    const legacy = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+    // Инвалидация ровно одного слоя: авто-правило не трогает пикселей и не трогает канву — его
+    // включение стоит recompute'а, а не пересъёмки и не re-diff'а.
+    expect(legacy.frame).toBe(base.frame);
+    expect(legacy.comparison).toBe(base.comparison);
+    expect(legacy.verdictPolicy).not.toBe(base.verdictPolicy);
+    expect("geometryOwnershipPolicyVersion" in legacy.verdictPolicySnapshot).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED;
+    else process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = previous;
+  }
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
 });
 
 test("BR-03: themeContentHash — кадровый слой, и его отсутствие байт-в-байт прежнее", () => {

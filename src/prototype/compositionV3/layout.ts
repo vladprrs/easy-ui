@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { spaceToken, type ComponentLayout } from "../../designSystems/types";
+import { overflowOwnershipSchema } from "../schema";
 
 /**
  * Token layout композиций v3 (план 2026-08-03 §5 W8e, граница D7).
@@ -59,6 +60,13 @@ export const compositionLayoutSchema = z.strictObject({
    * ничего не ограничивает; связку выбирает автор, схема оба фасета оставляет независимыми.
    */
   scroll: z.boolean().optional(),
+  /**
+   * BR-09 (план 2026-08-08 §9): то же владение переливом, что у `elementSchema.overflowOwnership`
+   * — **одна** схема на оба пути авторинга, и компилируется она в **то же** runtime-поле
+   * (`props.overflowOwnership`), которое читает извлечение деклараций на сервере. Осмысленно
+   * вместе со `scroll`: прокрутка — механизм, владение — заявление о том, чей это перелив.
+   */
+  overflowOwnership: overflowOwnershipSchema.optional(),
   radius: z.enum(COMPOSITION_RADIUS_TOKENS).optional(),
   clip: z.boolean().optional(),
   /** Роль/токен фона дизайн-системы, не сырой цвет. */
@@ -102,6 +110,18 @@ export function compileLayout(layout: CompositionLayout): Record<string, unknown
   if (layout.clip !== undefined) props.clip = layout.clip;
   if (layout.background !== undefined) props.background = layout.background;
   return props;
+}
+
+/**
+ * Поля **элемента** (а не props), в которые компилируется layout-токен (BR-09, план 2026-08-08 §9).
+ *
+ * `overflowOwnership` — не prop компонента, а поле элемента документа: prop'ом оно было бы
+ * неизвестным ключом для схемы любого компонента (`Unknown props … are errors`) и роняло бы
+ * раскрытие. Поэтому компиляция раздвоена по назначению: `compileLayout` — props контракта v1,
+ * `compileLayoutElementFields` — то же runtime-поле, что объявляет авторский документ напрямую.
+ */
+export function compileLayoutElementFields(layout: CompositionLayout): Record<string, unknown> {
+  return layout.overflowOwnership === undefined ? {} : { overflowOwnership: layout.overflowOwnership };
 }
 
 /** Какие props займёт этот `layout` (детерминированно, без значений). */

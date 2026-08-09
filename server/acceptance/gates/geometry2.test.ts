@@ -54,6 +54,10 @@ interface PaintShape {
   effectSources?: unknown[];
   clipChain?: unknown[];
   bytes?: Uint8Array;
+  /** BR-05: узлы вне потока с pre-transform геометрией и ролью (аддитивный факт замера). */
+  outOfFlowNodes?: unknown[];
+  /** BR-05: декларации, наложенные на in-flow контейнер с layout-детьми (факт замера). */
+  ownershipViolations?: unknown[];
 }
 
 const paintResult = (shape: PaintShape = {}): ScreenshotResult => ({
@@ -70,6 +74,8 @@ const paintResult = (shape: PaintShape = {}): ScreenshotResult => ({
     rootClip: shape.rootClip ?? null,
     effectSources: shape.effectSources ?? [],
     clipChain: shape.clipChain ?? [],
+    outOfFlowNodes: shape.outOfFlowNodes ?? [],
+    ...(shape.ownershipViolations === undefined ? {} : { ownershipViolations: shape.ownershipViolations }),
   }],
 } as unknown as ScreenshotResult);
 
@@ -94,7 +100,7 @@ const ink = (bounds: { x: number; y: number; width: number; height: number } | n
     clamped: { left: false, right: false, top: false, bottom: false, ...clamped },
   });
 
-async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; expectedSurfaces?: Record<string, { width: number; height: number }>; clipExpectation?: "root-does-not-clip-layout"; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES; db?: Database; referenceAssetId?: string; dsf?: number } = {}) {
+async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; expectedSurfaces?: Record<string, { width: number; height: number }>; clipExpectation?: "root-does-not-clip-layout"; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES; db?: Database; referenceAssetId?: string; dsf?: number; geometryOwnership?: Record<string, unknown> } = {}) {
   const dir = await mkdtemp(resolve(process.cwd(), ".geo2-test-"));
   dirs.push(dir);
   const service = new PaintCapture(options.result ?? paintResult());
@@ -107,6 +113,7 @@ async function context(options: { result?: ScreenshotResult; inkBbox?: GateConte
     candidate: { componentId: COMPONENT_ID, rev: 1, sourceHash: "src" } as unknown as CandidateSubject,
     case: {
       caseId: "alpha", caseKey: "alpha", props: {}, propsHash: "ph", aliasOfCaseId: null,
+      ...(options.geometryOwnership ? { geometryOwnership: options.geometryOwnership as never } : {}),
       ...(options.expectedGeometry ? { expectedGeometry: options.expectedGeometry } : {}),
       ...(options.expectedSurfaces ? { expectedSurfaces: options.expectedSurfaces as never } : {}),
       ...(options.clipExpectation ? { clipExpectation: options.clipExpectation } : {}),
@@ -534,4 +541,85 @@ test("W1b: clipExpectation судится по клипу самого корн�
   expect(violatedResult.status).toBe("fail");
   expect(violatedResult.metrics!.clipSatisfied).toBe(false);
   expect(violatedResult.detail).toContain("the root box declares overflow: hidden hidden");
+});
+
+// --------------------------------------------- BR-05: владение геометрией (план 2026-08-08 §5)
+
+/** Хвост тултипа: `8×24` под нижней кромкой пузыря `391×88`, вложенный pre-transform коробкой. */
+const TAIL_NODE = {
+  elementKey: "pay-tooltip", elementPath: "div.bubble>i.tail",
+  causes: ["position:absolute", "transform:rotate(45deg)"],
+  preTransformBounds: { x: 90, y: 136, width: 8, height: 24 },
+  transform: "rotate(45deg)",
+  postTransformPaintBounds: { x: 94, y: 160, width: 8, height: 24 },
+  role: "decoration", roleSource: "auto",
+  participation: { layoutUnion: "excluded:decoration", root: "excluded:decoration", paint: "included" },
+};
+
+test("BR-05: краска декорации не блокирует вердикт и без allowPaintOverflow", async () => {
+  const { ctx, dir } = await context({
+    result: paintResult({ outOfFlowNodes: [TAIL_NODE], effectSources: [
+      { elementKey: "pay-tooltip", elementPath: "div.bubble>i.tail", cause: "position:absolute", rect: { x: 94, y: 160, width: 8, height: 24 } },
+    ] }),
+    // Краска вышла на 24 px вниз — ровно на коробку хвоста.
+    inkBbox: ink({ x: 64, y: 64, width: 140, height: 120 }),
+  });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics!.policyVerdict).toBe("paint-overflow-decoration");
+  expect(result.metrics!.allowPaintOverflow).toBe(false);
+  expect((result.metrics!.decorationSources as unknown[]).length).toBe(1);
+  const record = JSON.parse(new TextDecoder().decode(
+    (await readArtifact(dir, result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!)) as Record<string, unknown>;
+  // Факт «краска вышла» сохраняется в evidence вместе с объяснением — вердикт не притворяется clean.
+  expect(record.policyVerdict).toBe("paint-overflow-decoration");
+  expect(record.decorationSources).toHaveLength(1);
+});
+
+test("BR-05: kill-switch возвращает доволновой вердикт байт-в-байт", async () => {
+  const previous = process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED;
+  process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = "1";
+  try {
+    const { ctx } = await context({
+      result: paintResult({ outOfFlowNodes: [TAIL_NODE], effectSources: [
+        { elementKey: "pay-tooltip", elementPath: "div.bubble>i.tail", cause: "position:absolute", rect: { x: 94, y: 160, width: 8, height: 24 } },
+      ] }),
+      inkBbox: ink({ x: 64, y: 64, width: 140, height: 120 }),
+    });
+    const result = await geometry2Gate.run(ctx);
+    expect(result.status).toBe("fail");
+    expect(result.metrics!.policyVerdict).toBe("paint-overflow-not-clipped");
+    expect(result.metrics!.decorationSources).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED;
+    else process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = previous;
+  }
+});
+
+test("BR-05: декларация на in-flow контейнере — fail с кодом geometry_ownership_invalid", async () => {
+  const { ctx } = await context({
+    geometryOwnership: { "pay-tooltip//div.bubble": { role: "decoration", participatesIn: ["paint"] } },
+    result: paintResult({
+      ownershipViolations: [{ elementKey: "pay-tooltip", elementPath: "div.bubble", reason: "in-flow-container", layoutChildren: 3 }],
+    }),
+  });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.status).toBe("fail");
+  const codes = result.metrics!.codes as { code: string; severity: string; ref?: string }[];
+  expect(codes.map((item) => item.code)).toContain("geometry_ownership_invalid");
+  expect(codes.find((item) => item.code === "geometry_ownership_invalid")).toMatchObject({ severity: "error", ref: "div.bubble" });
+  expect(result.detail).toContain("in-flow container with 3 layout child(ren)");
+});
+
+test("BR-05: декларация доезжает до съёмки — джоба несёт geometryOwnership", async () => {
+  const ownership = { "pay-tooltip//i.tail": { role: "decoration", participatesIn: ["paint"] } };
+  const { ctx, service } = await context({ geometryOwnership: ownership });
+  const seen: unknown[] = [];
+  const original = service.enqueueComponentCandidate.bind(service);
+  service.enqueueComponentCandidate = (id, candidate, opts: Record<string, unknown>) => {
+    seen.push(opts.geometryOwnership);
+    return original(id, candidate, opts as never);
+  };
+  await geometry2Gate.run(ctx);
+  expect(seen).toEqual([ownership]);
 });

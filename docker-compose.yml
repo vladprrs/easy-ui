@@ -104,6 +104,24 @@ services:
       # (`paintPaddingPx`/`preloadAssets` в case-set): пока открыто окно отката нового образа —
       # не публиковать наборы с этими полями (старый образ ответит на них 422).
       EASYUI_CAPTURE_V4_DISABLED: ${EASYUI_CAPTURE_V4_DISABLED:-}
+      # BR-05 + BR-09 (план 2026-08-08 §5/§9): **общий** тумблер группы владения геометрией
+      # (`features.geometryDecorationOwnershipV1` + `features.flowOverflowOwnershipV1`). Одно
+      # значение на две фичи — обе меняют интерпретацию одних и тех же фактов замера (что входит в
+      # layout-union, что считается корнем, что считается переливом), и два независимых тумблера
+      # дали бы состояние «декорация прозрачна для корня, но её же перелив всё ещё поднимает
+      # `content-clipped-by-frame`». `1` — доволновое поведение byte-for-byte: авто-правило
+      # decoration не применяется (`rootBounds` fragment-корня снова `null`), краска декорации снова
+      # блокирует без `allowPaintOverflow`, манифест с `cases[].geometryOwnership` отвергается
+      # (`422 geometry_ownership_disabled`), документ с `overflowOwnership` отвергается на записи
+      # (`422 flow_overflow_ownership_disabled`), и любой перелив снова даёт warning.
+      # Слой отпечатков — **вердиктный**: при снятом свитче в снимок политики попадает
+      # `geometryOwnershipPolicyVersion`, то есть включение стоит **recompute'а** (не пересъёмки и
+      # не re-diff'а); кейс, объявивший `geometryOwnership`, дополнительно получает
+      # `geometryContractVersion: 3` в кадровом слое и переснимается честно.
+      # Персистируемых форм у волны две (`cases[].geometryOwnership` в case-set и
+      # `overflowOwnership` в документе прототипа): пока открыто окно отката нового образа — не
+      # публиковать наборы и документы с этими полями (старый образ ответит на них 422).
+      EASYUI_GEOMETRY_OWNERSHIP_DISABLED: ${EASYUI_GEOMETRY_OWNERSHIP_DISABLED:-}
       # BR-03 (план 2026-08-08 §3): **младший этаж** тумблера барьера ресурсов
       # (`features.resourceBarrierV4`). `1` — барьер остаётся включённым, но исполняется по политике
       # v3 **byte-for-byte**: без фазы `registry` (ожидание реестра иконок темы), без каналов

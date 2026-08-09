@@ -40,7 +40,8 @@ import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
-  CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, CASE_SET_MAX_PRELOAD_ASSETS,
+  CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, CASE_SET_MAX_GEOMETRY_OWNERSHIP,
+  CASE_SET_MAX_PRELOAD_ASSETS,
 } from "../../src/acceptance/caseSetSchema";
 import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
 import { candidateOverlayEnabled } from "../acceptance/caseSets";
@@ -49,6 +50,7 @@ import { blockerFingerprintEnabled } from "../acceptance/disposition";
 import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
 import { suggestedPolicyEnabled } from "../acceptance/suggest";
 import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { RESOURCE_BARRIER_DISABLED, resourceBarrierPolicyVersion, resourceBarrierV4Enabled } from "../capture/resourceBarrier";
 import { LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION, PROTOTYPE_SCHEMA_RESOLVER_VERSION, schemaResolverV2Enabled } from "../validation";
 import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../../src/capture/readinessPolicy";
@@ -197,6 +199,8 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       captureFrameBudgetMpx: CAPTURE_FRAME_BUDGET_MPX,
       // Hint предзагрузки ассетов случая (BR-03): потолок массива `cases[].preloadAssets`.
       caseSetMaxPreloadAssets: CASE_SET_MAX_PRELOAD_ASSETS,
+      // Владение геометрией (BR-05): потолок объявленных узлов на случай (`cases[].geometryOwnership`).
+      caseSetMaxGeometryOwnership: CASE_SET_MAX_GEOMETRY_OWNERSHIP,
       resourceBarrierMaxResources: RESOURCE_BARRIER_MAX_RESOURCES,
       resourceBarrierBudgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
@@ -440,6 +444,25 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
        * **обоими** свитчами — `EASYUI_RESOURCE_BARRIER_DISABLED=1` (барьера нет вовсе) и
        * `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1` (барьер по v3 byte-for-byte).
        */
+      /**
+       * BR-05 (план 2026-08-08 §5): decoration-aware geometry — аддитивные факты замера
+       * (`preTransformBounds`/матрица/`postTransformPaintBounds`/причины участия в поверхностях),
+       * авто-правило «узел вне потока, чья pre-transform коробка вложена в контур, прозрачен для
+       * `rootBounds` и объясняет свою краску» и per-case декларация `cases[].geometryOwnership`.
+       * Матрицей **не** гейтится: замер расширяется на любом capture-пути. false — при
+       * `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1`, и тогда манифест с полем отвечает
+       * `422 geometry_ownership_disabled`, а сбор и вердикт остаются доволновыми byte-for-byte.
+       */
+      geometryDecorationOwnershipV1: geometryOwnershipEnabled(),
+      /**
+       * BR-09 (план 2026-08-08 §9): владение переливом FlowRoot — `elements[].overflowOwnership`
+       * (и одноимённый composition layout-токен), ограничение вклада поддерева границей
+       * scrollport'а по объявленной оси, факты `overflowOwners` и коды `unowned-overflow` /
+       * `owned-overflow-exceeds-axis`. **Персистируемая форма документа**, поэтому тумблер гейтит
+       * запись: `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` → `false` и `422 flow_overflow_ownership_disabled`
+       * на save (чтение stored-документов не гейтится никогда — канон `doc.surfaces`).
+       */
+      flowOverflowOwnershipV1: geometryOwnershipEnabled(),
       resourceBarrierV4: resourceBarrierV4Enabled(),
       /**
        * Фактическая версия политики барьера — **число**, а не факт: клиенту нужно знать, чем этот

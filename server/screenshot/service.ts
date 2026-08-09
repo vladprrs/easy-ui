@@ -6,7 +6,7 @@ import {
   type CaptureCode, type CaptureFailureCode,
 } from "../../src/capture/failureCodes";
 import { barrierPolicyIsV4, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
-import type { GeometryCollection, GeometryRect, GeometryRole } from "../../src/capture/geometry.mjs";
+import type { GeometryCollection, GeometryOverflowOwner, GeometryRect, GeometryRole, OverflowOwnershipDeclaration } from "../../src/capture/geometry.mjs";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import type { SpaceToken } from "../../src/designSystems/types";
 import { analyzeScreenRegions } from "../../src/prototype/runtimeSpec";
@@ -25,6 +25,7 @@ import {
   type ScreenFrameInputs,
 } from "../prototypes/screenFrames";
 import { CAPTURE_FRAME_BUDGET_MPX } from "../capture/captureV4";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { resolveCaptureMode } from "../capture/modes";
 import { buildCaptureReceipt, type CaptureReceipt, type CaptureReceiptOutput, type CaptureReceiptTarget } from "../../src/capture/receipt";
 import { getJobReceipt, putAssetReceipt, putJobReceipt, putReceipt, readReceipt, receiptsDisabled } from "../capture/receiptStore";
@@ -383,6 +384,8 @@ interface GeometryMeasurement {
   scroll: GeometryCollection["scroll"];
   viewportOwnership: GeometryCollection["viewportOwnership"];
   issues: GeometryCollection["issues"];
+  /** BR-09: владельцы перелива замера; отсутствует у документа без деклараций. */
+  overflowOwners?: GeometryOverflowOwner[];
   /** Детальные измерения W3 (`layoutBounds`/`effectSources`/`clipChain`) — только у `probe:"paint"`. */
   details?: GeometryCollection["details"];
   detailKeys?: string[];
@@ -428,6 +431,15 @@ export interface WorkerJob {
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
   geometryDetailKeys?: string[];
+  /**
+   * BR-05 (план 2026-08-08 §5): авто-правило decoration включено. Отсутствие поля — доволновой
+   * сбор байт-в-байт (`EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` его и не кладёт).
+   */
+  geometryDecorationOwnership?: true;
+  /** BR-05: декларации случая `cases[].geometryOwnership`; сильнее авто-правила. */
+  geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
+  /** BR-09: `elementKey → overflowOwnership` снимаемого экрана (из документа). */
+  overflowOwnership?: Record<string, OverflowOwnershipDeclaration>;
   /**
    * Детерминизм-args запуска chromium (R2a): их выбирает **сервер** тем же списком, которым
    * считает `launchDeterminismArgsHash` объявленного рендерера. Воркер `EASYUI_RENDERER_FLAGS`
@@ -488,6 +500,8 @@ interface InternalJob {
   slotChildren?: CapturePin[];
   slotTree?: CaptureSlotTreeEntry[];
   probe?: CaptureProbe; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  /** BR-09: декларации владения переливом снимаемого экрана (`overflowOwnersOf`). */
+  overflowOwnership?: Record<string, OverflowOwnershipDeclaration>;
   /**
    * W5: поверхность съёмки. Присутствует только у viewport-джобы (`"hug"` — отсутствие поля):
    * поверхность строит внутри себя узел размера вьюпорта и монтирует на нём stage host.
@@ -504,6 +518,8 @@ interface InternalJob {
   /** Запрошенное поле по сторонам **до** клэмпа к `MAX_PAINT_MARGIN_PX` (receipt: requested/effective). */
   paintPaddingRequested?: { top: number; right: number; bottom: number; left: number };
   geometryDetailKeys?: string[];
+  /** BR-05: декларации владения геометрией случая (`cases[].geometryOwnership`). */
+  geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
   /** A4: куда уезжает PNG — в asset-store (по умолчанию) или байтами в результат джобы. */
   deliver?: "asset" | "bytes";
   /**
@@ -558,6 +574,32 @@ interface InternalJob {
  * authored spec (the capture surface renders them inline, without the player's
  * `data-eui-region` slots), the panel is the screen root subtree.
  */
+/**
+ * Декларации владения переливом снимаемого экрана (BR-09, план 2026-08-08 §9):
+ * `elementKey → {axis, mode, viewportOwner?, expectedContentOverflow?}`.
+ *
+ * Канон — элементное поле `elements[].overflowOwnership`: в него компилируется и composition
+ * layout-токен (`compileLayoutElementFields`, prop'ом он быть не может — неизвестный ключ схемы
+ * компонента ронял бы раскрытие). Одноимённый prop читается **оборонительно**, чтобы рукописный
+ * документ с полем в props не молчал. Ключ элемента доезжает до DOM как `data-eui-key`
+ * (`docs/prototype-format.md`), поэтому сбор находит владельца по нему же — второго реестра нет.
+ *
+ * Пустая карта нормализуется в «деклараций нет»: замер обязан остаться доволновым байт-в-байт.
+ */
+export function overflowOwnersOf(doc: unknown, screenId: string): Record<string, OverflowOwnershipDeclaration> | undefined {
+  const screens = (doc as { screens?: { id: string; spec?: { elements?: Record<string, unknown> } }[] }).screens ?? [];
+  const screen = screens.find((item) => item.id === screenId);
+  if (!screen?.spec?.elements) return undefined;
+  const owners: Record<string, OverflowOwnershipDeclaration> = {};
+  for (const [key, element] of Object.entries(screen.spec.elements)) {
+    const item = element as { overflowOwnership?: unknown; props?: Record<string, unknown> };
+    const declared = item.overflowOwnership ?? item.props?.overflowOwnership;
+    if (declared === undefined || declared === null || typeof declared !== "object") continue;
+    owners[key] = declared as OverflowOwnershipDeclaration;
+  }
+  return Object.keys(owners).length === 0 ? undefined : owners;
+}
+
 export function geometryRoleKeysOf(doc: unknown, screenId: string): Partial<Record<GeometryRole, string>> {
   const screens = (doc as { screens?: { id: string; canvas?: { width: number; height: number }; spec: { root: string; elements: Record<string, unknown> } }[] }).screens ?? [];
   const screen = screens.find((item) => item.id === screenId);
@@ -850,6 +892,9 @@ export class ScreenshotService {
       : undefined;
     const fonts = fontManifestOf(themeContent ?? null);
     const geometryRoleKeys = opts.probe === "geometry" ? geometryRoleKeysOf(full.doc, screenId) : undefined;
+    // BR-09: владение переливом читается из документа снимаемого экрана и едет с **любой**
+    // probe-джобой: перелив rail'а одинаково искажает и `probe:"geometry"`, и paint-замер.
+    const overflowOwnership = geometryOwnershipEnabled() ? overflowOwnersOf(full.doc, screenId) : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
     // Пины джобы: подменённые — на content-addressed бандл кандидата (§B2.2).
     const capturePins: CapturePin[] = full.components.map((p) => {
@@ -918,7 +963,9 @@ export class ScreenshotService {
         ? {}
         : { resources: resourceExpectationsOf(opts.readinessPolicy, themeContent ?? null)! }),
       ...(screenFrame === undefined ? {} : { screenFrame: { prototypeId: id, rev: snap.rev, screenId, fingerprint: screenFrame.fingerprint, inputs: screenFrame.inputs } }),
-      ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
+      ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}),
+      // Условный ключ: документ без деклараций ставит джобу байт-в-байт прежней.
+      ...(overflowOwnership === undefined ? {} : { overflowOwnership }) });
     return {jobId,expected,components:capturePins};
   }
 
@@ -999,6 +1046,8 @@ export class ScreenshotService {
       slotsHash?: string;
       /** BR-03: hint предзагрузки случая (`cases[].preloadAssets`, report-only) — до барьера. */
       preloadAssets?: string[];
+      /** BR-05: декларации владения геометрией случая (`cases[].geometryOwnership`). */
+      geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
     },
   ): Promise<FrozenEnqueue> {
     this.requireAvailable();
@@ -1036,6 +1085,8 @@ export class ScreenshotService {
     opts: {
       props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean;
       probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; surface?: "viewport"; geometryDetailKeys?: string[];
+      /** BR-05: декларации владения геометрией случая — вход интерпретации замера. */
+      geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
       /** BR-02: поле paint-режима по сторонам (нормализуется здесь же, вместе со скалярным). */
       paintPadding?: { top: number; right: number; bottom: number; left: number };
       readinessPolicy?: ReadinessPolicy;
@@ -1115,6 +1166,8 @@ export class ScreenshotService {
       ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
       // BR-02: поле по сторонам — условные ключи; джоба без него остаётся скалярной байт-в-байт.
       ...(paintPadding === undefined ? {} : { paintPadding, paintPaddingRequested }),
+      // BR-05: декларация владения — условный ключ; джоба без неё остаётся прежней байт-в-байт.
+      ...(opts.geometryOwnership === undefined ? {} : { geometryOwnership: opts.geometryOwnership }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
     });
@@ -1386,6 +1439,16 @@ export class ScreenshotService {
         determinismArgs: buildDeterminismArgs(),
         ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT, ...(job.geometryRoleKeys ? { geometryRoleKeys: job.geometryRoleKeys } : {}) } : {}),
         ...(job.probe === "paint" ? { geometryDetailKeys: job.geometryDetailKeys ?? [] } : {}),
+        // BR-05: семантика владения геометрией — решение **сервера** (kill-switch), а не страницы.
+        // Отсутствие ключей оставляет сбор доволновым байт-в-байт.
+        ...(geometryOwnershipEnabled() ? { geometryDecorationOwnership: true as const } : {}),
+        ...(job.geometryOwnership === undefined || !geometryOwnershipEnabled()
+          ? {}
+          : { geometryOwnership: job.geometryOwnership }),
+        // BR-09: тот же тумблер — под свитчем декларации до страницы не доезжают вовсе.
+        ...(job.overflowOwnership === undefined || !geometryOwnershipEnabled()
+          ? {}
+          : { overflowOwnership: job.overflowOwnership }),
       };
       // Поле paint-режима едет поверхности через bootstrap: она и решает, рисовать ли фон.
       // BR-02: per-side форма едет вместо скалярной — union протокола (`CapturePaintField`).

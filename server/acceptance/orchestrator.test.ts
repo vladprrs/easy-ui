@@ -820,7 +820,15 @@ const manifestShapeHash = (manifest: unknown): string =>
 // W2: значение пересчитано вместе со сменой readiness-политики профиля (см. evidence.test.ts).
 // W10: пересчитано на аддитивный `suppressedCount` в geometry.json (bytes вырос); поля манифеста
 // не менялись, W3-overlay в slot-free ран ничего не добавляет (conditional spread по NULL).
-const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "a078ce7cbe8262f1933723ef69dd91c92288b2da743d89418a634288f76786da";
+// **Санкционированный сдвиг BR-05** (план 2026-08-08 §5): замер стал шире на два аддитивных факта —
+// `geometry.layout` (layout-габарит рядом с paint-габаритом `content`) и `details[].outOfFlowNodes`
+// (узлы вне потока с pre-transform геометрией). Оба уезжают в `record.geometry` артефакта
+// `geometry.json`, поэтому его `bytes` вырос, а `bytes` входит в нормализованный манифест. Сдвиг
+// той же природы, что W1b: расширение замера by design (без него decoration-семантику не
+// восстановить), при этом **ни один** вход `frameFingerprint`/`comparisonFingerprint` не добавлен —
+// golden кадрового отпечатка в `ids.test.ts` держится байт-в-байт, а вердикты доволновых случаев не
+// меняются (парные legacy-тесты `decoration-symptom-diagnosis.test.ts` под kill-switch'ем).
+const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "4803ecba2b45a13d1b6bc33a9453fdc5f585d0a0fd65c4e0b9da49af95296006";
 
 test("evidence-манифест slot-free рана не меняется от появления слот-полей (golden §A7)", async () => {
   const harness = await setup();

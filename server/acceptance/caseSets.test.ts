@@ -1491,6 +1491,36 @@ test("BR-02 kill-switch: манифест с paintPaddingPx отвергаетс
   db.close();
 });
 
+// ------------------------------------ BR-05: владение геометрией (план 2026-08-08 §5)
+
+const OWNERSHIP_DECL = {
+  "pay-tooltip//i.tail": { role: "decoration" as const, participatesIn: ["paint"] as ["paint"] },
+};
+
+test("BR-05: geometryOwnership протягивается в случай как объявлен, форма ключа проверяется схемой", () => {
+  const db = dbWithAsset();
+  const { manifest } = validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: OWNERSHIP_DECL }));
+  expect(buildCasesFromManifest(manifest)[0]!.geometryOwnership).toEqual(OWNERSHIP_DECL);
+  // Отсутствие поля обязано остаться отсутствием: доволновой случай не получает ни ключа, ни дефолта.
+  expect("geometryOwnership" in buildCasesFromManifest(validateManifest(db, "yp-badge", paddingCase({})).manifest)[0]!).toBe(false);
+  // Свободный набор поверхностей невыразим: единственная законная декларация — «только краска».
+  fails(() => validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: { "a": { role: "decoration", participatesIn: ["layoutUnion"] } } })),
+    422, "validation_failed");
+  fails(() => validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: {} })), 422, "validation_failed");
+  db.close();
+});
+
+test("BR-05 kill-switch: манифест с geometryOwnership отвергается 422 geometry_ownership_disabled", () => {
+  const db = dbWithAsset();
+  process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = "1";
+  try {
+    fails(() => validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: OWNERSHIP_DECL })),
+      422, "geometry_ownership_disabled");
+    expect(validateManifest(db, "yp-badge", paddingCase({})).caseSetId).toMatch(/^cset_/);
+  } finally { delete process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED; }
+  db.close();
+});
+
 // ------------------------------------------- BR-03: хэш содержимого темы (план 2026-08-08 §3, M6)
 
 test("BR-03: themeContentHash прикладывается к каждому случаю и следует за содержимым темы", () => {

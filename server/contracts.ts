@@ -753,6 +753,8 @@ export const checkVisualReferenceContract = registerContract({
 /** 422-набор head-tracking'а: publish/share/visual-baseline/bundle-export трекающего дока. */
 const headTrackingError = { status: 422, code: "prototype_head_tracking", description: "The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot." } as const;
 /** Kill-switch D16 (план 2026-08-02 multi-surface-flows): запись `doc.surfaces` требует EASYUI_SURFACES=1. */
+/** Kill-switch BR-09 (план 2026-08-08 §9): запись `elements[].overflowOwnership` требует снятого `EASYUI_GEOMETRY_OWNERSHIP_DISABLED`. */
+const flowOverflowOwnershipDisabledError = { status: 422, code: "flow_overflow_ownership_disabled", description: "The document declares elements[].overflowOwnership, but FlowRoot overflow ownership is disabled on this server (EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1). Discovery: capabilities.features.flowOverflowOwnershipV1." } as const;
 const surfacesDisabledError = { status: 422, code: "surfaces_disabled", description: "The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite." } as const;
 /** Kill-switch D9 (план 2026-08-03 W8a): запись композиций `version:3` требует EASYUI_COMPOSITION_V3=1. */
 const compositionV3DisabledError = { status: 422, code: "composition_v3_disabled", description: "The composition document declares version 3, but v3 writes are disabled on this server (EASYUI_COMPOSITION_V3=1 enables them). Reading and expanding stored v3 documents always works. Discovery: capabilities.features.compositionV3." } as const;
@@ -953,7 +955,7 @@ export const createPrototypeContract = registerContract({
   status: 201,
   requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.omit({ track: true }).shape }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError, compositionForeignDesignSystemError],
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError, flowOverflowOwnershipDisabledError, compositionForeignDesignSystemError],
 });
 
 const renderableSchema = z.object({ head: z.boolean(), published: z.boolean().nullable() });
@@ -991,7 +993,7 @@ export const savePrototypeContract = registerContract({
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
   requestSchema: z.object({ doc: inputPrototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
   responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError, compositionForeignDesignSystemError],
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError, flowOverflowOwnershipDisabledError, compositionForeignDesignSystemError],
 });
 
 export const deletePrototypeContract = registerContract({
@@ -3425,6 +3427,8 @@ export const capabilitiesResponseSchema = z.object({
      */
     captureMaxPaintPaddingPx: z.number(), captureFrameBudgetMpx: z.number(),
     caseSetMaxPreloadAssets: z.number(),
+    /** BR-05: потолок объявленных узлов владения геометрией на случай (`cases[].geometryOwnership`). */
+    caseSetMaxGeometryOwnership: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
     surfaces: z.number(),
   }),
@@ -3623,6 +3627,23 @@ export const capabilitiesResponseSchema = z.object({
      * на барьерных причинах. Матрицей не гейтится; false — под любым из двух свитчей
      * (`EASYUI_RESOURCE_BARRIER_DISABLED=1`, `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`).
      */
+    /**
+     * Decoration-aware geometry (план 2026-08-08 §5, BR-05): факты замера узлов вне потока
+     * (`preTransformBounds`, матрица, post-transform краска, причины участия в поверхностях),
+     * авто-правило decoration (прозрачность для `rootBounds`, неблокирующая краска) и per-case
+     * `cases[].geometryOwnership` (слой `frame`+`verdict`, `geometryContractVersion: 3`).
+     * Матрицей не гейтится; false — при `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1`
+     * (`422 geometry_ownership_disabled` на PUT набора, доволновая семантика byte-for-byte).
+     */
+    geometryDecorationOwnershipV1: z.boolean(),
+    /**
+     * Владение переливом FlowRoot (план 2026-08-08 §9, BR-09): `elements[].overflowOwnership`
+     * (и composition layout-токен), вклад поддерева по объявленной оси ограничен scrollport'ом,
+     * факты `overflowOwners`, коды `unowned-overflow`/`owned-overflow-exceeds-axis`. Общий
+     * kill-switch с `geometryDecorationOwnershipV1`; false ⇒ `422 flow_overflow_ownership_disabled`
+     * на записи документа с полем (чтение stored-документов не гейтится).
+     */
+    flowOverflowOwnershipV1: z.boolean(),
     resourceBarrierV4: z.boolean(),
     /** Фактическая версия политики барьера этого инстанса: `4` / `3` (v4-свитч) / `1` (барьера нет). */
     resourceBarrierPolicyVersion: z.number().int().positive(),

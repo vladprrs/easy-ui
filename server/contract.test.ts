@@ -47,7 +47,7 @@ import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
-  CASE_SET_MAX_PRELOAD_ASSETS, caseSetManifestSchema,
+  CASE_SET_MAX_GEOMETRY_OWNERSHIP, CASE_SET_MAX_PRELOAD_ASSETS, caseSetManifestSchema,
 } from "../src/acceptance/caseSetSchema";
 import { prototypeCandidateOverlayMax as PROTOTYPE_CANDIDATE_OVERLAY_MAX } from "./routes/screenshots";
 import { capabilities } from "./routes/meta";
@@ -764,6 +764,7 @@ describe("route contracts", () => {
       captureMaxPaintPaddingPx: MAX_PAINT_MARGIN_PX,
       captureFrameBudgetMpx: CAPTURE_FRAME_BUDGET_MPX,
       caseSetMaxPreloadAssets: CASE_SET_MAX_PRELOAD_ASSETS,
+      caseSetMaxGeometryOwnership: CASE_SET_MAX_GEOMETRY_OWNERSHIP,
       surfaces: SURFACES_LIMIT,
     });
     // Продуктовая прекондиция §A2a: карусель способов оплаты — 9 детей default-слота, поэтому
@@ -790,6 +791,8 @@ describe("route contracts", () => {
       // BR-03 (план 2026-08-08 §3): барьер волны и **фактическая** версия политики этого инстанса.
       // Пара, а не один флаг: «включено» и «чем снято» — разные вопросы (под v4-свитчём флаг
       // false, а версия честно 3).
+      geometryDecorationOwnershipV1: true,
+      flowOverflowOwnershipV1: true,
       resourceBarrierV4: true,
       resourceBarrierPolicyVersion: 4,
       renderStatus: true,

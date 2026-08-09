@@ -199,7 +199,7 @@ describe("screenshot job API", () => {
         safeArea:{top:0,right:0,bottom:0,left:0},
         roleRects:{ panel:{x:0,y:0,width:390,height:844,source:"key",key:"root"} },
         frame:{x:0,y:0,width:390,height:844,source:"surface"},
-        content:{x:0,y:0,width:390,height:844},
+        content:{x:0,y:0,width:390,height:844}, layout:{x:0,y:0,width:390,height:844},
         scroll:{width:390,height:844},
         viewportOwnership:{frame:{width:390,height:844},content:{width:390,height:844},scroll:{width:390,height:844},scrollable:false,owners:[{role:"panel",areaPct:100,heightPct:100}],unownedPct:0},
         issues:[{code:"footer-owns-page",severity:"warn",message:"footer owns the page",detail:{}}],

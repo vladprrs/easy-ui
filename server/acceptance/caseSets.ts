@@ -37,6 +37,7 @@ import {
 import { caseSurfaceIssueOf } from "../../src/acceptance/surfaces";
 import { ApiError } from "../http";
 import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { resourceBarrierV4Enabled } from "../capture/resourceBarrier";
 import { getLatestDesignSystemContent } from "../designSystems";
 import { candidatesRoot, type CandidateEntry } from "../components/candidates";
@@ -985,6 +986,23 @@ function assertPaintPaddingDeclaration(manifest: CaseSetManifest): void {
   }
 }
 
+/**
+ * Декларация владения геометрией (BR-05, план 2026-08-08 §5) под общим kill-switch'ем группы.
+ *
+ * Отказ, а не молчаливое игнорирование, — по той же причине, что у `paintPaddingPx`: набор
+ * контентно адресован, и принятая-но-неисполненная декларация дала бы под тем же `cset_` кадр,
+ * снятый по доволновой семантике, и вердикт, объявленный по волновой.
+ */
+function assertGeometryOwnershipDeclaration(manifest: CaseSetManifest): void {
+  if (geometryOwnershipEnabled()) return;
+  const declared = manifest.cases.find((item) => item.geometryOwnership !== undefined);
+  if (declared === undefined) return;
+  throw new ApiError(422, "geometry_ownership_disabled",
+    "Geometry ownership is disabled on this server (EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1);"
+    + " drop cases[].geometryOwnership or re-enable the geometry ownership wave",
+    { issues: [issue(["cases", declared.id, "geometryOwnership"], "geometry ownership is disabled")] });
+}
+
 export function validateManifest(db: Database, componentId: string, raw: unknown): ValidatedManifest {
   const parsed = caseSetManifestSchema.safeParse(raw);
   if (!parsed.success) {
@@ -1025,6 +1043,7 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
 
   validateCropLineage(manifest, assetDims);
   assertPaintPaddingDeclaration(manifest);
+  assertGeometryOwnershipDeclaration(manifest);
 
   // Алиасы: цель обязана существовать, не быть собой и сама не быть алиасом (цепочки запрещены —
   // вердикт наследуется ровно на один шаг, D10).
@@ -1364,6 +1383,8 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       // объявленное манифестом поле не доезжает ни до строки, ни до отпечатков вовсе.
       ...(item.paintPaddingPx === undefined ? {} : { paintPaddingPx: item.paintPaddingPx }),
       ...(item.preloadAssets === undefined ? {} : { preloadAssets: item.preloadAssets }),
+      // BR-05: владение геометрией узлов (слой frame+verdict). Тот же инвариант отсутствия.
+      ...(item.geometryOwnership === undefined ? {} : { geometryOwnership: item.geometryOwnership }),
       // W5b: координата случая в семье — вход `variantFamily` группировки ремедиаций.
       ...(item.dims ? { dims: item.dims } : {}),
     });

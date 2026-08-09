@@ -783,7 +783,9 @@ describe("resource barrier v4 (BR-03)", () => {
     expect(outcome.evidence.expected).toBe(outcome.evidence.decoded);
     expect(outcome.evidence.lateAfterBarrier).toEqual([]);
     expect(outcome.evidence.resources!.length).toBeGreaterThan(120);
-    expect(spent).toBeLessThan(barrier4.budgetMs / 10);
+    // Мягкий перф-гейт: ловит порядковую регрессию обхода (D5: реальная цена ~55 мс), а не шум
+    // параллельного CI-прогона — budgetMs/10 однажды флакнул на 863 мс под нагрузкой.
+    expect(spent).toBeLessThan(barrier4.budgetMs / 4);
     root.remove();
   });
 });

@@ -16,7 +16,7 @@
  */
 import { ApiError } from "../http";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaseSetComparison, CropSourceSurface, ReferenceSurface, TextAaBudget } from "../../src/acceptance/caseSetSchema";
+import type { CaseSetComparison, CaseSetGeometryOwnership, CropSourceSurface, ReferenceSurface, TextAaBudget } from "../../src/acceptance/caseSetSchema";
 import type { ClipExpectation, ExpectedSurfaces, GeometrySurface } from "../../src/acceptance/surfaces";
 import type { CandidateEntry } from "../components/candidates";
 import type { CasePolicyValues, CaseSurface } from "./ids";
@@ -225,6 +225,14 @@ export interface AcceptanceCase {
    * контракт и слой существовали до появления потребителя.
    */
   preloadAssets?: string[];
+  /**
+   * **Владение геометрией узлов** случая (BR-05, план 2026-08-08 §5). Присутствует только при
+   * явной декларации манифеста: слой `frame`+`verdict`, поэтому отсутствие обязано оставлять
+   * отпечатки байт-в-байт доволновыми. Кадр такого случая снимается под контрактом измерения 3
+   * (`GEOMETRY_OWNERSHIP_CONTRACT_VERSION`) — доволновой кадр не несёт `preTransformBounds`, и
+   * decoration-семантику по нему восстановить нечем.
+   */
+  geometryOwnership?: CaseSetGeometryOwnership;
   /**
    * **Хэш содержимого темы** ДС субъекта (BR-03, план 2026-08-08 §3, ревью M6): версия темы плюс
    * пины её ассетов. Кадровый слой — смена иконки темы обязана инвалидировать кадр, а не молча

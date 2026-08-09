@@ -78,6 +78,8 @@ export interface AcceptanceCaptureService {
       theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
       /** W3 (`probe:"paint"`): поле вокруг компонента и ключи детальных измерений. */
       paintMargin?: number; geometryDetailKeys?: string[];
+      /** BR-05: декларации владения геометрией случая — вход интерпретации замера. */
+      geometryOwnership?: Record<string, { role: "decoration"; participatesIn: readonly ["paint"] }>;
       /** W4: политика readiness, которую обязана исполнить поверхность. */
       readinessPolicy?: ReadinessPolicy;
       /**

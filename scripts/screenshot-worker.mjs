@@ -255,7 +255,13 @@ async function run(job) {
     };
 
     if (job.probe === "geometry") {
-      const measurements = await page.evaluate(collectGeometry, { limit: job.geometryLimit, roleKeys: job.geometryRoleKeys ?? {} });
+      const measurements = await page.evaluate(collectGeometry, {
+        limit: job.geometryLimit, roleKeys: job.geometryRoleKeys ?? {},
+        // BR-05: авто-правило decoration включает **сервер** (kill-switch), страница его не знает.
+        decorationOwnership: job.geometryDecorationOwnership === true,
+        // BR-09: владение переливом экрана — из документа, через джобу.
+        overflowOwnership: job.overflowOwnership ?? null,
+      });
       // Structural analysis runs outside the page: it is pure and unit-tested without a DOM.
       const geometry = { ...measurements, ...analyzeGeometry(measurements) };
       timings.totalMs = elapsedSince(startedAt);
@@ -271,6 +277,10 @@ async function run(job) {
         limit: job.geometryLimit,
         roleKeys: job.geometryRoleKeys ?? {},
         detailKeys: job.geometryDetailKeys ?? [],
+        // BR-05: семантика владения геометрией — авто-правило и декларации случая.
+        decorationOwnership: job.geometryDecorationOwnership === true,
+        geometryOwnership: job.geometryOwnership ?? null,
+        overflowOwnership: job.overflowOwnership ?? null,
         // Эхо поверхности джобы (план 2026-08-06 §W5 T5c.6): на viewport-поверхности layout-корнем
         // становится контентная обёртка оверлея. Отсутствие поля — hug, то есть доволновой сбор.
         overlayAwareRoot: job.bootstrap?.surface?.mode === "viewport",

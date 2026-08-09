@@ -23,9 +23,10 @@ import {
   comparisonSurfaceProjection, verdictSurfaceProjection,
   type ClipExpectation, type ExpectedSurfaces, type GeometrySurface,
 } from "../../src/acceptance/surfaces";
-import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
+import { GEOMETRY_CONTRACT_VERSION, GEOMETRY_OWNERSHIP_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import { captureV4Enabled, COMPARISON_POLICY_VERSION } from "../capture/captureV4";
+import { GEOMETRY_OWNERSHIP_POLICY_VERSION, geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { rendererFingerprint } from "../capture/renderer";
 import type { AcceptanceCase, RunOverlayNode } from "./cases";
 import type { AcceptancePolicy, GateMode, GateName, GeometryTolerances, VisualTolerances } from "./policies";
@@ -246,6 +247,18 @@ export interface FrameFingerprintInput {
    * ключа нет вовсе, и `frameFingerprint` остаётся байт-в-байт доволновым (golden-тест `ids.test.ts`).
    */
   themeContentHash?: string;
+  /**
+   * **Владение геометрией узлов** случая (BR-05, план 2026-08-08 §5). Кадровый вход не по
+   * пикселям, а по **контракту измерения**: кейс с декларацией требует кадра, снятого волной
+   * (`preTransformBounds`, роли узлов, decoration-прозрачный `rootBounds`), и переиспользовать под
+   * него доволновой кадр нельзя — восстанавливать decoration-семантику из фактов, которых в нём
+   * нет, значило бы выдумывать их. Именно поэтому такой кейс заодно получает
+   * `geometryContractVersion: 3`.
+   *
+   * Условный спред (`definedOnly`), тот же паттерн, что у `paintPaddingPx`/`themeContentHash`:
+   * кейс без декларации даёт байт-в-байт доволновой `frameFingerprint`.
+   */
+  geometryOwnership?: Readonly<Record<string, { role: string; participatesIn: readonly string[] }>>;
 }
 
 /** Кадровое подмножество разрешённой привязки слота (`ResolvedSlotBinding` без `name`/`props`). */
@@ -302,6 +315,13 @@ export function frameFingerprint(
   const slots = input.slotBindings !== undefined && input.slotBindings.length > 0
     ? frameSlotProjection(input.slotBindings)
     : undefined;
+  // BR-05: контракт измерения кейса с объявленным владением — 3. Условность **манифестная**
+  // (известна до съёмки), а не «по результату измерения»: отпечатки считаются при постановке рана
+  // и как ключ reuse, поэтому условность по факту замера дала бы кейсу два разных fingerprint
+  // (блокер B1 раунда 2 ревью плана).
+  const contractVersion = input.geometryOwnership === undefined
+    ? geometryContractVersion
+    : GEOMETRY_OWNERSHIP_CONTRACT_VERSION;
   return hashOf(definedOnly({
     candidateId: input.candidateId,
     caseKey: input.caseKey,
@@ -323,7 +343,14 @@ export function frameFingerprint(
         top: input.paintPaddingPx.top, right: input.paintPaddingPx.right,
         bottom: input.paintPaddingPx.bottom, left: input.paintPaddingPx.left,
       },
-    ...(geometryContractVersion > 1 ? { geometryContractVersion } : {}),
+    // BR-05: декларация владения — вход **и** значением, и версией контракта измерения. Значение
+    // различает две разные декларации; версия говорит «этот кадр обязан быть снят волной».
+    geometryOwnership: input.geometryOwnership === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(input.geometryOwnership)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, value]) => [key, { role: value.role, participatesIn: [...value.participatesIn] }])),
+    ...(contractVersion > 1 ? { geometryContractVersion: contractVersion } : {}),
   }));
 }
 
@@ -490,6 +517,21 @@ export interface VerdictPolicySnapshot {
   clipExpectation?: ClipExpectation;
   /** `policy.profile` манифеста: декларация набора, влияющая на смысл вердикта. */
   declaredPolicyProfile: string | null;
+  /**
+   * **Владение геометрией узлов** случая (BR-05) — вердиктная половина двухслойного поля: краска
+   * объявленного узла перестаёт блокировать, а поверхность `paint` наблюдается с поправкой на
+   * владение. Условный спред: ключ со значением `null` у каждого случая сдвинул бы
+   * `verdict_policy_hash` всего накопленного прод-кэша.
+   */
+  geometryOwnership?: Readonly<Record<string, { role: string; participatesIn: readonly string[] }>>;
+  /**
+   * **Версия политики вердикта волны владения геометрией** (BR-05,
+   * `server/capture/geometryOwnership.ts`). Кладётся условным спредом ровно тогда, когда группа
+   * активна, и это единственный механизм инвалидации **авто-правила**: оно не меняет ни одного
+   * пикселя и ни одного поля манифеста, а меняет прочтение уже снятых фактов, — то есть стоит
+   * recompute'а, а не пересъёмки. Симметрично `comparisonPolicyVersion` слоя сравнения (BR-04).
+   */
+  geometryOwnershipPolicyVersion?: number;
 }
 
 export function verdictPolicyHashOf(snapshot: VerdictPolicySnapshot): string {
@@ -543,6 +585,11 @@ export interface CaseFingerprintCase {
    * объявленный слой не доказывает, что значение доехало до пре-образа хэша.
    */
   themeContentHash?: string | null;
+  /**
+   * Владение геометрией узлов (BR-05). Как и поля выше, обязано быть **и здесь, и в
+   * `caseFingerprintsOf`**: объявленный слой не доказывает, что значение доехало до пре-образа.
+   */
+  geometryOwnership?: Readonly<Record<string, { role: string; participatesIn: readonly string[] }>> | null;
 }
 
 export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFingerprintCase): VerdictPolicySnapshot {
@@ -560,6 +607,11 @@ export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFing
     ...(item.clipExpectation === undefined || item.clipExpectation === null ? {} : { clipExpectation: item.clipExpectation }),
     expectedGeometry: item.expectedGeometry ?? null,
     declaredPolicyProfile: item.declaredPolicyProfile ?? null,
+    ...(item.geometryOwnership === undefined || item.geometryOwnership === null
+      ? {}
+      : { geometryOwnership: item.geometryOwnership }),
+    // BR-05: точка чтения тумблера одна на продукт — постановка рана и раннер не могут разойтись.
+    ...(geometryOwnershipEnabled() ? { geometryOwnershipPolicyVersion: GEOMETRY_OWNERSHIP_POLICY_VERSION } : {}),
   };
 }
 
@@ -625,6 +677,10 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     ...(input.case.themeContentHash === undefined || input.case.themeContentHash === null
       ? {}
       : { themeContentHash: input.case.themeContentHash }),
+    // BR-05: тот же условный спред. Случай без декларации остаётся доволновым байт-в-байт.
+    ...(input.case.geometryOwnership === undefined || input.case.geometryOwnership === null
+      ? {}
+      : { geometryOwnership: input.case.geometryOwnership }),
   });
   const comparison = comparisonFingerprintOf({
     referenceAssetId: input.case.referenceAssetId ?? null,
@@ -771,6 +827,13 @@ export const FIELD_LAYERS = {
   // темы рисуются внутри кадра), значит кадровый слой. Канву сравнения он не двигает: эталон
   // приезжает файлом и от темы не зависит.
   themeContentHash: ["frame"],
+  // BR-05 (план 2026-08-08 §5): владение геометрией — **двухслойное** поле, и оба слоя настоящие.
+  // `frame`: декларация требует кадра, снятого под контрактом измерения 3 (доволновой кадр не
+  // несёт `preTransformBounds`, и восстановить по нему decoration-семантику нечем) — поэтому
+  // такой кейс заодно получает `geometryContractVersion: 3`. `verdict`: она же меняет прочтение
+  // фактов (краска декорации не блокирует, поверхность `paint` наблюдается с поправкой), и это
+  // пересчитывается по сохранённым метрикам без единого пикселя.
+  geometryOwnership: ["frame", "verdict"],
 
   // --- поверхность
   "surface.viewport": ["frame"],

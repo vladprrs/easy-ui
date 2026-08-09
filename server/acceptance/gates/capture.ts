@@ -153,6 +153,11 @@ export async function captureCase(
     /** BR-02: поле кадра по сторонам; сильнее скалярного `paintMargin` (union протокола). */
     paintPadding?: { top: number; right: number; bottom: number; left: number };
     geometryDetailKeys?: string[];
+    /**
+     * BR-05: декларации владения геометрией случая (`cases[].geometryOwnership`). Едут до сбора —
+     * объявленный узел перестаёт быть кандидатом в корень уже на замере.
+     */
+    geometryOwnership?: Record<string, { role: "decoration"; participatesIn: readonly ["paint"] }>;
   } = {},
 ): Promise<CaptureOutcome> {
   const budget = ctx.policy.maxInfraRetries;
@@ -204,6 +209,8 @@ export async function captureCase(
               ...(options.paintMargin === undefined ? {} : { paintMargin: options.paintMargin }),
               // BR-02: условный спред — джоба без объявленного поля по сторонам остаётся прежней.
               ...(options.paintPadding === undefined ? {} : { paintPadding: options.paintPadding }),
+              // BR-05: условный спред — джоба без декларации остаётся байт-в-байт прежней.
+              ...(options.geometryOwnership === undefined ? {} : { geometryOwnership: options.geometryOwnership }),
               geometryDetailKeys: options.geometryDetailKeys ?? [],
             }
             : {}),

@@ -395,3 +395,87 @@ describe("layout bounds and attribution", () => {
     } finally { restore(); }
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// BR-09 — владение переливом FlowRoot (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §9).
+// Фикстура фидбэка §12: экран 390 px и два горизонтальных rail'а с контентом 552 px.
+// ---------------------------------------------------------------------------------------------
+
+describe("BR-09 · overflow ownership", () => {
+  const FLOW = box(0, 0, 390, 844);
+  /** Каждый rail — маркер `display:contents` со своим scrollport'ом (`overflow-x:auto`). */
+  const RAIL_HTML = `<div id="eui-capture-surface" data-rect="flow">`
+    + `<span data-eui-key="rail-a" style="display:contents"><div data-rect="port-a" style="overflow-x:auto"><div data-rect="strip-a"></div></div></span>`
+    + `<span data-eui-key="rail-b" style="display:contents"><div data-rect="port-b" style="overflow-x:auto"><div data-rect="strip-b"></div></div></span>`
+    + `</div>`;
+  const RECTS = {
+    flow: FLOW,
+    "port-a": box(0, 100, 390, 120), "strip-a": box(0, 100, 552, 120),
+    "port-b": box(0, 300, 390, 120), "strip-b": box(0, 300, 552, 120),
+  };
+  const DECLARED = {
+    "rail-a": { axis: "x" as const, mode: "scroll" as const, expectedContentOverflow: true },
+    "rail-b": { axis: "x" as const, mode: "scroll" as const },
+  };
+  const measure = (options: Parameters<typeof collectGeometry>[0] = {}) => {
+    document.body.innerHTML = RAIL_HTML;
+    const restore = installRects(RECTS);
+    try { return collectGeometry(options); }
+    finally { restore(); }
+  };
+
+  it("без деклараций перелив rail'ов раздувает габарит экрана и даёт top-level warning", () => {
+    const geometry = measure();
+    expect(geometry.content).toMatchObject({ width: 552 });
+    expect("overflowOwners" in geometry).toBe(false);
+    const analysis = analyzeGeometry(geometry);
+    expect(analysis.issues.map((issue) => issue.code)).toEqual(["content-clipped-by-frame"]);
+    expect(analysis.issues[0]!.detail).toMatchObject({ overflowRight: 162 });
+  });
+
+  it("с декларациями warning исчезает, а rail'ы сохраняют свои content bounds 552", () => {
+    const geometry = measure({ overflowOwnership: DECLARED });
+    // Габарит экрана — окно, а не лента: вклад поддерева ограничен границей scrollport'а по x.
+    expect(geometry.content).toMatchObject({ x: 0, width: 390 });
+    // …и при этом перелив никуда не делся из замера — он получил владельца.
+    expect(geometry.overflowOwners).toHaveLength(2);
+    expect(geometry.overflowOwners![0]).toMatchObject({
+      key: "rail-a", axis: "x", mode: "scroll",
+      scrollportBounds: { x: 0, y: 100, width: 390, height: 120 },
+      scrollContentBounds: { x: 0, y: 100, width: 552, height: 120 },
+      ownedOverflowPx: 162, crossAxisOverflowPx: 0,
+      expectedContentOverflow: true, contentOverflowObserved: true,
+    });
+    // Клип объявлен самим scrollport'ом — он и есть звено цепочки внутри маркера.
+    expect(analyzeGeometry(geometry).issues).toEqual([]);
+    // `rects[]` не тронут: на нём стоят существующие потребители probe'а.
+    expect(geometry.rects.map((rect) => rect.width)).toEqual([552, 552]);
+  });
+
+  it("незаявленный перелив продолжает предупреждать — своим кодом unowned-overflow", () => {
+    const geometry = measure({ overflowOwnership: { "rail-a": DECLARED["rail-a"] } });
+    const analysis = analyzeGeometry(geometry);
+    expect(analysis.issues.map((issue) => issue.code)).toEqual(["unowned-overflow"]);
+    expect(analysis.issues[0]!.detail).toMatchObject({ overflowRight: 162 });
+  });
+
+  it("владелец объявлен по x, а поддерево переливается по y — owned-overflow-exceeds-axis", () => {
+    document.body.innerHTML = RAIL_HTML;
+    const restore = installRects({ ...RECTS, "strip-a": box(0, 100, 552, 200) });
+    try {
+      const geometry = collectGeometry({ overflowOwnership: DECLARED });
+      expect(geometry.overflowOwners![0]).toMatchObject({ axis: "x", ownedOverflowPx: 162, crossAxisOverflowPx: 80 });
+      const analysis = analyzeGeometry(geometry);
+      expect(analysis.issues.map((issue) => issue.code)).toEqual(["owned-overflow-exceeds-axis"]);
+      expect(analysis.issues[0]!.detail).toMatchObject({ key: "rail-a", axis: "x", crossAxisOverflowPx: 80 });
+    } finally { restore(); }
+  });
+
+  it("viewportOwner переносит границу окна на названный маркер", () => {
+    const geometry = measure({
+      overflowOwnership: { "rail-a": { axis: "x", mode: "scroll", viewportOwner: "rail-b" } },
+    });
+    // Окно взято у `rail-b` (та же ширина 390) — вклад `rail-a` обрезан по нему.
+    expect(geometry.overflowOwners![0]).toMatchObject({ key: "rail-a", scrollportBounds: { x: 0, y: 300, width: 390 } });
+  });
+});
