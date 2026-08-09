@@ -927,6 +927,16 @@
                         "attempt": {
                           "type": "number"
                         },
+                        "blockerFingerprint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "candidateId": {
                           "type": "string"
                         },
@@ -1548,6 +1558,16 @@
                     {
                       "additionalProperties": {},
                       "properties": {
+                        "blockerFingerprint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "evidenceUrl": {
                           "type": "string"
                         },
@@ -2084,6 +2104,16 @@
                   "properties": {
                     "attempt": {
                       "type": "number"
+                    },
+                    "blockerFingerprint": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "candidateId": {
                       "type": "string"
@@ -3897,6 +3927,259 @@
         "x-easyui-validated": false
       }
     },
+    "/api/acceptance-runs/{runId}/retry-disposition": {
+      "get": {
+        "operationId": "get_acceptance_runs_runId_retry_disposition",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "basis": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "candidateSourceHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "caseFingerprintAlgoVersion": {
+                          "type": "number"
+                        },
+                        "comparisonFingerprint": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "geometryContractVersion": {
+                          "type": "number"
+                        },
+                        "policyProfileHash": {
+                          "type": "string"
+                        },
+                        "readinessPolicyHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "rendererFingerprint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "verdictPolicyFingerprint": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "rendererFingerprint",
+                        "geometryContractVersion",
+                        "candidateSourceHash",
+                        "comparisonFingerprint",
+                        "verdictPolicyFingerprint",
+                        "readinessPolicyHash",
+                        "policyProfileHash",
+                        "caseFingerprintAlgoVersion"
+                      ],
+                      "type": "object"
+                    },
+                    "basisIncomplete": {
+                      "enum": [
+                        "candidate_evicted",
+                        "case_set_evicted",
+                        "case_set_unreconstructible",
+                        "case_set_changed",
+                        "policy_profile_unknown",
+                        "case_fingerprint_layers_missing",
+                        "no_cases"
+                      ],
+                      "type": "string"
+                    },
+                    "blockerFingerprint": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "cases": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "caseId": {
+                            "type": "string"
+                          },
+                          "disposition": {
+                            "enum": [
+                              "unchanged",
+                              "recompute",
+                              "rediff",
+                              "recapture",
+                              "rebuild"
+                            ],
+                            "type": "string"
+                          },
+                          "layers": {
+                            "items": {
+                              "enum": [
+                                "frame",
+                                "comparison",
+                                "verdict"
+                              ],
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "caseId",
+                          "disposition",
+                          "layers"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "changed": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "disposition": {
+                      "enum": [
+                        "unchanged",
+                        "recompute",
+                        "rediff",
+                        "recapture",
+                        "rebuild"
+                      ],
+                      "type": "string"
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "suggestedAction": {
+                      "enum": [
+                        "do-not-retry",
+                        "resume-run",
+                        "new-run",
+                        "update-source"
+                      ],
+                      "type": "string"
+                    },
+                    "unchanged": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "blockerFingerprint",
+                    "disposition",
+                    "changed",
+                    "unchanged",
+                    "suggestedAction",
+                    "basis",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "candidate_mismatch (the candidateId query parameter names another candidate than the run) | case_set_mismatch (the caseSetId query parameter names another case set than the run)"
+          }
+        },
+        "summary": "Answer, WITHOUT capturing a single pixel, whether repeating this run can produce a different verdict, and how deep the replay would have to go (`capabilities.features.blockerFingerprintV1`). The server recomputes the WOULD-BE case fingerprints of the same cases under its CURRENT state — with the same function the scheduler and the runner use — and compares them layer by layer with the fingerprints persisted on the run: nothing moved → disposition \"unchanged\" (do-not-retry); the verdict layer moved → \"recompute\"; the comparison layer moved → \"rediff\"; the frame layer moved → \"recapture\"; the component head no longer hashes to the candidate's sourceHash → \"rebuild\" (update-source), because the run was taken from source the author has already replaced. The run-level disposition is the MAXIMUM over cases, `changed[]`/`unchanged[]` name the basis fields, and `cases[]` carries the per-case verdict with the layers that moved. `blockerFingerprint` is `blk_<sha256>` over the canonicalized basis plus the SORTED terminal gate codes — neither runId nor timestamps enter the pre-image, so an unchanged blocker keeps its fingerprint across runs and across servers, and the same value is served by GET /api/acceptance-runs/{runId} and by the evidence manifest. When the basis cannot be completed — the candidate was evicted by TTL/GC, the case set is gone or no longer reconstructible, the policy profile is unknown to this server, or the case rows predate the fingerprint layers of migration v29 — the answer is a TYPED `disposition:\"unchanged\"` + `suggestedAction:\"do-not-retry\"` with `basisIncomplete` naming the reason, never a 500. `suggestedAction` is `update-source` for rebuild, `resume-run` when the run declared itself resumable (BR-06), `do-not-retry` when nothing changed, `new-run` otherwise. Optional `candidateId`/`caseSetId` query parameters are ASSERTIONS about the run, not filters: a mismatch is a typed 409 rather than silent agreement. The handle is strictly read-only (no-store): it creates no run, touches no state, and never writes to the CAS.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/admin/db-snapshot": {
       "get": {
         "operationId": "get_admin_db_snapshot",
@@ -5020,6 +5303,9 @@
                         "assets": {
                           "type": "boolean"
                         },
+                        "blockerFingerprintV1": {
+                          "type": "boolean"
+                        },
                         "bundleExport": {
                           "type": "boolean"
                         },
@@ -5236,6 +5522,7 @@
                         "impactedSnap",
                         "migrationCommit",
                         "acceptanceResumeV1",
+                        "blockerFingerprintV1",
                         "receiptEnvelopeVersion",
                         "prototypeSchemaResolverV2",
                         "prototypeSchemaResolverVersion"

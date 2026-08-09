@@ -45,6 +45,7 @@ import {
 import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
 import { candidateOverlayEnabled } from "../acceptance/caseSets";
 import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
+import { blockerFingerprintEnabled } from "../acceptance/disposition";
 import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
 import { suggestedPolicyEnabled } from "../acceptance/suggest";
 import { RESOURCE_BARRIER_DISABLED } from "../capture/resourceBarrier";
@@ -357,6 +358,12 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // Наблюдаемость волны (причина падения случая, шов allocate-renderer, circuit breaker)
       // этим флагом **не** управляется: это фиксы дефектов, а не фича.
       acceptanceResumeV1: options.acceptanceMatrix === true && acceptanceResumeEnabled(),
+      // BR-10a (план 2026-08-08 §10): `blockerFingerprint` терминального рана и read-only
+      // `GET /api/acceptance-runs/:runId/retry-disposition`. Гейтится матричной приёмкой (без неё
+      // ранов нет вовсе) **и** собственным `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1`; false — ручка
+      // отвечает 404, а поле исчезает из представления рана и из манифеста evidence. Отпечаток
+      // ничего не меняет в вердиктах и отпечатках случаев: слой полностью read-only.
+      blockerFingerprintV1: options.acceptanceMatrix === true && blockerFingerprintEnabled(),
       // §W5: `POST /api/prototypes/:id/snap-plan` — импакт-план галерейной съёмки (какие экраны
       // снимать и почему, какие переиспользуются с доказательством). Матричной приёмкой **не**
       // гейтится: галерея к ней не относится. false — при `EASYUI_IMPACTED_SNAP_DISABLED=1`, и

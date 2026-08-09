@@ -86,6 +86,12 @@ services:
       # `allocate-renderer` и circuit breaker аллокации — работает всегда, это фиксы дефектов.
       # Rollback-window v37: пока откат образа возможен без восстановления тома — держать `1`.
       EASYUI_ACCEPTANCE_RESUME_DISABLED: ${EASYUI_ACCEPTANCE_RESUME_DISABLED:-}
+      # BR-10a (план 2026-08-08 §10): отпечаток блокера и read-only
+      # `GET /api/acceptance-runs/:id/retry-disposition` (`features.blockerFingerprintV1`). Слой
+      # целиком read-only — ни вердиктов, ни отпечатков случаев, ни `evidence_manifest_hash` он не
+      # меняет, — поэтому тумблер безопасен в обе стороны: гаснут ручка (404) и поле
+      # `blockerFingerprint` в ране, сводке и манифесте архива. Миграций у волны нет.
+      EASYUI_BLOCKER_FINGERPRINT_DISABLED: ${EASYUI_BLOCKER_FINGERPRINT_DISABLED:-}
     expose:
       - "8787"
     volumes:

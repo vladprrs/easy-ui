@@ -2089,6 +2089,12 @@ const acceptanceRunViewSchema = z.looseObject({
   attempt: z.number().optional(),
   /** BR-06: отчёт об остановке либо lineage продолжения; `null` — остановки ран не описывал. */
   resume: acceptanceResumeSchema.nullable().optional(),
+  /**
+   * BR-10a: `blk_<sha256>` канонизованного basis блокера и сортированных терминальных кодов;
+   * `null` — блокера нет (ран прошёл либо отменён). **Ключа нет вовсе** при
+   * `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1` — вместе с ним исчезает и ручка `/retry-disposition`.
+   */
+  blockerFingerprint: z.string().nullable().optional(),
   remediationGroups: z.array(acceptanceRemediationGroupSchema),
   /** W7 (AC §9.3): advisory-предупреждения рана; пустой массив — «нечего перепроверять». */
   warnings: z.array(acceptanceRunWarningSchema),
@@ -2118,6 +2124,8 @@ const acceptanceRunSummarySchema = z.looseObject({
   lineage: z.string().optional(),
   /** BR-06: `phase_timeout@capture last=validate resumable` — поля нет, если ран не вставал. */
   resume: z.string().optional(),
+  /** BR-10a: тот же отпечаток блокера, что в полном виде; ключа нет при поднятом kill-switch'е. */
+  blockerFingerprint: z.string().nullable().optional(),
   progress: acceptanceProgressSchema,
   /** `{gate: "pass:17 fail:8"}` — по строке на гейт. */
   gates: z.record(z.string(), z.string()),
@@ -2337,6 +2345,49 @@ export const resumeAcceptanceRunContract = registerContract({
     { status: 409, code: "run_already_resumed", description: "a continuation of this run already exists; its id is in error.runId" },
     { status: 409, code: "acceptance_run_in_flight", description: "the candidate already has a queued/running run" },
     { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
+  ],
+});
+
+/**
+ * BR-10a (план 2026-08-08 §10, фидбэк §13): read-only disposition повтора. Живёт под тем же гейтом
+ * `EASYUI_ACCEPTANCE_MATRIX=1` и собственным kill-switch'ем `EASYUI_BLOCKER_FINGERPRINT_DISABLED`.
+ */
+const retryDispositionBasisSchema = z.looseObject({
+  rendererFingerprint: z.string().nullable(),
+  geometryContractVersion: z.number(),
+  candidateSourceHash: z.string().nullable(),
+  comparisonFingerprint: z.array(z.string()),
+  verdictPolicyFingerprint: z.array(z.string()),
+  readinessPolicyHash: z.string().nullable(),
+  policyProfileHash: z.string(),
+  caseFingerprintAlgoVersion: z.number(),
+});
+
+export const acceptanceRetryDispositionContract = registerContract({
+  method: "GET", path: "/api/acceptance-runs/{runId}/retry-disposition",
+  summary: "Answer, WITHOUT capturing a single pixel, whether repeating this run can produce a different verdict, and how deep the replay would have to go (`capabilities.features.blockerFingerprintV1`). The server recomputes the WOULD-BE case fingerprints of the same cases under its CURRENT state — with the same function the scheduler and the runner use — and compares them layer by layer with the fingerprints persisted on the run: nothing moved → disposition \"unchanged\" (do-not-retry); the verdict layer moved → \"recompute\"; the comparison layer moved → \"rediff\"; the frame layer moved → \"recapture\"; the component head no longer hashes to the candidate's sourceHash → \"rebuild\" (update-source), because the run was taken from source the author has already replaced. The run-level disposition is the MAXIMUM over cases, `changed[]`/`unchanged[]` name the basis fields, and `cases[]` carries the per-case verdict with the layers that moved. `blockerFingerprint` is `blk_<sha256>` over the canonicalized basis plus the SORTED terminal gate codes — neither runId nor timestamps enter the pre-image, so an unchanged blocker keeps its fingerprint across runs and across servers, and the same value is served by GET /api/acceptance-runs/{runId} and by the evidence manifest. When the basis cannot be completed — the candidate was evicted by TTL/GC, the case set is gone or no longer reconstructible, the policy profile is unknown to this server, or the case rows predate the fingerprint layers of migration v29 — the answer is a TYPED `disposition:\"unchanged\"` + `suggestedAction:\"do-not-retry\"` with `basisIncomplete` naming the reason, never a 500. `suggestedAction` is `update-source` for rebuild, `resume-run` when the run declared itself resumable (BR-06), `do-not-retry` when nothing changed, `new-run` otherwise. Optional `candidateId`/`caseSetId` query parameters are ASSERTIONS about the run, not filters: a mismatch is a typed 409 rather than silent agreement. The handle is strictly read-only (no-store): it creates no run, touches no state, and never writes to the CAS.",
+  responseSchema: z.looseObject({
+    runId: z.string(),
+    blockerFingerprint: z.string().nullable(),
+    disposition: z.enum(["unchanged", "recompute", "rediff", "recapture", "rebuild"]),
+    changed: z.array(z.string()),
+    unchanged: z.array(z.string()),
+    suggestedAction: z.enum(["do-not-retry", "resume-run", "new-run", "update-source"]),
+    basis: retryDispositionBasisSchema,
+    basisIncomplete: z.enum([
+      "candidate_evicted", "case_set_evicted", "case_set_unreconstructible", "case_set_changed",
+      "policy_profile_unknown", "case_fingerprint_layers_missing", "no_cases",
+    ]).optional(),
+    cases: z.array(z.looseObject({
+      caseId: z.string(),
+      disposition: z.enum(["unchanged", "recompute", "rediff", "recapture", "rebuild"]),
+      layers: z.array(z.enum(["frame", "comparison", "verdict"])),
+    })),
+  }),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 409, code: "candidate_mismatch", description: "the candidateId query parameter names another candidate than the run" },
+    { status: 409, code: "case_set_mismatch", description: "the caseSetId query parameter names another case set than the run" },
   ],
 });
 
@@ -3517,6 +3568,13 @@ export const capabilitiesResponseSchema = z.object({
      * флага не зависит — это фиксы дефектов, а не фича.
      */
     acceptanceResumeV1: z.boolean(),
+    /**
+     * `blockerFingerprint` терминального рана и read-only
+     * `GET /api/acceptance-runs/:runId/retry-disposition` (BR-10a, план 2026-08-08 §10); гаснет
+     * матрицей и `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1`. Слой полностью read-only: ни вердиктов,
+     * ни отпечатков случаев, ни evidence он не меняет — только отвечает, стоит ли повторять.
+     */
+    blockerFingerprintV1: z.boolean(),
     /**
      * Версия схемы агентской квитанции драйвера (`envelope`, план 2026-08-07 §1.4, W6b) —
      * **число**, а не булев флаг: конверт существует всегда, вопрос только в том, какую его

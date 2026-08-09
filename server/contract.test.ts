@@ -311,6 +311,9 @@ function orderedCases(): [string, Case][] {
     // BR-06: resume — тот же 404-конверт несуществующего рана; продолжаемость, lineage, reuse
     // гейтов и все 409 живут в `server/acceptance/resume.test.ts` и `acceptance-routes.test.ts`.
     ["POST /api/acceptance-runs/{runId}/resume", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/resume`, {}), expected: err(404, "not_found") }],
+    // BR-10a: тот же 404-конверт несуществующего рана; расчёт disposition, оба 409 и kill-switch
+    // живут в `server/acceptance/retry-disposition.test.ts` и `acceptance-routes.test.ts`.
+    ["GET /api/acceptance-runs/{runId}/retry-disposition", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/retry-disposition`), expected: err(404, "not_found") }],
     // Сага миграционного коммита (план 2026-08-07 §W4). Покрытие — по отказу, как у соседей:
     // happy path саги (все шесть фаз поверх реальных мутаций, идемпотентность, watchdog, cancel)
     // живёт в `server/migration-commit.test.ts`, а здесь проверяется форма ручек и 404-конверт.
@@ -844,6 +847,8 @@ describe("route contracts", () => {
       captureNoiseSummary: true,
       // BR-06 (план 2026-08-08 §6): продолжение остановленного рана приёмки.
       acceptanceResumeV1: true,
+      // BR-10a (план 2026-08-08 §10): отпечаток блокера и read-only retry-disposition.
+      blockerFingerprintV1: true,
       // План 2026-08-07 §W6b: версия схемы агентской квитанции драйвера (`envelope`) — число,
       // а не булев флаг: конверт печатается всегда, клиенту нужна его форма. Kill-switch'а нет.
       receiptEnvelopeVersion: 1,
@@ -872,6 +877,7 @@ describe("route contracts", () => {
       EASYUI_GEOMETRY_SURFACES_DISABLED: "geometrySurfacesV3",
       EASYUI_CANDIDATE_OVERLAY_DISABLED: "candidateDependencyOverlay",
       EASYUI_ACCEPTANCE_RESUME_DISABLED: "acceptanceResumeV1",
+      EASYUI_BLOCKER_FINGERPRINT_DISABLED: "blockerFingerprintV1",
       EASYUI_SUGGESTED_POLICY_DISABLED: "suggestedPolicy",
       EASYUI_SOURCE_PACKAGE_DISABLED: "figmaSourcePackage",
       EASYUI_RUNTIME_DEFAULTS_DISABLED: "runtimeSchemaDefaults",
@@ -895,6 +901,8 @@ describe("route contracts", () => {
     expect(withoutMatrix.candidateDependencyOverlay).toBe(false);
     // BR-06: resume живёт внутри матричной приёмки — без неё ручки нет вовсе.
     expect(withoutMatrix.acceptanceResumeV1).toBe(false);
+    // BR-10a: отпечаток блокера — тоже свойство приёмки: без ранов его не от чего считать.
+    expect(withoutMatrix.blockerFingerprintV1).toBe(false);
     expect(withoutMatrix.suggestedPolicy).toBe(false);
     expect(withoutMatrix.migrationCommit).toBe(false);
     expect(withoutMatrix.resourceBarrier).toBe(true);

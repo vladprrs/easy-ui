@@ -43,6 +43,7 @@ import { writeAuditEvent } from "../audit";
 import { ComponentRepo } from "../repos/components";
 import { zipResponse } from "./bundles";
 import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
+import { blockerFingerprintEnabled, blockerFingerprintOf, retryDispositionOf } from "../acceptance/disposition";
 import type { AcceptanceOrchestrator, RefreshSpec } from "../acceptance/orchestrator";
 import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateDecisionRow, CandidateRow } from "../acceptance/repo";
 import { isCandidateId, isRunId } from "../acceptance/ids";
@@ -317,6 +318,14 @@ function runView(
     // Отчёт об остановке: `{resumable, phase, lastCompletedPhase, elapsedMs, resumeFrom, jobIds}`
     // либо lineage продолжения (`resumedFrom`). `null` — ран остановки не описывал.
     resume: orchestrator.repo.runResume(run),
+    // BR-10a: отпечаток блокера — `blk_<sha256>` канонизованного basis и сортированных терминальных
+    // кодов. `null` — блокера нет (ран прошёл либо отменён); **ключа нет вовсе** при поднятом
+    // `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1`, потому что вместе с ним исчезает и ручка, по которой
+    // отпечаток можно расшифровать. Считается на лету из сохранённых данных той же функцией, что
+    // и в `retry-disposition`: два разных значения были бы хуже отсутствия отпечатка.
+    ...(blockerFingerprintEnabled()
+      ? { blockerFingerprint: blockerFingerprintOf(run, cases, orchestrator.repo.candidate(run.candidate_id)) }
+      : {}),
     policy: { id: run.policy_profile_id, hash: run.policy_profile_hash },
     caseSetId: run.case_set_id,
     idempotencyKey: run.idempotency_key,
@@ -486,6 +495,11 @@ function runSummaryView(
       ? {}
       : { lineage: `attempt ${run.attempt}${run.resumed_from_run_id ? ` after ${run.resumed_from_run_id}` : ""}` }),
     ...(resumeSummaryOf(run, orchestrator) === null ? {} : { resume: resumeSummaryOf(run, orchestrator)! }),
+    // BR-10a: тот же отпечаток, что в полном виде — сводка и есть основной вид для агента, и
+    // «тот же блокер, что вчера» обязано читаться из неё.
+    ...(blockerFingerprintEnabled()
+      ? { blockerFingerprint: blockerFingerprintOf(run, cases, orchestrator.repo.candidate(run.candidate_id)) }
+      : {}),
     progress,
     gates: summaryGates(run),
     refresh: isObject(refresh)
@@ -802,6 +816,52 @@ async function resumeRun(request: Request, db: Database, runId: string, principa
   }, 202, { ...noStore, location: `/api/acceptance-runs/${started.run.run_id}` });
 }
 
+/**
+ * `GET /api/acceptance-runs/:runId/retry-disposition` (BR-10a, план 2026-08-08 §10) — read-only
+ * ответ на вопрос «имеет ли смысл повторять этот ран и насколько глубоко».
+ *
+ * Врезка стоит рядом с `cases`/`evidence`, а не с `resume`, и это по существу: ручка **ничего не
+ * создаёт и ничего не меняет** — ни рана, ни строки кэша, ни артефакта. Вся логика живёт в
+ * `acceptance/disposition.ts`; здесь только форма запроса, авторизация и `no-store`.
+ *
+ * `candidateId`/`caseSetId` в query — необязательные **утверждения вызывающего** о ране, а не
+ * фильтры: агент, который спрашивает disposition по ране, обычно держит в руках id кандидата и
+ * набора, и молчаливое согласие сервера с ошибочной парой было бы худшим из ответов (он получил бы
+ * disposition чужого рана). Расхождение — типизированный 409, битая форма — 400.
+ */
+function retryDisposition(request: Request, db: Database, runId: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Response {
+  if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  // Kill-switch — **до** авторизации и до чтения рана: выключенная фича обязана выглядеть как
+  // отсутствующий роут, а не как «есть, но не отвечает» (канон `EASYUI_IMPACTED_SNAP_DISABLED`).
+  if (!blockerFingerprintEnabled()) throw new ApiError(404, "not_found", "Blocker fingerprint is disabled");
+  const run = requireOwnedRun(db, runId, principal, orchestrator);
+  const params = new URL(request.url).searchParams;
+  for (const key of params.keys()) {
+    if (key !== "candidateId" && key !== "caseSetId") {
+      throw new ApiError(400, "invalid_request", `Unknown query parameter: ${key}`);
+    }
+  }
+  const candidateId = params.get("candidateId");
+  if (candidateId !== null) {
+    if (!isCandidateId(candidateId)) throw new ApiError(400, "invalid_request", "candidateId must be a candidate id");
+    if (candidateId !== run.candidate_id) {
+      throw new ApiError(409, "candidate_mismatch",
+        `Run ${run.run_id} was queued for candidate ${run.candidate_id}, not ${candidateId}`);
+    }
+  }
+  const caseSetId = params.get("caseSetId");
+  if (caseSetId !== null) {
+    if (!isCaseSetId(caseSetId)) throw new ApiError(400, "invalid_request", "caseSetId must be a case set id");
+    if (caseSetId !== run.case_set_id) {
+      throw new ApiError(409, "case_set_mismatch",
+        `Run ${run.run_id} was queued for case set ${run.case_set_id ?? "none"}, not ${caseSetId}`);
+    }
+  }
+  return json(retryDispositionOf({
+    db, repo: orchestrator.repo, run, cases: orchestrator.repo.cases(run.run_id),
+  }), 200, noStore);
+}
+
 function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<string, unknown> {
   const entry = manifest?.cases.find((item) => item.caseId === row.case_id);
   return {
@@ -856,8 +916,19 @@ async function runEvidence(request: Request, db: Database, dataDir: string, runI
   if (total > evidenceMaxBytes) {
     throw new ApiError(413, "evidence_too_large", `Evidence exceeds ${evidenceMaxBytes} bytes of raw content`);
   }
+  // BR-10a: отпечаток блокера едет в манифест архива — доказательство провала без ответа «тот же
+  // это блокер или новый» заставляет читателя сравнивать вердикты глазами. Поле **вычисляется на
+  // чтении** и потому объявлено вне `RunManifest`: персистированный манифест (и его
+  // `evidence_manifest_hash`, на который ссылается promote) остаётся байт-в-байт прежним, а
+  // kill-switch убирает поле из архива так же, как из представления рана.
+  const fingerprint = blockerFingerprintEnabled()
+    ? blockerFingerprintOf(run, orchestrator.repo.cases(runId), orchestrator.repo.candidate(run.candidate_id))
+    : null;
+  const document: Record<string, unknown> = fingerprint === null
+    ? manifest as unknown as Record<string, unknown>
+    : { ...manifest, blockerFingerprint: fingerprint };
   const files: Zippable = {
-    "manifest.json": strToU8(`${JSON.stringify(manifest, null, 2)}\n`),
+    "manifest.json": strToU8(`${JSON.stringify(document, null, 2)}\n`),
     SHA256SUMS: strToU8(sha256Sums(manifest)),
   };
   for (const item of manifest.cases) {
@@ -945,6 +1016,9 @@ export async function routeAcceptance(
   }
   if (segments.length === 3 && segments[2] === "resume") {
     return resumeRun(request, db, runId, principal, orchestrator);
+  }
+  if (segments.length === 3 && segments[2] === "retry-disposition") {
+    return retryDisposition(request, db, runId, principal, orchestrator);
   }
   throw new ApiError(404, "not_found", "API route not found");
 }

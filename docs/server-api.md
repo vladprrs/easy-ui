@@ -546,6 +546,43 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
 
 **Наблюдаемость, не зависящая от kill-switch'а** (фиксы дефектов): причина падения случая персистится в `acceptance_cases.error_json` (`{outcome, message, attempts, elapsedMs, phase}`, миграция v37) и отдаётся полем `error` в `GET /acceptance-runs/:runId/cases`; ран несёт `attempt`, `resumedFromRunId` и `resume`; прекондиция «рендерер доступен» проверяется один раз до цикла случаев. `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` гасит **только** ручку (`409 acceptance_resume_disabled`) и флаг discovery.
 
+##### Отпечаток блокера и disposition повтора (EUI-BR-10a, план 2026-08-08 §10, `features.blockerFingerprintV1`)
+
+**Вопрос, на который отвечает слой:** «этот ран стоит повторять — и если да, насколько глубоко?». До волны единственным ответом был новый ран: полная матрица ради проверки, не починилось ли само.
+
+**`blockerFingerprint`** — `blk_<sha256>` канонизованного **basis** блокера и **сортированных** терминальных кодов гейтов (плюс исходы инфраструктурных падений случаев, `case_error:<outcome>`). Ни `runId`, ни время в пре-образ не входят: неизменившийся блокер даёт один и тот же отпечаток в разных ранах и на разных инстансах, и по нему агент узнаёт «это тот же дефект, что вчера». Поле отдаётся в `GET /acceptance-runs/:runId` (в том числе `?view=summary`) и в `manifest.json` архива evidence; `null` — блокера нет (ран прошёл либо отменён). Считается **на лету из сохранённых данных** и колонкой не является, поэтому в персистированный манифест не пишется и `evidence_manifest_hash` не двигает.
+
+Блокер есть у терминальных `fail`/`error`, а также у ранов с `indeterminate`-случаями: неопределённость мешает не меньше провала.
+
+**`GET /acceptance-runs/:runId/retry-disposition`** (read-only, `no-store`; ничего не создаёт и не меняет) →
+
+```json
+{"runId":"acc_…","blockerFingerprint":"blk_…","disposition":"recompute","changed":["verdictPolicyFingerprint","policyProfileHash"],
+ "unchanged":["rendererFingerprint","geometryContractVersion","candidateSourceHash","comparisonFingerprint","readinessPolicyHash","caseFingerprintAlgoVersion"],
+ "suggestedAction":"new-run",
+ "basis":{"rendererFingerprint":"…","geometryContractVersion":2,"candidateSourceHash":"…","comparisonFingerprint":["…"],
+          "verdictPolicyFingerprint":["…"],"readinessPolicyHash":"…","policyProfileHash":"…","caseFingerprintAlgoVersion":7},
+ "cases":[{"caseId":"default","disposition":"recompute","layers":["verdict"]}]}
+```
+
+Сервер пересчитывает **would-be** отпечатки тех же случаев под своим текущим состоянием — той же функцией, что постановка и раннер, — и сравнивает их со слоями, персистированными на ране:
+
+| дельта | `disposition` | что это значит |
+| --- | --- | --- |
+| ничего не двинулось | `unchanged` | повтор даст тот же вердикт |
+| разошёлся вердиктный слой | `recompute` | вердикт пересчитывается по сохранённым метрикам |
+| разошёлся слой сравнения | `rediff` | кадр переиспользуем, метрики считаются заново |
+| разошёлся кадровый слой | `recapture` | нужна пересъёмка |
+| голова компонента больше не хэшируется в `candidateSourceHash` | `rebuild` | ран снят с исходника, которого больше нет |
+
+Run-level `disposition` — **максимум** по случаям; `changed[]`/`unchanged[]` называют поля basis; `cases[]` несёт покейсовый вердикт со списком разошедшихся слоёв. Совпали все три слоя, а `case_fingerprint` — нет? Это и только это означает подъём `CASE_FINGERPRINT_ALGO_VERSION`, и платой является re-diff (ALGO в кадровый слой не входит). `readinessPolicyHash` в `changed[]` не появляется by construction: собственной колонки у него нет, и смену readiness называют `rendererFingerprint` и `policyProfileHash`.
+
+**`suggestedAction`**: `update-source` (rebuild) → `resume-run` (ран объявил себя продолжаемым, [BR-06](#продолжение-остановленного-рана-eui-br-06-план-2026-08-08-6-featuresacceptanceresumev1)) → `do-not-retry` (ничего не изменилось) → `new-run`. Порядок именно такой: продолжать ран, снятый с другого исходника, бессмысленно, а у остановленного рана есть путь дешевле нового рана даже когда basis не двигался.
+
+**Неполный basis — типизированный ответ, а не 500**: кандидат вытеснен TTL/GC, набор случаев исчез или больше не восстановим, профиль неизвестен этой сборке, строки случаев старше слоёв миграции v29 → `disposition:"unchanged"`, `suggestedAction:"do-not-retry"` и `basisIncomplete` с причиной (`candidate_evicted` | `case_set_evicted` | `case_set_unreconstructible` | `case_set_changed` | `policy_profile_unknown` | `case_fingerprint_layers_missing` | `no_cases`).
+
+Необязательные query-параметры `candidateId`/`caseSetId` — **утверждения** вызывающего о ране, а не фильтры: расхождение — `409 candidate_mismatch` / `409 case_set_mismatch`, битая форма — `400 invalid_request`. `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1` гасит обе поверхности сразу: ручка отвечает `404`, а `blockerFingerprint` исчезает из рана, сводки и манифеста архива.
+
 #### Импакт и частичная пересъёмка (волна W6, план 2026-08-03 §3 D6)
 
 Правка одного ассета в семье из 49 состояний не обязана стоить 49 капчуров. Импакт-анализ отвечает на вопрос «какие случаи baseline-набора могли измениться» — **доказательно** и только в двух узких классах; всё остальное честно деградирует в полную пересъёмку.
@@ -2535,6 +2572,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `acceptanceCandidates` | доступны `POST /components/:id/candidates` и `GET /component-candidates/:id` | тот же флаг |
 | `acceptanceRuns` | доступны `/acceptance-runs*` (постановка, poll, cases, evidence, cancel) | тот же флаг |
 | `acceptanceResumeV1` | доступен [`POST /acceptance-runs/:runId/resume`](#продолжение-остановленного-рана-eui-br-06-план-2026-08-08-6-featuresacceptanceresumev1) — продолжение остановленного рана новым раном с lineage | тот же флаг **и** `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` → `false` и `409 acceptance_resume_disabled`; наблюдаемость волны (`error` случая, шов allocate-renderer, circuit breaker) от флага не зависит |
+| `blockerFingerprintV1` | ран несёт `blockerFingerprint` и доступен [`GET /acceptance-runs/:runId/retry-disposition`](#отпечаток-блокера-и-disposition-повтора-eui-br-10a-план-2026-08-08-10-featuresblockerfingerprintv1) — read-only ответ «стоит ли повторять и насколько глубоко» | тот же флаг **и** `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1` → `false`, ручка `404`, поле исчезает из рана, сводки и манифеста архива |
 | `acceptanceMultiRunPromote` | promote принимает `acceptanceRunIds[]` — [набор ранов шардированной семьи](#multi-run-promote-шардированная-семья-волна-w7-план-2026-08-04) | тот же флаг; сборка до W7 отвечает на массив `400 invalid_request` |
 | `acceptanceSummaryView` | `GET /acceptance-runs/:runId?view=summary` — [компактная сводка рана](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) | тот же флаг; сборка до W8 **молча** игнорирует query и отдаёт полный ран, поэтому клиент дополнительно проверяет маркер `view` в теле |
 | `caseSetSlotBindings` | case-set-манифест принимает [`cases[].slotBindings`](#slotbindings-дети-слотов-случая-план-2026-08-05-a) — детей именованных и default-слота с точным пином версии | тот же флаг; сборка до этой волны отвергает такой манифест `422 validation_failed` (strictObject), поэтому флаг читается **до** публикации набора |

@@ -50,6 +50,7 @@ import { runtimeDefaultsDisabled } from "./components/runtimeDefaults";
 import { schemaResolverV2Enabled } from "./validation";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
 import { acceptanceResumeEnabled } from "./acceptance/orchestrator";
+import { blockerFingerprintEnabled } from "./acceptance/disposition";
 import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
@@ -290,6 +291,11 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // Rollback-window миграции v37: пока откат образа возможен без восстановления тома,
     // продолжения создавать нельзя — старый образ о lineage не знает.
     if(!acceptanceResumeEnabled()) console.warn("[acceptance] EASYUI_ACCEPTANCE_RESUME_DISABLED=1: resumable acceptance off, POST /api/acceptance-runs/:id/resume answers 409 acceptance_resume_disabled");
+    // BR-10a (план 2026-08-08 §10): kill-switch отпечатка блокера. Слой read-only — вердикты,
+    // отпечатки случаев и evidence-хэш от него не зависят ни в каком положении тумблера; гаснут
+    // ровно две поверхности: ручка `/retry-disposition` (404) и поле `blockerFingerprint`
+    // (представление рана, сводка, манифест архива).
+    if(!blockerFingerprintEnabled()) console.warn("[acceptance] EASYUI_BLOCKER_FINGERPRINT_DISABLED=1: blocker fingerprint off, GET /api/acceptance-runs/:id/retry-disposition answers 404 and runs carry no blockerFingerprint");
     // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —
     // ручку плана (404) и запись кадров экранов на горячем пути съёмки, — потому что писать в
     // таблицу v34 при откате образа некуда. Уже записанные кадры не трогаются: включение обратно
