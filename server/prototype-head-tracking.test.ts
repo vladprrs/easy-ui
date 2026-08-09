@@ -229,7 +229,11 @@ describe("head-tracking capture handshake (P2.3)", () => {
     expect(rendered).toEqual([2]);
     expect(new PrototypeRepo(db).draft("shot").rev).toBe(1);
     if (final.result?.kind !== "image") throw new Error("expected image result");
-    expect(final.result.componentPins).toEqual([{ id: "rating-stars", version: 2, bundleHash: expect.any(String) }]);
+    // BR-01b: пин снапа несёт тройку резолва — те же поля, что назовут save-ответ и render-status.
+    expect(final.result.componentPins).toEqual([{
+      id: "rating-stars", version: 2, bundleHash: expect.any(String),
+      resolvedVersion: 2, sourceHash: expect.any(String), propsSchemaHash: expect.any(String),
+    }]);
     db.close();
   });
 

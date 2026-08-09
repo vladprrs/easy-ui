@@ -9,7 +9,8 @@ import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { assertPinnedTrack, PrototypeRepo, type PrototypeLifecyclePatch } from "../repos/prototypes";
 import { parseWith, prototypeKindSchema, prototypeLifecycleSchema } from "../contracts";
-import { collectAndValidateAssetRefs, expandPrototypeForSave, snapshotDefinitions, themesForDoc } from "../validation";
+import { collectAndValidateAssetRefs, expandPrototypeForSave, schemaResolverV2Enabled, snapshotDefinitions, themesForDoc } from "../validation";
+import type { ResolvedComponentGraph } from "../components/resolvedGraph";
 import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
 import { recordValidation } from "../validationRecords";
 import { parseFigmaInput } from "../figma";
@@ -25,6 +26,22 @@ import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
 import { validateViewport } from "../screenshot/service";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
+
+/**
+ * BR-01b (план 2026-08-08 §1): блок `components` save-ответа — проекция **того же** узла
+ * `ResolvedComponentGraph`, который принял документ. `resolvedVersion`/`sourceHash`/
+ * `propsSchemaHash` здесь обязаны совпадать с ответом `render-status` и с `componentPins` снапа:
+ * мигратор сверяет тройки, а не доверяет им по отдельности.
+ *
+ * Поле условное: при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` его нет вовсе (доволновой ответ).
+ */
+function resolvedComponentsBlock(graph:ResolvedComponentGraph):{components:{id:string;name:string;resolvedVersion:number;sourceHash:string|null;propsSchemaHash:string|null;origin:string}[]}|Record<string,never> {
+  if(!schemaResolverV2Enabled()) return {};
+  return {components:graph.nodes.map(node=>({
+    id:node.componentId,name:node.name,resolvedVersion:node.version,
+    sourceHash:node.sourceHash,propsSchemaHash:node.propsSchemaHash,origin:node.origin,
+  }))};
+}
 
 // Lifecycle-метаданные (миграция v16). На POST /api/prototypes они приезжают рядом с
 // doc/message/figma, поэтому там их сначала вычленяют, а тело /lifecycle валидируется целиком
@@ -141,7 +158,7 @@ export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:
   db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,doc.id,result.rev);
   writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:doc.id,detail:{rev:result.rev}});
   recordPrototypeValidation(db,doc.id,result.rev,warnings);
-  return {id:result.id,rev:result.rev,warnings};
+  return {id:result.id,rev:result.rev,warnings,...resolvedComponentsBlock(snapshot.graph)};
 }
 
 // Save a new head revision from a document (used by the bundle importer for an owned id whose
@@ -156,7 +173,7 @@ export async function updatePrototypeFromDoc(db:Database,repo:PrototypeRepo,id:s
   db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,id,saved.rev);
   writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}});
   recordPrototypeValidation(db,id,saved.rev,warnings);
-  return {rev:saved.rev,warnings};
+  return {rev:saved.rev,warnings,...resolvedComponentsBlock(snapshot.graph)};
 }
 
 export async function routePrototypes(request:Request,db:Database,segments:string[],principal:Principal,dataDir=process.env.DATA_DIR||"data",serveDist?:string):Promise<Response> {
@@ -169,7 +186,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   const id=segments[1]!; const tail=segments.slice(2);
   if(!tail.length) {
     if(request.method==="GET") return json(repo.meta(id,principal),200,noStore);
-    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const expansion=expandPrototypeForSave(db,doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind,{definitionsBySurface:snapshot.definitionsBySurface,componentMeta:snapshot.componentMeta,themes:themesForDoc(db,expansion.doc)}); const assetIds=collectAndValidateAssetRefs(db,expansion.doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma,expansion.pins); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
+    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const expansion=expandPrototypeForSave(db,doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind,{definitionsBySurface:snapshot.definitionsBySurface,componentMeta:snapshot.componentMeta,themes:themesForDoc(db,expansion.doc)}); const assetIds=collectAndValidateAssetRefs(db,expansion.doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma,expansion.pins); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc),...resolvedComponentsBlock(snapshot.graph)},200,noStore); }
     if(request.method==="DELETE") { requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
