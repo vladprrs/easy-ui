@@ -3616,6 +3616,16 @@ export const capabilitiesResponseSchema = z.object({
      * Общий kill-switch с `paintCapturePaddingV1`: `EASYUI_CAPTURE_V4_DISABLED=1`.
      */
     exactContentHugCanvasV1: z.boolean(),
+    /**
+     * Полный registry-resource barrier (план 2026-08-08 §3, BR-03): фаза `registry`, каналы
+     * srcset/псевдоэлементов/шрифтов/`icon-registry`, ожидаемый манифест ассетов кандидата,
+     * пер-ресурсные записи и сужение вердикта до `indeterminate` (`resource_barrier_incomplete`)
+     * на барьерных причинах. Матрицей не гейтится; false — под любым из двух свитчей
+     * (`EASYUI_RESOURCE_BARRIER_DISABLED=1`, `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`).
+     */
+    resourceBarrierV4: z.boolean(),
+    /** Фактическая версия политики барьера этого инстанса: `4` / `3` (v4-свитч) / `1` (барьера нет). */
+    resourceBarrierPolicyVersion: z.number().int().positive(),
   }),
   /**
    * Именованные пресеты live-text AA-бюджета (план 2026-08-06 §W4): значения владеет сервер,

@@ -20,14 +20,19 @@ export function isV2StandardShim(name: string): name is ShimName {
  */
 export function emitEasyUiRuntimeShim(): string {
   return [
-    "const shared = globalThis.__easyUiShared ?? {};",
-    "const React = shared.react;",
+    // BR-03 (план 2026-08-08 §3, ревью M14): `shared` и `React` читаются **в момент вызова**, а не
+    // захватываются на eval модуля. Реальная поломка именно такая: шим импортирован до
+    // `ensureEasyUiShared()` (или объект `__easyUiShared` заменён целиком) — и тогда `Icon`
+    // навсегда возвращал `null`, потому что видел пустой снимок первой миллисекунды жизни страницы.
+    "const shared = () => globalThis.__easyUiShared ?? {};",
     "export function token(key) {",
-    "  const tokens = shared.tokens ?? {};",
+    "  const tokens = shared().tokens ?? {};",
     "  return Object.prototype.hasOwnProperty.call(tokens, key) ? String(tokens[key]) : \"\";",
     "}",
     "export function Icon(props) {",
-    "  const icons = shared.icons ?? {};",
+    "  const host = shared();",
+    "  const React = host.react;",
+    "  const icons = host.icons ?? {};",
     "  const icon = props && Object.prototype.hasOwnProperty.call(icons, props.name) ? icons[props.name] : undefined;",
     "  if (!icon || !React) return null;",
     "  const themed = props.theme && icon.themes ? icon.themes[props.theme] : undefined;",

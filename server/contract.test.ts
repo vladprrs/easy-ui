@@ -787,6 +787,11 @@ describe("route contracts", () => {
       // общим `EASYUI_CAPTURE_V4_DISABLED=1` — отдельный тест ниже.
       paintCapturePaddingV1: true,
       exactContentHugCanvasV1: true,
+      // BR-03 (план 2026-08-08 §3): барьер волны и **фактическая** версия политики этого инстанса.
+      // Пара, а не один флаг: «включено» и «чем снято» — разные вопросы (под v4-свитчём флаг
+      // false, а версия честно 3).
+      resourceBarrierV4: true,
+      resourceBarrierPolicyVersion: 4,
       renderStatus: true,
       screenshots: true,
       visualRegression: true,
@@ -870,7 +875,10 @@ describe("route contracts", () => {
     // §W11: версия readiness-политики — **чем снято**, а не «что умеет образ». Барьер W2 поднял
     // дефолтный профиль до v3; `geometryContractVersion` при этом сознательно остаётся 2 (замеры
     // W1b аддитивны и кадры не инвалидируют), и расхождение этих двух чисел — не дефект, а контракт.
-    expect(value.acceptance.readinessPolicyVersion).toBe(3);
+    // BR-03 (план 2026-08-08 §3): волна подняла барьер до v4, и версия честно это показывает —
+    // смоук-ключ включения (под `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1` здесь снова 3).
+    expect(value.acceptance.readinessPolicyVersion).toBe(4);
+    expect(value.features.resourceBarrierPolicyVersion).toBe(value.acceptance.readinessPolicyVersion);
     expect(value.acceptance.geometryContractVersion).toBe(2);
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

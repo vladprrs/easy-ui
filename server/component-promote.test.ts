@@ -852,7 +852,9 @@ describe("promotion policy (план 2026-08-04 W3)", () => {
       defaultPolicyProfile: "default-v1",
       promotionPolicyProfiles: ["default-v1", "pixel-strict-v1"],
       geometryContractVersion: 2,
-      readinessPolicyVersion: 3,
+      // BR-03 (план 2026-08-08 §3): барьер поднят до v4; под `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`
+      // здесь снова 3, под `EASYUI_RESOURCE_BARRIER_DISABLED=1` — доволновая 1 (по профилю).
+      readinessPolicyVersion: 4,
       comparisonSurfaces: ["root", "layoutUnion", "paint", "referenceExport"],
     });
   }, 180_000);

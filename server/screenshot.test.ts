@@ -7,7 +7,7 @@ import { createHandler } from "./main";
 import { prototypeDocSchema } from "../src/prototype/schema";
 import { declaredFontFaces, fontManifestOf, geometryRoleKeysOf, isTerminalJobOutcome, ScreenshotService, themeAssetIds, validatePropsAgainstSchema, type RunJob, type WorkerResult } from "./screenshot/service";
 import { classifyCaptureErrors, isInfraNoise } from "./screenshot/noise";
-import { BARRIER_READINESS_POLICY } from "../src/capture/readinessPolicy";
+import { barrierAwareReadinessPolicy } from "./capture/resourceBarrier";
 import { CaptureSessionStore, isLoopbackAddress, matchAllowed } from "./screenshot/sessions";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./screenshot/allowedUrls";
 
@@ -86,7 +86,7 @@ describe("screenshot job API", () => {
    * теста — что дефолт пути не поехал: без параметра bootstrap джобы обязан остаться прежним
    * (ключа `readiness` нет вовсе), с параметром — нести политику v3.
    */
-  test("readiness:\"barrier\" включает v3 для этой джобы; дефолт пути остаётся прежним", async () => {
+  test("readiness:\"barrier\" включает барьер для этой джобы; дефолт пути остаётся прежним", async () => {
     const { db, dir, handler: h } = await setup();
     expect((await h(req("/prototypes", "POST", { doc: await helloDoc("barrier-opt-in") }))).status).toBe(201);
     const service = makeService(db, dir);
@@ -100,7 +100,11 @@ describe("screenshot job API", () => {
     const opted = await handler(req("/prototypes/barrier-opt-in/screens/welcome/screenshot", "POST", { viewport: { width: 390, height: 844 }, readiness: "barrier" }));
     expect(opted.status).toBe(202);
     const optedJob = service.peek((await opted.json() as { jobId: string }).jobId);
-    expect(optedJob?.readinessPolicy).toEqual(BARRIER_READINESS_POLICY);
+    // BR-03: политика опт-ина — та, что активна на инстансе (v4; под v4-свитчём — v3 байт-в-байт).
+    expect(optedJob?.readinessPolicy).toEqual(barrierAwareReadinessPolicy("gallery"));
+    // Ожидания барьера едут вместе с политикой: без них фаза `registry` не отличит «реестр едет»
+    // от «темы нет» (у hello-дока иконок в теме нет, поэтому объявленный ноль — это факт).
+    expect(optedJob?.resources).toEqual({ themeIcons: 0 });
 
     // Иное значение — отказ формы, а не молчаливое игнорирование.
     const bad = await handler(req("/prototypes/barrier-opt-in/screens/welcome/screenshot", "POST", { viewport: { width: 390, height: 844 }, readiness: "strict" }));

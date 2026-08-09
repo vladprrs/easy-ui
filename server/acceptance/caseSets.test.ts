@@ -9,6 +9,7 @@ import {
 } from "../../src/acceptance/caseSetSchema";
 import {
   buildCasesFromManifest, CaseSetRepo, caseDedupKeyOf, casePolicyHashOf, caseSetIdOf, casesOfRun, coverageOf,
+  themeContentHashOf,
   dedupSlotsKeyOf, manifestOfRow, publishedPinByNameAndVersion, slotsHashOf, surfaceOfManifest,
   validateManifest,
 } from "./caseSets";
@@ -1488,4 +1489,24 @@ test("BR-02 kill-switch: манифест с paintPaddingPx отвергаетс
     expect(validateManifest(db, "yp-badge", paddingCase({})).caseSetId).toMatch(/^cset_/);
   } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
   db.close();
+});
+
+// ------------------------------------------- BR-03: хэш содержимого темы (план 2026-08-08 §3, M6)
+
+test("BR-03: themeContentHash прикладывается к каждому случаю и следует за содержимым темы", () => {
+  const db = dbWithOverlayFamily();
+  const { manifest: parsed } = validateManifest(db, "yp-badge", overlayManifest());
+  const cases = casesOfRun({
+    db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null,
+    manifest: parsed, mode: "gating",
+  });
+  const hash = themeContentHashOf(db, "yandex-pay");
+  expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  // Общий вход субъекта: он одинаков у всех случаев набора — как и overlay.
+  for (const item of cases) expect(item.themeContentHash).toBe(hash);
+  // Чистая функция от содержимого: повторный расчёт даёт то же значение, чужая ДС — другое.
+  expect(themeContentHashOf(db, "yandex-pay")).toBe(hash);
+  expect(themeContentHashOf(db, "other-ds")).not.toBe(hash);
+  // ДС не объявлена — считать нечего, и поле не появляется (доволновые отпечатки сохраняются).
+  expect(themeContentHashOf(db, null)).toBeUndefined();
 });

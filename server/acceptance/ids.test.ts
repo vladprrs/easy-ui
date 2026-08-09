@@ -409,6 +409,8 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   declaredPolicyProfile: null,
   casePolicy: {},
   cropLineage: { rect: [0, 0, 1, 1] },
+  // BR-03: хэш содержимого темы — кадровый вход (иконки темы рисуются внутри кадра).
+  themeContentHash: "theme-content-1",
   // W5: content-hug reference. Оба поля — входы построения нормализованного эталона, значит
   // comparison по инварианту D1 (проверка слоя — тестом ниже).
   referenceSurface: "paint",
@@ -576,6 +578,25 @@ test("BR-02: paintPaddingPx — чистый кадровый слой, и ег�
   expect(layerOf("paintPaddingPx")).toEqual(["frame"]);
   // BR-03: hint предзагрузки не входит ни в один отпечаток — сервер обязан обнаружить ресурсы сам.
   expect(layerOf("preloadAssets")).toEqual(["report-only"]);
+});
+
+test("BR-03: themeContentHash — кадровый слой, и его отсутствие байт-в-байт прежнее", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+  const themed = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, themeContentHash: "theme-content-1" });
+  // Ревью M6: смена содержимого темы обязана двигать **кадр** — иконки темы рисуются внутри него.
+  expect(themed.frame).not.toBe(base.frame);
+  expect(fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, themeContentHash: "theme-content-2" }).frame)
+    .not.toBe(themed.frame);
+  // Ни канвы сравнения, ни вердикта тема не двигает: эталон приезжает файлом и от неё не зависит.
+  expect(themed.comparison).toBe(base.comparison);
+  expect(themed.verdictPolicy).toBe(base.verdictPolicy);
+  expect("themeContentHash" in themed.verdictPolicySnapshot).toBe(false);
+  // Дифференциальный инвариант волны: при выключенной волне поля нет ⇒ кадр байт-в-байт прежний.
+  expect(frameFingerprint({ ...GOLDEN_FRAME_INPUT, themeContentHash: undefined })).toBe(GOLDEN_FRAME);
+  expect(fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, themeContentHash: null }).frame).toBe(base.frame);
+
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("themeContentHash")).toEqual(["frame"]);
 });
 
 test("BR-04: comparisonPolicyVersion — условный вход слоя сравнения, ALGO не двигается", () => {

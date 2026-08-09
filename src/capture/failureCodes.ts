@@ -80,7 +80,21 @@ export type CaptureFailureCode =
    * не хватило поля, ни сколько её объявить. `ref` — стороны через `/` (`right` / `top/right`);
    * `detail` называет запрошенное поле стороны и требуемый минимум.
    */
-  | "paint_capture_clipped";
+  | "paint_capture_clipped"
+  /**
+   * Барьер ресурсов не доказал полноту кадра (план 2026-08-08 §3, EUI-BR-03): ресурс приехал после
+   * барьера, не декодировался, либо доказано меньше ресурсов, чем барьер объявил своим предметом.
+   *
+   * Код поднимает **гейт** `readiness`, а не страница: страница называет причину поимённо
+   * (`resource_late_after_barrier`/`resource_decode_failed`), а этот код — вердиктное следствие
+   * «кадр непригоден, но компонент не обвинён». Именно он превращает исход гейта из `fail` в
+   * `indeterminate`: недогруженный ассет — дефект съёмки, а не расхождение компонента с эталоном,
+   * и списывать его на компонент значило бы ровно ту потерю различий, ради которой волна заводится.
+   * Инвариант при этом сохраняется: `readinessMet` остаётся `false`, поэтому сравнивающие гейты
+   * случая пропускаются и кадр **не** становится визуальным доказательством (`readinessBlocksVisual`).
+   * `ref` — первая барьерная причина с указателем (`<code>(<ref>)`), если она известна.
+   */
+  | "resource_barrier_incomplete";
 
 /**
  * `severity` — не украшение: `warning` означает «зафиксировано, вердикта не меняет» (напр.
@@ -102,6 +116,7 @@ export const CAPTURE_FAILURE_CODES: readonly CaptureFailureCode[] = [
   "resource_barrier_timeout", "resource_decode_failed", "resource_late_after_barrier", "resource_manifest_overflow",
   "runtime_props_parse_failed",
   "paint_capture_clipped",
+  "resource_barrier_incomplete",
 ] as const;
 
 export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCode =>
@@ -115,7 +130,7 @@ export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCod
 export interface CaptureCodeOrigin {
   code: CaptureFailureCode;
   emitter: string;
-  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2" | "W9" | "BR-02";
+  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2" | "W9" | "BR-02" | "BR-03";
 }
 
 export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
@@ -136,6 +151,7 @@ export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
   { code: "resource_manifest_overflow", emitter: "src/capture/readiness.ts collectResourceManifest (cap)", wave: "W2" },
   { code: "runtime_props_parse_failed", emitter: "src/player/easyUiRuntime.tsx (applyRuntimeSchemaDefaults) → src/capture/readiness.ts", wave: "W9" },
   { code: "paint_capture_clipped", emitter: "server/acceptance/gates/geometry2.ts (paintClippedCodes ← geometryPolicy.paintClipped)", wave: "BR-02" },
+  { code: "resource_barrier_incomplete", emitter: "server/acceptance/gates/readiness.ts (barrier-only met:false → indeterminate)", wave: "BR-03" },
 ] as const;
 
 /**

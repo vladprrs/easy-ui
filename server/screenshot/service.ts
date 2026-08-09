@@ -1,11 +1,11 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CapturePaintField, CaptureSlotTreeEntry, CaptureSurfaceBootstrap } from "../../src/capture/protocol";
+import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CapturePaintField, CaptureResourceExpectations, CaptureSlotTreeEntry, CaptureSurfaceBootstrap } from "../../src/capture/protocol";
 import {
   codesFromReadinessReason, isCaptureFailureCode, sanitizeCaptureCodes,
   type CaptureCode, type CaptureFailureCode,
 } from "../../src/capture/failureCodes";
-import { DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import { barrierPolicyIsV4, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import type { GeometryCollection, GeometryRect, GeometryRole } from "../../src/capture/geometry.mjs";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import type { SpaceToken } from "../../src/designSystems/types";
@@ -423,7 +423,7 @@ export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult 
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: CapturePaintField; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; runtimeDefaultsDisabled?: true; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: CapturePaintField; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; resources?: CaptureResourceExpectations; runtimeDefaultsDisabled?: true; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
@@ -517,6 +517,12 @@ interface InternalJob {
    * считался `case_fingerprint`.
    */
   fonts?: CaptureFontManifest;
+  /**
+   * BR-03 (план 2026-08-08 §3): ожидания барьера ресурсов — число иконок реестра темы джобы и
+   * ассеты, объявленные исходником кандидата/overlay. Присутствует **только** у джобы с политикой
+   * v4: bootstrap доволновой джобы обязан остаться байт-в-байт прежним.
+   */
+  resources?: CaptureResourceExpectations;
   /**
    * Объявленный рендерер, замороженный на постановке (R1). Заморожен именно здесь, а не читается
    * в момент результата: отпечаток обязан относиться к тому же процессу и той же политике, по
@@ -686,6 +692,32 @@ export function declaredFontFaces(content: ThemeContent | null): CaptureFontFace
 export function fontManifestOf(content: ThemeContent | null): CaptureFontManifest {
   const declared = declaredFontFaces(content);
   return { declared, manifestHash: new Bun.CryptoHasher("sha256").update(canonicalStringify(declared)).digest("hex") };
+}
+
+/**
+ * **Ожидания барьера ресурсов** джобы (BR-03, план 2026-08-08 §3).
+ *
+ * Считаются ровно там же, где манифест шрифтов, и из того же чтения темы: `themeIcons` — число
+ * иконок реестра, которое поверхность обязана дождаться в фазе `registry` (0 ⇒ фаза завершается
+ * мгновенно, дедлока у ДС без иконок нет by construction), `expectedAssets` — id ассетов,
+ * объявленных исходником кандидата и его overlay-детей (те же, что питают allowlist).
+ *
+ * `undefined` для любой джобы **не** под политикой v4: её bootstrap обязан остаться байт-в-байт
+ * доволновым, поэтому ключа в нём не появляется вовсе, а не появляется с нулями.
+ */
+function resourceExpectationsOf(
+  policy: ReadinessPolicy | undefined,
+  theme: ThemeContent | null,
+  assetIds: readonly string[] = [],
+): CaptureResourceExpectations | undefined {
+  if (policy === undefined || !barrierPolicyIsV4(policy.resourceBarrier)) return undefined;
+  // Порядок ассетов детерминирован: bootstrap уезжает в страницу и в диагностику, и «тот же кадр
+  // с переставленным списком» не должен выглядеть другой джобой.
+  const expectedAssets = [...new Set(assetIds)].sort();
+  return {
+    themeIcons: theme?.icons?.length ?? 0,
+    ...(expectedAssets.length === 0 ? {} : { expectedAssets }),
+  };
 }
 
 export interface ScreenshotServiceDeps {
@@ -880,6 +912,11 @@ export class ScreenshotService {
       // W2 (§1.5, триаж O-M4): опт-ин `readiness:"barrier"` прототипного запроса. Поле условное —
       // джоба без опт-ина обязана остаться байт-в-байт прежней (bootstrap без ключа `readiness`).
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
+      // BR-03: ожидания барьера у опт-ина `readiness:"barrier"` — реестр иконок темы снимаемого
+      // экрана. Ассетов кандидата у прототипной джобы нет: её ожидаемый манифест — сам документ.
+      ...(resourceExpectationsOf(opts.readinessPolicy, themeContent ?? null) === undefined
+        ? {}
+        : { resources: resourceExpectationsOf(opts.readinessPolicy, themeContent ?? null)! }),
       ...(screenFrame === undefined ? {} : { screenFrame: { prototypeId: id, rev: snap.rev, screenId, fingerprint: screenFrame.fingerprint, inputs: screenFrame.inputs } }),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
     return {jobId,expected,components:capturePins};
@@ -960,6 +997,8 @@ export class ScreenshotService {
       slotBindings?: CaptureSlotBinding[];
       /** sha256 разрешённого слот-кортежа (§A3) — часть handshake'а кандидатного кадра. */
       slotsHash?: string;
+      /** BR-03: hint предзагрузки случая (`cases[].preloadAssets`, report-only) — до барьера. */
+      preloadAssets?: string[];
     },
   ): Promise<FrozenEnqueue> {
     this.requireAvailable();
@@ -1004,6 +1043,12 @@ export class ScreenshotService {
       slotsHash?: string;
       /** Ассеты исходников overlay-кандидатов (§W3), по `componentId` — вход allowlist'а. */
       overlayAssetIds?: Record<string, string[]>;
+      /**
+       * BR-03: hint предзагрузки случая (`cases[].preloadAssets`, слой `report-only`). Он не
+       * освобождает сервер от обнаружения (§3 плана) — только пополняет **ожидаемый** манифест,
+       * поэтому необнаружённые id остаются report-only записями и кадра не валят.
+       */
+      preloadAssets?: string[];
     },
   ): FrozenEnqueue {
     const repo = new ComponentRepo(this.deps.db);
@@ -1024,6 +1069,11 @@ export class ScreenshotService {
     const expected: CaptureExpected = { kind: "component-draft", componentId: id, rev: draft.rev, sourceHash: draft.sourceHash, bundleHash: draft.entry.bundleHash!, propsHash, dsMetaVersion: themeContent.latestMetaVersion, rendererBuild: this.rendererBuild, ...(opts.slotsHash === undefined ? {} : { slotsHash: opts.slotsHash }) };
     const bundleUrl = `/api/components/${encodeURIComponent(id)}/draft/${draft.sourceHash}/bundle.js`;
     const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem, slots?.children, opts.overlayAssetIds);
+    const draftResources = resourceExpectationsOf(opts.readinessPolicy, themeContent, [
+      ...draft.assetIds,
+      ...Object.values(opts.overlayAssetIds ?? {}).flat(),
+      ...(opts.preloadAssets ?? []),
+    ]);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/draft?${query}`;
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
@@ -1055,6 +1105,10 @@ export class ScreenshotService {
       // Драфт и кандидат приёмки: компонент не пинует тему, поэтому манифест — от последней версии
       // темы его ДС, той же, что уже дала `dsMetaVersion` handshake'а.
       fonts: fontManifestOf(themeContent),
+      // BR-03: ожидаемый манифест кандидата — его собственные ассеты плюс ассеты overlay-детей
+      // (тот же список, что питает allowlist). Наблюдённые доказываются наравне с остальными,
+      // необнаружённые остаются report-only записями: кадр мог не рендерить эту ветку.
+      ...(draftResources === undefined ? {} : { resources: draftResources }),
       ...(slots === undefined ? {} : { slotChildren: slots.children, slotTree: slots.tree }),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
       ...(opts.surface === undefined ? {} : { captureSurface: opts.surface }),
@@ -1349,6 +1403,9 @@ export class ScreenshotService {
       // R4: манифест шрифтов темы — вход правила required-faces (T-M10). Пустой манифест уезжает
       // тоже: «тема есть, шрифтов в ней нет» и «манифест не приехал» — разные факты.
       if (job.fonts !== undefined) workerJob.bootstrap.fonts = job.fonts;
+      // BR-03: ожидания барьера — тем же каналом и с тем же инвариантом отсутствия, что манифест
+      // шрифтов. Без них фаза `registry` не умеет отличить «реестр ещё едет» от «темы нет».
+      if (job.resources !== undefined) workerJob.bootstrap.resources = job.resources;
       // W9 (§1.6): аварийный kill-switch runtime-дефолтов доезжает до страницы полем bootstrap'а —
       // другого канала у серверного env к браузеру нет. Поле кладётся **только** при поднятом
       // флаге: штатный bootstrap обязан остаться байт-в-байт прежним (в отпечатки оно не входит,

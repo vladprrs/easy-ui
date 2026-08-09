@@ -193,6 +193,9 @@ export async function captureCase(
           // самостоятельный факт, и оно обязано оставлять постановку бесслотовой байт-в-байт.
           ...(ctx.case.slotBindings === undefined ? {} : { slotBindings: ctx.case.slotBindings }),
           ...(ctx.case.slotsHash === undefined ? {} : { slotsHash: ctx.case.slotsHash }),
+          // BR-03: hint предзагрузки (report-only слой) — условным спредом: его отсутствие обязано
+          // оставлять постановку байт-в-байт прежней, а сервер обнаруживает ресурсы и без него.
+          ...(ctx.case.preloadAssets === undefined ? {} : { preloadAssets: ctx.case.preloadAssets }),
           // Paint-джоба тоже отдаёт байты: кадр — половина её исхода, и он уезжает в CAS.
           ...(options.probe === undefined ? { deliver: "bytes" as const } : { probe: options.probe }),
           ...(options.probe === "paint"

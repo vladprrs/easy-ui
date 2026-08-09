@@ -44,7 +44,7 @@ import { AcceptanceRepo } from "./acceptance/repo";
 import { referencedArtifactShas } from "./acceptance/evidence";
 import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
-import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
+import { RESOURCE_BARRIER_DISABLED, RESOURCE_BARRIER_V4_DISABLED } from "./capture/resourceBarrier";
 import { geometrySurfacesEnabled } from "./acceptance/gates/geometry2";
 import { runtimeDefaultsDisabled } from "./components/runtimeDefaults";
 import { schemaResolverV2Enabled } from "./validation";
@@ -303,6 +303,11 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // того масштаба снова проходит молча). Слой отпечатков: при снятом свитче в
     // `comparisonFingerprint` появляется `comparisonPolicyVersion`, то есть включение стоит
     // re-diff'а сравнимых кейсов, а выключение возвращает их к доволновым отпечаткам.
+    // BR-03 (план 2026-08-08 §3): два этажа одного тумблера. Старший гасит барьер целиком (каждый
+    // профиль возвращается в **свою** доволновую политику), младший оставляет барьер, но
+    // исполняемый по v3 byte-for-byte. Оба — restart-required: политика читается один раз на
+    // процесс и питает `policyProfileHash`, `readinessPolicyHash` и `rendererFingerprint`.
+    if(!RESOURCE_BARRIER_DISABLED && RESOURCE_BARRIER_V4_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_V4_DISABLED=1: resource barrier runs the pre-BR-03 v3 policy byte-for-byte (no registry phase, no srcset/pseudo/font/icon-registry channels, no per-resource records, readiness verdict stays fail on barrier codes)");
     if(!captureV4Enabled()) console.warn("[capture] EASYUI_CAPTURE_V4_DISABLED=1: per-side paint padding and exact content-hug canvas off, case sets declaring paintPaddingPx are refused (422 capture_padding_disabled) and comparisons fall back to the pre-wave dimension tolerance");
     if(!blockerFingerprintEnabled()) console.warn("[acceptance] EASYUI_BLOCKER_FINGERPRINT_DISABLED=1: blocker fingerprint off, GET /api/acceptance-runs/:id/retry-disposition answers 404 and runs carry no blockerFingerprint");
     // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —

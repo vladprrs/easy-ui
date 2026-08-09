@@ -237,6 +237,15 @@ export interface FrameFingerprintInput {
    * `candidateOverlay`.
    */
   paintPaddingPx?: { top: number; right: number; bottom: number; left: number };
+  /**
+   * **Хэш содержимого темы** субъекта (BR-03, план 2026-08-08 §3, ревью M6). Кадровый вход по
+   * существу: иконки темы рисуются внутри кадра, а их версия до волны в отпечаток не входила —
+   * барьер дожидался бы реестра, а переиспользовался бы растр с прежней иконкой.
+   *
+   * Условный спред (`definedOnly`), тот же паттерн, что у `paintPaddingPx`: при выключенной волне
+   * ключа нет вовсе, и `frameFingerprint` остаётся байт-в-байт доволновым (golden-тест `ids.test.ts`).
+   */
+  themeContentHash?: string;
 }
 
 /** Кадровое подмножество разрешённой привязки слота (`ResolvedSlotBinding` без `name`/`props`). */
@@ -305,6 +314,8 @@ export function frameFingerprint(
     candidateOverlay: input.candidateOverlay !== undefined && input.candidateOverlay.length > 0
       ? input.candidateOverlay.map((node) => ({ ...node }))
       : undefined,
+    // BR-03: тот же условный вход — выключенная волна не кладёт ключа, кадр прежний.
+    themeContentHash: input.themeContentHash,
     // BR-02: поля нет — ключа нет вовсе (`definedOnly`), поэтому доволновой кадр байт-в-байт прежний.
     paintPaddingPx: input.paintPaddingPx === undefined
       ? undefined
@@ -527,6 +538,11 @@ export interface CaseFingerprintCase {
    * слой, но не то, что значение доехало до пре-образа хэша.
    */
   paintPaddingPx?: { top: number; right: number; bottom: number; left: number } | null;
+  /**
+   * Хэш содержимого темы (BR-03). Как и поля выше, обязан быть **и здесь, и в `caseFingerprintsOf`**:
+   * объявленный слой не доказывает, что значение доехало до пре-образа хэша.
+   */
+  themeContentHash?: string | null;
 }
 
 export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFingerprintCase): VerdictPolicySnapshot {
@@ -605,6 +621,10 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     ...(input.case.paintPaddingPx === undefined || input.case.paintPaddingPx === null
       ? {}
       : { paintPaddingPx: input.case.paintPaddingPx }),
+    // BR-03: тот же условный спред. Набор, снятый при выключенной волне, остаётся доволновым.
+    ...(input.case.themeContentHash === undefined || input.case.themeContentHash === null
+      ? {}
+      : { themeContentHash: input.case.themeContentHash }),
   });
   const comparison = comparisonFingerprintOf({
     referenceAssetId: input.case.referenceAssetId ?? null,
@@ -747,6 +767,10 @@ export const FIELD_LAYERS = {
   // такого поля): подсказка не меняет ни пикселей, ни метрик, ни вердикта — сервер обязан
   // обнаружить ресурсы сам, а вход отпечатка означал бы, что чужая подсказка гонит пересъёмку.
   preloadAssets: ["report-only"],
+  // BR-03 (план 2026-08-08 §3, ревью M6): хэш содержимого темы — прямой вход пикселей (иконки
+  // темы рисуются внутри кадра), значит кадровый слой. Канву сравнения он не двигает: эталон
+  // приезжает файлом и от темы не зависит.
+  themeContentHash: ["frame"],
 
   // --- поверхность
   "surface.viewport": ["frame"],

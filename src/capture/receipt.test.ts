@@ -132,6 +132,9 @@ describe("capture receipt (R5)", () => {
     }));
     expect(receipt.resources.resourceBarrier).toEqual({
       expected: 4, decoded: 4, fontsReady: true, stableFrames: 2, lateAfterBarrier: [], durationMs: 812,
+      // BR-03: блоки волны у доволнового доказательства — `null`, а не выдумка. «Барьер v3» и
+      // «барьер v4 ничего не нашёл» обязаны быть различимы читателем receipt'а.
+      policyVersion: null, registry: null, resources: null, resourcesTruncated: false,
     });
     expect(receipt.timings).toMatchObject({ fontsMs: 40, imagesMs: 10, networkMs: 200, framesMs: 32, stabilizeMs: 16, barrierMs: 812 });
     // Неполный блок — это отсутствие доказательства, а не «частично исполненный барьер».

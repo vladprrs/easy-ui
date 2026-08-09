@@ -5433,6 +5433,14 @@
                         "resourceBarrier": {
                           "type": "boolean"
                         },
+                        "resourceBarrierPolicyVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "resourceBarrierV4": {
+                          "type": "boolean"
+                        },
                         "runtimeSchemaDefaults": {
                           "type": "boolean"
                         },
@@ -5533,7 +5541,9 @@
                         "prototypeSchemaResolverV2",
                         "prototypeSchemaResolverVersion",
                         "paintCapturePaddingV1",
-                        "exactContentHugCanvasV1"
+                        "exactContentHugCanvasV1",
+                        "resourceBarrierV4",
+                        "resourceBarrierPolicyVersion"
                       ],
                       "type": "object"
                     },

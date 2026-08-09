@@ -37,6 +37,8 @@ import {
 import { caseSurfaceIssueOf } from "../../src/acceptance/surfaces";
 import { ApiError } from "../http";
 import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
+import { resourceBarrierV4Enabled } from "../capture/resourceBarrier";
+import { getLatestDesignSystemContent } from "../designSystems";
 import { candidatesRoot, type CandidateEntry } from "../components/candidates";
 import { propsHashOf, type AcceptanceCase, type ResolvedSlotBinding, type RunOverlayNode } from "./cases";
 import { COMPARISON_PAINT_MARGIN_PX, type CaseSurface } from "./ids";
@@ -1429,6 +1431,43 @@ export interface ResolveSlotBindingsInput {
  * пустой объект биндингов (`{}`, схема его допускает) не создаёт ни `slotBindings`, ни `slotsHash` —
  * иначе slot-free наборы сменили бы кадровый отпечаток (§A4).
  */
+/**
+ * **Хэш содержимого темы** ДС субъекта (BR-03, план 2026-08-08 §3, ревью M6).
+ *
+ * Зачем отдельная величина. Кадровые входы знают версию темы (`buildFingerprint.themeVersion` →
+ * `candidateId`), но не её **содержимое**: реестр иконок доезжает до кадра ассетами, и «иконка
+ * темы стала другим файлом» обязано инвалидировать кадр — иначе барьер честно дождётся реестра, а
+ * переиспользован будет растр с прежней иконкой, и §6 фидбэка выполнен только на словах.
+ *
+ * Деривация — из объявленных фактов, а не из байтов: `designSystemMetaVersion` плюс отсортированные
+ * пины ассетов темы (иконки во всех темах и шрифты). Ассеты контентно адресованы (`asset_<sha256>`),
+ * поэтому список пинов и есть отпечаток содержимого, читать файлы не нужно.
+ *
+ * `undefined` при выключенной волне (оба kill-switch'а) — и это единственный механизм байтовой
+ * совместимости: поле уезжает в `frameFingerprint` условным спредом, и его отсутствие оставляет
+ * доволновые отпечатки прежними.
+ */
+export function themeContentHashOf(db: Database, designSystem: string | null): string | undefined {
+  if (!resourceBarrierV4Enabled() || designSystem === null) return undefined;
+  let content: { icons?: { assetId: string; themes?: { light?: string; dark?: string } }[]; fonts?: { src: string }[]; latestMetaVersion?: number | null } | null = null;
+  try { content = getLatestDesignSystemContent(db, designSystem); }
+  // ДС без темы — не повод отказывать в постановке рана: отпечаток честно вырождается в
+  // «версия темы + пустой список», а не в исключение посреди сборки набора.
+  catch { content = null; }
+  const assets = new Set<string>();
+  for (const icon of content?.icons ?? []) {
+    assets.add(icon.assetId);
+    if (icon.themes?.light) assets.add(icon.themes.light);
+    if (icon.themes?.dark) assets.add(icon.themes.dark);
+  }
+  for (const font of content?.fonts ?? []) assets.add(font.src);
+  return new Bun.CryptoHasher("sha256").update(canonicalStringify({
+    designSystem,
+    metaVersion: content?.latestMetaVersion ?? null,
+    assets: [...assets].sort(),
+  })).digest("hex");
+}
+
 export function resolveSlotBindings(input: ResolveSlotBindingsInput): AcceptanceCase[] {
   // §W3: overlay резолвится **до** биндингов и прикладывается к каждому случаю набора — он вход
   // кадрового слоя целиком (принятая цена, триаж C-m10). Переданный `overlay` (реконструкция)
@@ -1447,9 +1486,17 @@ export function resolveSlotBindings(input: ResolveSlotBindingsInput): Acceptance
     const row = input.db.query("SELECT name FROM components WHERE id=?").get(node.componentId) as { name: string } | null;
     overlayNames.set(node.componentId, row?.name ?? node.componentId);
   }
-  const withOverlay = overlay === undefined || overlay.length === 0
+  // BR-03 (ревью M6): хэш содержимого темы прикладывается к **каждому** случаю набора — как и
+  // overlay, это общий кадровый вход субъекта, а не свойство отдельного случая. Считается здесь,
+  // в единственной легальной точке построения набора, поэтому постановка рана, реконструкция,
+  // evidence и dry-run не могут разойтись в отпечатке.
+  const themeContentHash = themeContentHashOf(input.db, input.designSystem);
+  const withTheme = themeContentHash === undefined
     ? input.cases
-    : input.cases.map((item) => ({ ...item, candidateOverlay: overlay }));
+    : input.cases.map((item) => ({ ...item, themeContentHash }));
+  const withOverlay = overlay === undefined || overlay.length === 0
+    ? withTheme
+    : withTheme.map((item) => ({ ...item, candidateOverlay: overlay }));
   const bindingsById = new Map(input.manifest.cases
     .filter((item) => item.slotBindings !== undefined)
     .map((item) => [item.id, item.slotBindings!] as const));

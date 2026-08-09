@@ -49,7 +49,7 @@ import { blockerFingerprintEnabled } from "../acceptance/disposition";
 import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
 import { suggestedPolicyEnabled } from "../acceptance/suggest";
 import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
-import { RESOURCE_BARRIER_DISABLED } from "../capture/resourceBarrier";
+import { RESOURCE_BARRIER_DISABLED, resourceBarrierPolicyVersion, resourceBarrierV4Enabled } from "../capture/resourceBarrier";
 import { LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION, PROTOTYPE_SCHEMA_RESOLVER_VERSION, schemaResolverV2Enabled } from "../validation";
 import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../../src/capture/readinessPolicy";
 import { runtimeDefaultsDisabled } from "../components/runtimeDefaults";
@@ -431,6 +431,23 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
        * re-diff'а; false — при `EASYUI_CAPTURE_V4_DISABLED=1` (доволновая семантика byte-for-byte).
        */
       exactContentHugCanvasV1: captureV4Enabled(),
+      /**
+       * BR-03 (план 2026-08-08 §3): полный registry-resource barrier — фаза `registry` до первого
+       * манифеста (реестр иконок темы), каналы `img-srcset`/псевдоэлементы/`font`/`icon-registry`,
+       * ожидаемый манифест ассетов кандидата, пер-ресурсные записи контракта §6 и сужение вердикта
+       * до `indeterminate` с `resource_barrier_incomplete` — **только** на барьерных причинах.
+       * Матрицей **не** гейтится: барьер исполняется и на опт-ине галерейной джобы. Гаснет под
+       * **обоими** свитчами — `EASYUI_RESOURCE_BARRIER_DISABLED=1` (барьера нет вовсе) и
+       * `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1` (барьер по v3 byte-for-byte).
+       */
+      resourceBarrierV4: resourceBarrierV4Enabled(),
+      /**
+       * Фактическая версия политики барьера — **число**, а не факт: клиенту нужно знать, чем этот
+       * инстанс снимает кадры прямо сейчас. `4` — волна активна, `3` — под v4-свитчём, доволновое
+       * значение дефолтного профиля (`1`) — при выключенном барьере целиком. Пара с
+       * `acceptance.readinessPolicyVersion`, которая говорит то же самое о профиле приёмки.
+       */
+      resourceBarrierPolicyVersion: resourceBarrierPolicyVersion(),
       /**
        * Версия контракта резолвера (фидбэк §4) — **число**, а не факт существования: клиенту нужно
        * знать, по какому контракту этот инстанс отвечает прямо сейчас, а не что умеет образ.

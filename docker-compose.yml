@@ -104,6 +104,17 @@ services:
       # (`paintPaddingPx`/`preloadAssets` в case-set): пока открыто окно отката нового образа —
       # не публиковать наборы с этими полями (старый образ ответит на них 422).
       EASYUI_CAPTURE_V4_DISABLED: ${EASYUI_CAPTURE_V4_DISABLED:-}
+      # BR-03 (план 2026-08-08 §3): **младший этаж** тумблера барьера ресурсов
+      # (`features.resourceBarrierV4`). `1` — барьер остаётся включённым, но исполняется по политике
+      # v3 **byte-for-byte**: без фазы `registry` (ожидание реестра иконок темы), без каналов
+      # srcset/псевдоэлементов/шрифтов/`icon-registry`, без ожидаемого манифеста ассетов кандидата,
+      # без пер-ресурсных записей и без сужения вердикта readiness до `indeterminate`. Старший этаж —
+      # `EASYUI_RESOURCE_BARRIER_DISABLED` (гасит барьер целиком и приоритетнее). Оба —
+      # **restart required**: политика читается один раз на процесс и питает три отпечатка
+      # (`policyProfileHash`, `readinessPolicyHash`, `rendererFingerprint`). Снятие свитча меняет
+      # `readinessPolicyHash` — то есть стоит **пересъёмки** затронутых кейсов; смоук-ключ —
+      # `acceptance.readinessPolicyVersion` (4) и `features.resourceBarrierPolicyVersion`.
+      EASYUI_RESOURCE_BARRIER_V4_DISABLED: ${EASYUI_RESOURCE_BARRIER_V4_DISABLED:-}
     expose:
       - "8787"
     volumes:

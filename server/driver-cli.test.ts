@@ -3289,8 +3289,8 @@ describe("author driver resource barrier (W2)", () => {
 
     const withBarrier = await run(api, ["snap", "snap-barrier", `${directory}/shots`, "--json"]);
     expect(withBarrier.exitCode).toBe(0);
-    // Сервисная съёмка: политика джобы — v3 с блоком барьера, а не интерактивная v1.
-    expect(stub.jobs()[0]!.bootstrap.readiness).toMatchObject({ version: 3 });
+    // Сервисная съёмка: политика джобы — барьерная (BR-03 подняла её до v4), а не интерактивная v1.
+    expect(stub.jobs()[0]!.bootstrap.readiness).toMatchObject({ version: 4 });
     expect(stub.jobs()[0]!.bootstrap.readiness!.resourceBarrier).toBeDefined();
 
     const rolledBack = await run(api, ["snap", "snap-barrier", `${directory}/shots`, "--no-barrier", "--json"]);

@@ -66,7 +66,14 @@ const manifestOf = (runId: string, artifacts: { name: string; sha256: string; by
  * корпус приёмки пересъёмывается целиком, — а не дрейф формы: инвариант теста прежний, слот-поля
  * по-прежнему не появляются в манифесте рана без слотов.
  */
-const GOLDEN_SLOT_FREE_MANIFEST_HASH = "1581069b54e4cad2b796702751f4fe5709deb0beb06d8f8f7acf16c1e5ab95e7";
+/**
+ * Пересчитано волной BR-03 (план 2026-08-08 §3) по той же причине, что и волной W2: манифест несёт
+ * `policyProfileHash`, а профиль поднят на readiness v4 (фаза `registry` в политике барьера). Это
+ * объявленная цена включения — окно пересъёмки, — а не дрейф формы: инвариант теста прежний.
+ * Под `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1` сюда возвращается доволновое
+ * `1581069b54e4cad2b796702751f4fe5709deb0beb06d8f8f7acf16c1e5ab95e7`.
+ */
+const GOLDEN_SLOT_FREE_MANIFEST_HASH = "f7afa6eac20d4815c55146bffe7d026fe0668b283c3e186126d6e88b5228d0c9";
 const GOLDEN_RUN_ID = "acc_00000000-0000-4000-8000-000000000000";
 
 test("slot-free run manifest hashes to its pre-slotBindings golden", () => {
