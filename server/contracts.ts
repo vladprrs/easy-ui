@@ -3417,6 +3417,14 @@ export const capabilitiesResponseSchema = z.object({
     caseSetMaxOverlayNodes: z.number(), snapPlanMaxScreens: z.number(),
     migrationCommitPhaseTimeoutMs: z.number(), sourcePackageMaxExports: z.number(),
     resourceBarrierMaxResources: z.number(), resourceBarrierBudgetMs: z.number(),
+    /**
+     * Волна 2026-08-08 (BR-02/BR-03): потолок **одной стороны** поля краски случая
+     * (`cases[].paintPaddingPx`, тот же, что у скалярного `paintMargin`), бюджет площади кадра
+     * `(w+left+right)×(h+top+bottom)×dsf²` в мегапикселях (`422 capture_budget_exceeded`) и потолок
+     * hint'а предзагрузки (`cases[].preloadAssets`).
+     */
+    captureMaxPaintPaddingPx: z.number(), captureFrameBudgetMpx: z.number(),
+    caseSetMaxPreloadAssets: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
     surfaces: z.number(),
   }),
@@ -3592,6 +3600,22 @@ export const capabilitiesResponseSchema = z.object({
     prototypeSchemaResolverV2: z.boolean(),
     /** Контрактная версия этого резолвера: 2 — волна BR-01a, 1 — доволновой путь под kill-switch. */
     prototypeSchemaResolverVersion: z.number().int().positive(),
+    /**
+     * Поле краски случая **по сторонам** (`cases[].paintPaddingPx`, план 2026-08-08 §2, BR-02):
+     * кадровый слой ровно того случая, который его объявил, — соседние кейсы набора не
+     * переснимаются. Канву сравнения поле не двигает: кандидатский растр приводится к ней окном.
+     * Матрицей не гейтится; false — при `EASYUI_CAPTURE_V4_DISABLED=1`
+     * (`422 capture_padding_disabled` на PUT набора). Потолки — `limits.captureMaxPaintPaddingPx`
+     * и `limits.captureFrameBudgetMpx`.
+     */
+    paintCapturePaddingV1: z.boolean(),
+    /**
+     * Точная канва content-hug сравнения (план 2026-08-08 §4, BR-04): при объявленной канве
+     * размеры сводятся **точно** (delta 0, без неявного zero-pad), бюджет судится по поверхности
+     * сравнения (`rawDiffPctOfSurface`), эталон не того масштаба — `reference_scale_mismatch`.
+     * Общий kill-switch с `paintCapturePaddingV1`: `EASYUI_CAPTURE_V4_DISABLED=1`.
+     */
+    exactContentHugCanvasV1: z.boolean(),
   }),
   /**
    * Именованные пресеты live-text AA-бюджета (план 2026-08-06 §W4): значения владеет сервер,

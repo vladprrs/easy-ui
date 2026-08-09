@@ -2,7 +2,6 @@ import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { Database } from "bun:sqlite";
 import { openDatabase } from "./db";
 import { computeReadiness } from "./readiness";
 import { expandPrototypeForSave, snapshotDefinitions } from "./validation";

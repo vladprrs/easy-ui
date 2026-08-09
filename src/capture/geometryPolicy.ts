@@ -100,6 +100,15 @@ export interface GeometryPolicyInput {
   rootClip?: { property: string; value: string } | null;
   /** Габариты эталонного экспорта в **CSS px** (гейт нормализует device px ассета делением на dsf). */
   referenceExportDims?: SurfaceDims | null;
+  /**
+   * **Эффективное поле краски кадра по сторонам**, CSS px (BR-02, план 2026-08-08 §2). Заполняется
+   * потребителем только при активной capture-группе волны; при выключенном
+   * `EASYUI_CAPTURE_V4_DISABLED` поля нет, и результат легаси-ветки байт-в-байт прежний.
+   *
+   * Единственная его роль — сделать ink clamp **называемым**: зная поле стороны, вердикт может
+   * сказать «правой стороне не хватило 64 px, объяви не меньше 65», а не безликое «увеличьте маргин».
+   */
+  paintField?: { top: number; right: number; bottom: number; left: number };
   tolerances?: GeometryTolerancesInput;
 }
 
@@ -167,6 +176,20 @@ export interface GeometryPolicyResult {
   divergingSurfaces?: GeometrySurface[];
   /** Выполнено ли `clipExpectation`; `null` — проверить не по чему (нет `rootBounds`). */
   clipSatisfied?: boolean | null;
+  /**
+   * Ink clamp, названный по сторонам (BR-02). **Отсутствует** и у легаси-входа (нет `paintField`),
+   * и у кадра без клэмпа — лишний ключ уехал бы в `geometry.json` всего корпуса.
+   *
+   * `requestedPx` — поле, которым кадр снят; `minimumPx` — минимум, с которого сторону имеет смысл
+   * пересъёмывать. Минимум честно консервативен (`requested + 1`): сколько краски осталось **за**
+   * краем кадра, не знает никто — её там не сняли, — поэтому обещать точное число значило бы
+   * выдумать его.
+   */
+  paintClipped?: {
+    sides: ("top" | "right" | "bottom" | "left")[];
+    requestedPx: { top: number; right: number; bottom: number; left: number };
+    minimumPx: Partial<Record<"top" | "right" | "bottom" | "left", number>>;
+  };
 }
 
 const DEFAULT_TOLERANCE_PX = 1;
@@ -302,9 +325,23 @@ function evaluateLegacy(input: GeometryPolicyInput): GeometryPolicyResult {
   }
   if (anyClamp(input.paintClamped)) {
     const sides = (["left", "right", "top", "bottom"] as const).filter((side) => input.paintClamped![side]);
+    const field = input.paintField;
     return {
       policyVerdict: "indeterminate", overflow: emptyOverflow(), expectedGeometryDelta: null, clippedBy,
-      reasons: [`ink touches the ${sides.join("/")} edge of the capture field: increase the paint margin and recapture`],
+      reasons: [field === undefined
+        ? `ink touches the ${sides.join("/")} edge of the capture field: increase the paint margin and recapture`
+        : `ink touches the ${sides.join("/")} edge of the capture field`
+          + ` (${sides.map((side) => `${side} ${field[side]}px`).join(", ")}):`
+          + ` declare cases[].paintPaddingPx with at least ${sides.map((side) => `${side} ${field[side] + 1}`).join(", ")} and recapture`],
+      // BR-02: типизируемый факт вместо безликой причины. Условный ключ — легаси-вход (поля нет)
+      // обязан дать байт-в-байт прежний результат.
+      ...(field === undefined ? {} : {
+        paintClipped: {
+          sides: [...sides],
+          requestedPx: { ...field },
+          minimumPx: Object.fromEntries(sides.map((side) => [side, field[side] + 1])),
+        },
+      }),
     };
   }
 

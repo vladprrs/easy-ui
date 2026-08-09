@@ -5357,6 +5357,9 @@
                         "computed": {
                           "type": "boolean"
                         },
+                        "exactContentHugCanvasV1": {
+                          "type": "boolean"
+                        },
                         "figmaMultiSource": {
                           "type": "boolean"
                         },
@@ -5394,6 +5397,9 @@
                           "type": "boolean"
                         },
                         "overlayScrollOwnership": {
+                          "type": "boolean"
+                        },
+                        "paintCapturePaddingV1": {
                           "type": "boolean"
                         },
                         "prototypeCandidateOverlay": {
@@ -5525,7 +5531,9 @@
                         "blockerFingerprintV1",
                         "receiptEnvelopeVersion",
                         "prototypeSchemaResolverV2",
-                        "prototypeSchemaResolverVersion"
+                        "prototypeSchemaResolverVersion",
+                        "paintCapturePaddingV1",
+                        "exactContentHugCanvasV1"
                       ],
                       "type": "object"
                     },
@@ -5551,6 +5559,12 @@
                         "bodyMiB": {
                           "type": "number"
                         },
+                        "captureFrameBudgetMpx": {
+                          "type": "number"
+                        },
+                        "captureMaxPaintPaddingPx": {
+                          "type": "number"
+                        },
                         "caseSetManifestVersion": {
                           "type": "number"
                         },
@@ -5573,6 +5587,9 @@
                           "type": "number"
                         },
                         "caseSetMaxOverlayNodes": {
+                          "type": "number"
+                        },
+                        "caseSetMaxPreloadAssets": {
                           "type": "number"
                         },
                         "caseSetMaxSlotChildren": {
@@ -5713,6 +5730,9 @@
                         "sourcePackageMaxExports",
                         "resourceBarrierMaxResources",
                         "resourceBarrierBudgetMs",
+                        "captureMaxPaintPaddingPx",
+                        "captureFrameBudgetMpx",
+                        "caseSetMaxPreloadAssets",
                         "surfaces"
                       ],
                       "type": "object"

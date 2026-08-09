@@ -67,6 +67,12 @@ export interface CaptureOutcome {
   geometry?: Record<string, unknown>;
   /** Поле paint-режима, CSS px (W3): вход диагностики «увеличить маргин». */
   paintMargin?: number;
+  /**
+   * BR-02: **эффективное** поле кадра по сторонам, CSS px. Присутствует ровно у кадра, чей случай
+   * объявил `paintPaddingPx`; `paintMargin` при этом остаётся comparison-owned величиной канвы
+   * сравнения, а не описанием кадра (блокер B3 раунда 2).
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number };
   browserVersion?: string;
   /**
    * Исход readiness кадра (W4). Отсутствует у режимов, которые его не несут (`probe:"geometry"`):
@@ -141,7 +147,13 @@ async function awaitJob(ctx: GateContext, jobId: string): Promise<{ result?: Scr
  */
 export async function captureCase(
   ctx: GateContext,
-  options: { probe?: "geometry" | "paint"; paintMargin?: number; geometryDetailKeys?: string[] } = {},
+  options: {
+    probe?: "geometry" | "paint";
+    paintMargin?: number;
+    /** BR-02: поле кадра по сторонам; сильнее скалярного `paintMargin` (union протокола). */
+    paintPadding?: { top: number; right: number; bottom: number; left: number };
+    geometryDetailKeys?: string[];
+  } = {},
 ): Promise<CaptureOutcome> {
   const budget = ctx.policy.maxInfraRetries;
   let lastOutcome: JobOutcome = "subprocess_error";
@@ -187,6 +199,8 @@ export async function captureCase(
             ? {
               deliver: "bytes" as const,
               ...(options.paintMargin === undefined ? {} : { paintMargin: options.paintMargin }),
+              // BR-02: условный спред — джоба без объявленного поля по сторонам остаётся прежней.
+              ...(options.paintPadding === undefined ? {} : { paintPadding: options.paintPadding }),
               geometryDetailKeys: options.geometryDetailKeys ?? [],
             }
             : {}),
@@ -234,6 +248,7 @@ export async function captureCase(
         jobId, retries: attempt, quality, geometry,
         image: { bytes: result.bytes, width: result.width, height: result.height },
         paintMargin: result.paintMargin,
+        ...(result.paintPadding === undefined ? {} : { paintPadding: result.paintPadding }),
         browserVersion: result.browserVersion,
         ...(result.receiptSha256 === undefined ? {} : { receiptSha256: result.receiptSha256 }),
         ...(readinessOf(result) ? { readiness: readinessOf(result)! } : {}),

@@ -32,7 +32,7 @@ import {
 import { CALIBRATED_POLICY } from "./catalog/policy";
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
-import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
+import { GEOMETRY_RECT_LIMIT, MAX_PAINT_MARGIN_PX, MAX_QUEUE } from "./screenshot/service";
 import {
   ACCEPTANCE_POLICIES,
   acceptanceCaseTtlHours as ACCEPTANCE_CASE_TTL_HOURS,
@@ -42,10 +42,12 @@ import {
 import { UserRepo } from "./users";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { caseSetIdOf } from "./acceptance/caseSets";
+import { CAPTURE_FRAME_BUDGET_MPX } from "./capture/captureV4";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
-  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, caseSetManifestSchema,
+  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
+  CASE_SET_MAX_PRELOAD_ASSETS, caseSetManifestSchema,
 } from "../src/acceptance/caseSetSchema";
 import { prototypeCandidateOverlayMax as PROTOTYPE_CANDIDATE_OVERLAY_MAX } from "./routes/screenshots";
 import { capabilities } from "./routes/meta";
@@ -757,6 +759,11 @@ describe("route contracts", () => {
       sourcePackageMaxExports: SOURCE_PACKAGE_MAX_EXPORTS,
       resourceBarrierMaxResources: RESOURCE_BARRIER_MAX_RESOURCES,
       resourceBarrierBudgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
+      // BR-02/BR-03 (план 2026-08-08 §2): потолок стороны поля краски, бюджет площади кадра и
+      // потолок hint'а предзагрузки.
+      captureMaxPaintPaddingPx: MAX_PAINT_MARGIN_PX,
+      captureFrameBudgetMpx: CAPTURE_FRAME_BUDGET_MPX,
+      caseSetMaxPreloadAssets: CASE_SET_MAX_PRELOAD_ASSETS,
       surfaces: SURFACES_LIMIT,
     });
     // Продуктовая прекондиция §A2a: карусель способов оплаты — 9 детей default-слота, поэтому
@@ -776,6 +783,10 @@ describe("route contracts", () => {
     expect(value.layoutContractVersion).toBe(1);
     expect(value.regions).toEqual(["statusBar", "header", "footer"]);
     expect(value.features).toEqual({
+      // BR-02/BR-04 (план 2026-08-08 §2/§4): обе фичи безусловны (матрицей не гейтятся) и гаснут
+      // общим `EASYUI_CAPTURE_V4_DISABLED=1` — отдельный тест ниже.
+      paintCapturePaddingV1: true,
+      exactContentHugCanvasV1: true,
       renderStatus: true,
       screenshots: true,
       visualRegression: true,
@@ -884,6 +895,15 @@ describe("route contracts", () => {
       EASYUI_IMPACTED_SNAP_DISABLED: "impactedSnap",
       EASYUI_MIGRATION_COMMIT_DISABLED: "migrationCommit",
     } as const;
+    // BR-02/BR-04 (план 2026-08-08 §2/§4): **один** тумблер на две фичи — они делят зону
+    // «кадр капчура ↔ канва сравнения» и одно окно re-diff'а, поэтому проверяются вместе.
+    expect(flags().paintCapturePaddingV1).toBe(true);
+    expect(flags().exactContentHugCanvasV1).toBe(true);
+    process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+    try {
+      expect(flags().paintCapturePaddingV1).toBe(false);
+      expect(flags().exactContentHugCanvasV1).toBe(false);
+    } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
     for (const [env, flag] of Object.entries(switches)) {
       expect(flags()[flag]).toBe(true);
       process.env[env] = "1";
@@ -901,6 +921,10 @@ describe("route contracts", () => {
     expect(withoutMatrix.candidateDependencyOverlay).toBe(false);
     // BR-06: resume живёт внутри матричной приёмки — без неё ручки нет вовсе.
     expect(withoutMatrix.acceptanceResumeV1).toBe(false);
+    // BR-02/BR-04: матрицей **не** гейтятся — поле краски едет и по прототипному capture-пути, а
+    // канву сравнения строит визуальный гейт, живущий и вне матричных ручек.
+    expect(withoutMatrix.paintCapturePaddingV1).toBe(true);
+    expect(withoutMatrix.exactContentHugCanvasV1).toBe(true);
     // BR-10a: отпечаток блокера — тоже свойство приёмки: без ранов его не от чего считать.
     expect(withoutMatrix.blockerFingerprintV1).toBe(false);
     expect(withoutMatrix.suggestedPolicy).toBe(false);

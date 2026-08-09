@@ -546,6 +546,32 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
 
 **Наблюдаемость, не зависящая от kill-switch'а** (фиксы дефектов): причина падения случая персистится в `acceptance_cases.error_json` (`{outcome, message, attempts, elapsedMs, phase}`, миграция v37) и отдаётся полем `error` в `GET /acceptance-runs/:runId/cases`; ран несёт `attempt`, `resumedFromRunId` и `resume`; прекондиция «рендерер доступен» проверяется один раз до цикла случаев. `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` гасит **только** ручку (`409 acceptance_resume_disabled`) и флаг discovery.
 
+##### Поле краски случая по сторонам (EUI-BR-02, план 2026-08-08 §2, `features.paintCapturePaddingV1`)
+
+`cases[].paintPaddingPx: {top, right, bottom, left}` (целые `0..limits.captureMaxPaintPaddingPx`, **все четыре стороны обязательны**, поле `optional` и без дефолта) объявляет поле краски **этого** случая. До волны поле было скаляром 64 px по кругу, поэтому компонент с декором, уезжающим в одну сторону, снимался либо с четырёхкратным симметричным полем, либо с обрезанной краской (ink clamp ⇒ вечный `indeterminate`).
+
+- **Слой — кадровый, и только этого случая.** Поле в `capture`-блоке набора двигало бы кадры всех случаев; per-case поле входит во `frameFingerprint` ровно того кейса, который его объявил (`FIELD_LAYERS.paintPaddingPx = ["frame"]`). Случай без декларации даёт **байт-в-байт** прежний отпечаток.
+- **Канва сравнения от поля не зависит.** Comparison margin остаётся comparison-owned (`referencePlacement`/`COMPARISON_PAINT_MARGIN_PX`), а кандидатский растр приводится к канве **окном** перед диффом; факты кадра несут `paintPadding` отдельно от `paintMargin`. Проверяемое следствие (AC волны): «кейс с per-side полем даёт визуальные метрики байт-в-байт как без него».
+- **Бюджет кадра.** `(w + left + right) × (h + top + bottom) × dsf² ≤ limits.captureFrameBudgetMpx` Мпикс, где `w`/`h` — вьюпорт набора; превышение — `422 capture_budget_exceeded` на PUT манифеста и на постановке джобы (раньше эта арифметика не проверялась нигде, и кадр падал уже внутри рендерера).
+- **Ink clamp назван.** Краска, упёршаяся в край поля, даёт типизированный код `paint_capture_clipped` (`ref` — стороны через `/`) и факты `paintClipped {sides, requestedPx, minimumPx}` в метриках и `geometry.json`, вместо доволнового безликого «increase the paint margin». Минимум по стороне консервативен (`requested + 1`): сколько краски осталось за краем кадра, не знает никто — её там не снимали.
+- **Receipt кадра** несёт `paintPadding` (эффективное, после клэмпа стороны) и `paintPaddingRequested` (запрошенное).
+- `cases[].preloadAssets: string[]` (до `limits.caseSetMaxPreloadAssets`) — hint предзагрузки ассетов случая: **слой `report-only`**, ни в один отпечаток не входит; семантику (расширенный барьер ресурсов) поставляет EUI-BR-03, сервер обязан обнаружить ресурсы сам.
+
+`EASYUI_CAPTURE_V4_DISABLED=1` — общий kill-switch с BR-04: манифест с `paintPaddingPx` отвергается `422 capture_padding_disabled` (принять и молча проигнорировать нельзя — набор контентно адресован), кадр снимается скалярным полем, поведение доволновое byte-for-byte.
+
+##### Точная канва content-hug сравнения (EUI-BR-04, план 2026-08-08 §4, `features.exactContentHugCanvasV1`)
+
+Диагностика V0-D2 показала: «внутреннего минимума 24 px» в коде нет вовсе — это `16 + maxDimensionDeltaPx(8)`, то есть окно сводимости с **молчаливым zero-pad** меньшей картинки до `max(ref, cand)`. Рядом нашлись два дефекта хуже заявленного: процент считался по канве с полем (у 16 px корня весь компонент — 1.23 % канвы, поэтому бюджет 2 % был недостижим сверху и `fail` физически не мог случиться), а масштаб эталона не проверялся (1×-экспорт при `dsf: 2` проходил даже `pixel-strict-v1`). Волна меняет четыре вещи, все — при **объявленной** канве (`referenceSurface: "content-hug"`, `comparisonSurface` либо viewport-поверхность):
+
+1. размеры сводятся **точно** — допуск 0 вместо `maxDimensionDeltaPx`; любая дельта — `indeterminate dimensions_irreconcilable` с `tolerancePx: 0` (канву построил сервер по объявленным числам);
+2. неявного zero-pad до `max(ref, cand)` больше нет;
+3. бюджет судится по **поверхности сравнения** (`layoutRoot × dsf`): метрики несут `rawDiffPctOfSurface`/`aaDiffPctOfSurface`/`surfacePixels` и `judgedRawDiffPct` рядом с прежним `rawDiffPct` по канве;
+4. масштаб эталона проверяется: `sourceDims` против `layoutRoot × dsf` ⇒ `indeterminate reference_scale_mismatch` с числами и требуемым масштабом.
+
+Ветка **без** объявленной канвы (`padTo === null` — «голый» экспорт против paint-кадра) не трогается вовсе.
+
+Слой — сравнение: при активной фиче в `comparisonFingerprint` появляется `comparisonPolicyVersion: 2`, поэтому включение стоит **re-diff'а** сохранённых кадров (не пересъёмки), а выключение возвращает доволновые отпечатки. `CASE_FINGERPRINT_ALGO_VERSION` при этом остаётся `7`: bump ALGO инвалидировал бы и случаи без канвы сравнения, которых волна не касается. Kill-switch — общий `EASYUI_CAPTURE_V4_DISABLED=1`.
+
 ##### Отпечаток блокера и disposition повтора (EUI-BR-10a, план 2026-08-08 §10, `features.blockerFingerprintV1`)
 
 **Вопрос, на который отвечает слой:** «этот ран стоит повторять — и если да, насколько глубоко?». До волны единственным ответом был новый ран: полная матрица ради проверки, не починилось ли само.
@@ -2573,6 +2599,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `acceptanceRuns` | доступны `/acceptance-runs*` (постановка, poll, cases, evidence, cancel) | тот же флаг |
 | `acceptanceResumeV1` | доступен [`POST /acceptance-runs/:runId/resume`](#продолжение-остановленного-рана-eui-br-06-план-2026-08-08-6-featuresacceptanceresumev1) — продолжение остановленного рана новым раном с lineage | тот же флаг **и** `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` → `false` и `409 acceptance_resume_disabled`; наблюдаемость волны (`error` случая, шов allocate-renderer, circuit breaker) от флага не зависит |
 | `blockerFingerprintV1` | ран несёт `blockerFingerprint` и доступен [`GET /acceptance-runs/:runId/retry-disposition`](#отпечаток-блокера-и-disposition-повтора-eui-br-10a-план-2026-08-08-10-featuresblockerfingerprintv1) — read-only ответ «стоит ли повторять и насколько глубоко» | тот же флаг **и** `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1` → `false`, ручка `404`, поле исчезает из рана, сводки и манифеста архива |
+| `paintCapturePaddingV1` | case-set принимает [`cases[].paintPaddingPx`](#поле-краски-случая-по-сторонам-eui-br-02-план-2026-08-08-2-featurespaintcapturepaddingv1) — поле краски по сторонам (кадровый слой этого случая) и `cases[].preloadAssets` (report-only) | матрицей **не** гейтится; `EASYUI_CAPTURE_V4_DISABLED=1` → `false` и `422 capture_padding_disabled` на манифест с полем |
+| `exactContentHugCanvasV1` | [объявленная канва сравнения сводится точно](#точная-канва-content-hug-сравнения-eui-br-04-план-2026-08-08-4-featuresexactcontenthugcanvasv1) (delta 0, без неявного zero-pad), бюджет судится по поверхности сравнения, эталон не того масштаба — `reference_scale_mismatch` | матрицей **не** гейтится; общий с BR-02 `EASYUI_CAPTURE_V4_DISABLED=1` → `false` и доволновая семантика byte-for-byte |
 | `acceptanceMultiRunPromote` | promote принимает `acceptanceRunIds[]` — [набор ранов шардированной семьи](#multi-run-promote-шардированная-семья-волна-w7-план-2026-08-04) | тот же флаг; сборка до W7 отвечает на массив `400 invalid_request` |
 | `acceptanceSummaryView` | `GET /acceptance-runs/:runId?view=summary` — [компактная сводка рана](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) | тот же флаг; сборка до W8 **молча** игнорирует query и отдаёт полный ран, поэтому клиент дополнительно проверяет маркер `view` в теле |
 | `caseSetSlotBindings` | case-set-манифест принимает [`cases[].slotBindings`](#slotbindings-дети-слотов-случая-план-2026-08-05-a) — детей именованных и default-слота с точным пином версии | тот же флаг; сборка до этой волны отвергает такой манифест `422 validation_failed` (strictObject), поэтому флаг читается **до** публикации набора |

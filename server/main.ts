@@ -51,6 +51,7 @@ import { schemaResolverV2Enabled } from "./validation";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
 import { acceptanceResumeEnabled } from "./acceptance/orchestrator";
 import { blockerFingerprintEnabled } from "./acceptance/disposition";
+import { captureV4Enabled } from "./capture/captureV4";
 import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
@@ -295,6 +296,14 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // отпечатки случаев и evidence-хэш от него не зависят ни в каком положении тумблера; гаснут
     // ровно две поверхности: ручка `/retry-disposition` (404) и поле `blockerFingerprint`
     // (представление рана, сводка, манифест архива).
+    // BR-02/BR-04 (план 2026-08-08 §2/§4): **общий** kill-switch capture-группы. Гасит обе фичи
+    // разом — поле краски по сторонам (манифест с `paintPaddingPx` отвечает
+    // `422 capture_padding_disabled`, кадр снимается скаляром) и точную канву сравнения (допуск
+    // размеров возвращается к `maxDimensionDeltaPx`, процент считается по канве с полем, эталон не
+    // того масштаба снова проходит молча). Слой отпечатков: при снятом свитче в
+    // `comparisonFingerprint` появляется `comparisonPolicyVersion`, то есть включение стоит
+    // re-diff'а сравнимых кейсов, а выключение возвращает их к доволновым отпечаткам.
+    if(!captureV4Enabled()) console.warn("[capture] EASYUI_CAPTURE_V4_DISABLED=1: per-side paint padding and exact content-hug canvas off, case sets declaring paintPaddingPx are refused (422 capture_padding_disabled) and comparisons fall back to the pre-wave dimension tolerance");
     if(!blockerFingerprintEnabled()) console.warn("[acceptance] EASYUI_BLOCKER_FINGERPRINT_DISABLED=1: blocker fingerprint off, GET /api/acceptance-runs/:id/retry-disposition answers 404 and runs carry no blockerFingerprint");
     // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —
     // ручку плана (404) и запись кадров экранов на горячем пути съёмки, — потому что писать в

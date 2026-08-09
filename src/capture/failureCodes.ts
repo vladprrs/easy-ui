@@ -72,7 +72,15 @@ export type CaptureFailureCode =
    * и валить его этим кодом значило бы поменять контракт волны («рендер важнее строгости») на
    * противоположный. `ref` — имя компонента; `detail` — путь и сообщение первой проблемы.
    */
-  | "runtime_props_parse_failed";
+  | "runtime_props_parse_failed"
+  /**
+   * Краска упёрлась в край поля кадра (ink clamp), поэтому измерить её целиком нельзя (план
+   * 2026-08-08 §2, EUI-BR-02). До этой волны тот же факт уезжал наружу безликим
+   * `indeterminate`-reason'ом («increase the paint margin»), и автор не знал ни **какой** стороне
+   * не хватило поля, ни сколько её объявить. `ref` — стороны через `/` (`right` / `top/right`);
+   * `detail` называет запрошенное поле стороны и требуемый минимум.
+   */
+  | "paint_capture_clipped";
 
 /**
  * `severity` — не украшение: `warning` означает «зафиксировано, вердикта не меняет» (напр.
@@ -93,6 +101,7 @@ export const CAPTURE_FAILURE_CODES: readonly CaptureFailureCode[] = [
   "surface_mismatch", "dimensions_irreconcilable",
   "resource_barrier_timeout", "resource_decode_failed", "resource_late_after_barrier", "resource_manifest_overflow",
   "runtime_props_parse_failed",
+  "paint_capture_clipped",
 ] as const;
 
 export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCode =>
@@ -106,7 +115,7 @@ export const isCaptureFailureCode = (value: unknown): value is CaptureFailureCod
 export interface CaptureCodeOrigin {
   code: CaptureFailureCode;
   emitter: string;
-  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2" | "W9";
+  wave: "R3" | "R4" | "R6" | "W1a" | "W1b" | "W2" | "W9" | "BR-02";
 }
 
 export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
@@ -126,6 +135,7 @@ export const CAPTURE_CODE_ORIGINS: readonly CaptureCodeOrigin[] = [
   { code: "resource_late_after_barrier", emitter: "src/capture/readiness.ts settleResourceBarrier (manifest re-diff)", wave: "W2" },
   { code: "resource_manifest_overflow", emitter: "src/capture/readiness.ts collectResourceManifest (cap)", wave: "W2" },
   { code: "runtime_props_parse_failed", emitter: "src/player/easyUiRuntime.tsx (applyRuntimeSchemaDefaults) → src/capture/readiness.ts", wave: "W9" },
+  { code: "paint_capture_clipped", emitter: "server/acceptance/gates/geometry2.ts (paintClippedCodes ← geometryPolicy.paintClipped)", wave: "BR-02" },
 ] as const;
 
 /**

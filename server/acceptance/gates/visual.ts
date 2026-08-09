@@ -38,6 +38,7 @@ import { CAUSE_THRESHOLDS } from "../../visual/causes";
 import { cropIsApplied } from "../caseSets";
 import { putArtifact, readArtifact } from "../evidence";
 import { VIEWPORT_SURFACE_PAINT_MARGIN_PX } from "../../screenshot/service";
+import { captureV4Enabled } from "../../capture/captureV4";
 import { COMPARISON_PAINT_MARGIN_PX } from "../ids";
 import { geometryFactsKey, paintShaKey, type GeometryFacts } from "./geometry2";
 import type { Gate, GateContext, GateResult } from "./types";
@@ -281,6 +282,65 @@ function viewportReferenceCanvasOf(ctx: GateContext, facts: GeometryFacts | unde
   };
 }
 
+/**
+ * **Окно кандидатского растра** (BR-02, план 2026-08-08 §2).
+ *
+ * Кадр, снятый полем по сторонам, физически другого размера и с компонентом в другом месте, чем
+ * кадр со скалярным полем. Канва сравнения при этом обязана остаться **прежней** — она
+ * comparison-owned и от поля краски не зависит (блокер B3 раунда 2), — поэтому к канве приводится
+ * кандидат: окно `(layoutRoot − margin) × dsf` вырезает из кадра ровно ту область, которую занял бы
+ * доволновой скалярный кадр. Стороны, где поля объявлено **меньше** маргина канвы, дополняются
+ * прозрачным (окно уходит в отрицательные координаты) — это те же пиксели, что были бы у скалярного
+ * кадра: за краем компонента там пусто по построению paint-поверхности.
+ *
+ * `null` — окно не нужно (поле скалярное) либо не выводимо (кадр без измеренного `layoutBounds`):
+ * выдуманное окно сдвинуло бы сравнение молча, а это ровно тот класс дефектов, который волна убирает.
+ */
+export function candidateWindowOf(
+  ctx: GateContext, facts: GeometryFacts | undefined, canvas: ReferenceCanvas | null,
+): { x: number; y: number; width: number; height: number } | null {
+  const padding = facts?.paintPadding ?? null;
+  if (!padding) return null;
+  const layout = facts?.layoutBounds ?? null;
+  if (!layout) return null;
+  const dsf = ctx.surface.dsf;
+  const marginPx = canvas?.marginPx
+    ?? (ctx.surface.mode === "viewport" ? VIEWPORT_SURFACE_PAINT_MARGIN_PX : COMPARISON_PAINT_MARGIN_PX);
+  const size = canvas?.padTo ?? {
+    width: Math.round((layout.width + 2 * marginPx) * dsf),
+    height: Math.round((layout.height + 2 * marginPx) * dsf),
+  };
+  return {
+    x: Math.round((layout.x - marginPx) * dsf),
+    y: Math.round((layout.y - marginPx) * dsf),
+    width: size.width,
+    height: size.height,
+  };
+}
+
+/**
+ * **Ожидаемые габариты content-hug эталона** в его собственных пикселях (BR-04, план §4, правка 4).
+ *
+ * Эталон сервером не масштабируется вовсе: 1×-экспорт при `dsf: 2` кладётся в канву как есть и
+ * занимает вчетверо меньшую площадь, чем компонент, — а поскольку остальная канва у обоих
+ * прозрачна, расхождение весит доли процента и **проходит** даже `pixel-strict-v1` (V0-D2). Проверка
+ * сравнивает объявленное `layoutRoot × dsf` с фактическими габаритами ассета и называет расхождение.
+ *
+ * `null` — проверять нечего: эталон не content-hug (paint-ассет **уже** канва, его габариты про
+ * другое) либо к нему применяется crop (тогда габариты файла не описывают содержимое случая).
+ */
+export function expectedReferenceSourceDims(
+  ctx: GateContext, canvas: ReferenceCanvas | null, cropApplied: boolean,
+): { width: number; height: number } | null {
+  if (canvas === null || cropApplied) return null;
+  if (referenceSurfaceOf(ctx) !== "content-hug") return null;
+  const dsf = ctx.surface.dsf;
+  return {
+    width: Math.round(canvas.layoutRoot.width * dsf),
+    height: Math.round(canvas.layoutRoot.height * dsf),
+  };
+}
+
 export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNormalizedDiffWorker): Gate {
   return {
     name: "visual",
@@ -353,6 +413,17 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
 
       const runDiff = ctx.runDiff ?? fallbackRunDiff;
       const matte = matteOf(ctx);
+      // BR-02/BR-04: три опции волны — и все три условные. При выключенной группе
+      // (`EASYUI_CAPTURE_V4_DISABLED=1`) задание воркеру байт-в-байт доволновое, поэтому и метрики,
+      // и артефакты, и вердикт остаются прежними.
+      const captureWaveOn = captureV4Enabled();
+      const facts = ctx.shared.get(geometryFactsKey(ctx.case.caseId)) as GeometryFacts | undefined;
+      const candidateWindow = captureWaveOn ? candidateWindowOf(ctx, facts, canvas) : null;
+      // Поверхность сравнения в device px: знаменатель `rawDiffPctOfSurface`. Считается всюду, где
+      // канва объявлена, — то есть всюду, где корень сравнения известен числом, а не догадкой.
+      const surfaceDims = captureWaveOn && canvas !== null
+        ? { width: Math.round(canvas.layoutRoot.width * ctx.surface.dsf), height: Math.round(canvas.layoutRoot.height * ctx.surface.dsf) }
+        : null;
       const diff: NormalizedDiffResult = await runDiff({
         mode: "normalize",
         referencePngBase64: Buffer.from(reference.bytes).toString("base64"),
@@ -365,6 +436,10 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           edge: true,
           ...(cropRect === null ? {} : { cropRect }),
           ...(canvas === null ? {} : { padReferenceTo: canvas.padTo, referencePlacement: canvas.placement }),
+          ...(candidateWindow === null ? {} : { candidateWindow }),
+          // BR-04: объявленная канва не допускает дельты размеров вовсе (см. `exactCanvas`).
+          ...(captureWaveOn && canvas !== null ? { exactCanvas: true } : {}),
+          ...(surfaceDims === null ? {} : { surfaceDims }),
           ...(matte === null ? {} : { matte }),
         },
       });
@@ -375,6 +450,30 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           ...base, status: "indeterminate",
           detail: `Visual diff worker failed: ${diff.error}`,
           metrics: { ...base.metrics, reason: "diff_worker_error", referenceAssetId: assetId },
+        };
+      }
+
+      /**
+       * BR-04, правка 4: масштаб эталона проверяется **до** любого вердикта. Раньше 1×-экспорт при
+       * `dsf: 2` не просто проходил — он проходил `pixel-strict-v1`, потому что вчетверо меньшая
+       * картинка в прозрачной канве весит доли процента. Это `indeterminate` с числами, а не `fail`:
+       * «эталон снят в другом масштабе» — дефект материала, а не компонента (тот же принцип, что у
+       * `dimensions_irreconcilable`).
+       */
+      const expectedSourceDims = captureWaveOn ? expectedReferenceSourceDims(ctx, canvas, cropRect !== null) : null;
+      if (expectedSourceDims !== null
+        && (diff.sourceDims.width !== expectedSourceDims.width || diff.sourceDims.height !== expectedSourceDims.height)) {
+        return {
+          ...base, status: "indeterminate",
+          detail: `Reference asset is ${diff.sourceDims.width}×${diff.sourceDims.height} device px, but a content-hug`
+            + ` reference for a ${canvas!.layoutRoot.width}×${canvas!.layoutRoot.height} CSS px root at deviceScaleFactor`
+            + ` ${ctx.surface.dsf} must be ${expectedSourceDims.width}×${expectedSourceDims.height}: re-export the reference at`
+            + ` ${ctx.surface.dsf}x (the server never rescales a reference)`,
+          metrics: {
+            ...base.metrics, reason: "reference_scale_mismatch", referenceAssetId: assetId,
+            referenceSurface: surface, sourceDims: diff.sourceDims, expectedSourceDims,
+            layoutRoot: canvas!.layoutRoot, deviceScaleFactor: ctx.surface.dsf,
+          },
         };
       }
 
@@ -400,6 +499,9 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           sourceDims: diff.sourceDims,
           refDims: diff.refDims,
         },
+        // BR-02: как кадр приводился к канве сравнения. Ключ условный — кадр со скалярным полем
+        // ничего к канве не приводит, и его метрики остаются доволновыми байт-в-байт.
+        ...(diff.candidateNormalization === undefined ? {} : { candidateNormalization: diff.candidateNormalization }),
       };
 
       if (diff.indeterminate) {
@@ -418,7 +520,15 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
       }
 
       const metrics: NormalizedDiffMetrics = diff.metrics;
-      const overBudget = metrics.rawDiffPct > maxRawDiffPct;
+      /**
+       * BR-04, правка 3: бюджет судится по **поверхности сравнения**, а не по канве с полем. У 16 px
+       * корня при поле 64 весь компонент занимает 1.23 % канвы, поэтому бюджет 2 % профиля
+       * `default-v1` был для него недостижим сверху: гейт физически не мог выдать `fail`. Обе
+       * величины при этом едут в метрики — читатель отчёта видит и то, чем судили, и то, чем судили
+       * раньше. При выключенной группе `rawDiffPctOfSurface` не считается вовсе (legacy).
+       */
+      const judgedRawDiffPct = metrics.rawDiffPctOfSurface ?? metrics.rawDiffPct;
+      const overBudget = judgedRawDiffPct > maxRawDiffPct;
       /**
        * Пресет — **вторая инстанция** вердикта, а не второй порог (§W4 T4b): он рассматривается
        * только у случая, уже провалившегося по бюджету, и только сдвигает `fail → pass`, когда
@@ -426,7 +536,8 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
        * гейта; в `causes` он не едет — их контракт («только fail/indeterminate») не трогается.
        */
       const preset = textAaPresetOf(ctx.case.textAaBudget);
-      const presetApplied = overBudget && preset !== null && textAaBudgetApplies(preset, metrics);
+      const presetApplied = overBudget && preset !== null
+        && textAaBudgetApplies(preset, { ...metrics, rawDiffPct: judgedRawDiffPct });
       const failed = overBudget && !presetApplied;
       const severityClass = visualSeverityClass(metrics, maxRawDiffPct);
       const presetMetrics = preset === null
@@ -487,6 +598,12 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           ...presetMetrics,
           rawDiffPct: metrics.rawDiffPct,
           aaDiffPct: metrics.aaDiffPct,
+          // BR-04: процент по поверхности сравнения — условные ключи (их нет при выключенной группе
+          // и там, где поверхность не объявлена числом).
+          ...(metrics.rawDiffPctOfSurface === undefined ? {} : { rawDiffPctOfSurface: metrics.rawDiffPctOfSurface }),
+          ...(metrics.aaDiffPctOfSurface === undefined ? {} : { aaDiffPctOfSurface: metrics.aaDiffPctOfSurface }),
+          ...(metrics.surfacePixels === undefined ? {} : { surfacePixels: metrics.surfacePixels }),
+          ...(metrics.rawDiffPctOfSurface === undefined ? {} : { judgedRawDiffPct }),
           maxChannelDelta: metrics.maxChannelDelta,
           regions: metrics.regions,
           totalRegions: metrics.totalRegions,
@@ -503,14 +620,14 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
         },
         ...(failed
           ? {
-            detail: `Visual diff ${metrics.rawDiffPct}% exceeds the ${maxRawDiffPct}% budget`
+            detail: `Visual diff ${judgedRawDiffPct}% exceeds the ${maxRawDiffPct}% budget`
               + ` (aa-tolerant ${metrics.aaDiffPct}%, max channel delta ${metrics.maxChannelDelta},`
               + ` ${metrics.totalRegions} region(s), best offset ${metrics.bestOffset.dx}/${metrics.bestOffset.dy}px`
               + ` with ${metrics.bestOffset.residualPct}% residual)`,
           }
           : presetApplied
             ? {
-              detail: `Visual diff ${metrics.rawDiffPct}% is over the ${maxRawDiffPct}% budget but within the`
+              detail: `Visual diff ${judgedRawDiffPct}% is over the ${maxRawDiffPct}% budget but within the`
                 + ` ${preset!.id} preset (≤${preset!.maxRawDiffPct}% with ${metrics.edgeResidual?.insidePct}% of the`
                 + ` residual on the reference's own edges, ≥${preset!.minEdgeResidualPct}% required):`
                 + " a live-text rasterisation residual, not a layout or colour change",

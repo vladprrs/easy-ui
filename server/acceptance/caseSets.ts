@@ -36,6 +36,7 @@ import {
 } from "../../src/acceptance/caseSetSchema";
 import { caseSurfaceIssueOf } from "../../src/acceptance/surfaces";
 import { ApiError } from "../http";
+import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
 import { candidatesRoot, type CandidateEntry } from "../components/candidates";
 import { propsHashOf, type AcceptanceCase, type ResolvedSlotBinding, type RunOverlayNode } from "./cases";
 import { COMPARISON_PAINT_MARGIN_PX, type CaseSurface } from "./ids";
@@ -945,6 +946,43 @@ export interface ValidatedManifest {
  * ошибке всегда указывало на первую настоящую причину:
  * схема → componentId → потолок → уникальность id → эталоны → алиасы → дубли props → dims.
  */
+/**
+ * Декларация поля краски по сторонам (BR-02, план 2026-08-08 §2) — два отказа, оба типизированные.
+ *
+ * 1. **Kill-switch группы.** `EASYUI_CAPTURE_V4_DISABLED=1` ⇒ манифест с `paintPaddingPx`
+ *    отвергается `422 capture_padding_disabled`, а не принимается с молчаливым игнорированием поля:
+ *    принятый и неисполненный `paintPaddingPx` дал бы кадр со скалярным полем под контентным
+ *    адресом набора, объявившего асимметричное, — то есть тихо другой кадр под тем же `cset_`.
+ * 2. **Бюджет площади кадра.** `(w + left + right) × (h + top + bottom) × dsf² ≤ 20 Мпикс`. Верхняя
+ *    оценка `w`/`h` — вьюпорт набора: настоящих габаритов компонента до съёмки не знает никто, а
+ *    вьюпорт их ограничивает по построению (компонент рендерится внутрь него). `validateViewport`
+ *    считает только сам вьюпорт (`server/screenshot/service.ts`), поэтому поле в 256 px по кругу
+ *    при dsf 3 проезжало мимо бюджета и убивало рендерер уже на кадре.
+ */
+function assertPaintPaddingDeclaration(manifest: CaseSetManifest): void {
+  const declared = manifest.cases.filter((item) => item.paintPaddingPx !== undefined);
+  if (declared.length === 0) return;
+  if (!captureV4Enabled()) {
+    throw new ApiError(422, "capture_padding_disabled",
+      "Per-side paint padding is disabled on this server (EASYUI_CAPTURE_V4_DISABLED=1);"
+      + " drop cases[].paintPaddingPx or re-enable the capture wave",
+      { issues: [issue(["cases", declared[0]!.id, "paintPaddingPx"], "per-side paint padding is disabled")] });
+  }
+  const dsf = manifest.capture.deviceScaleFactor ?? 2;
+  const { width, height } = manifest.capture.viewport;
+  for (const item of declared) {
+    const padding = item.paintPaddingPx!;
+    const megapixels = (width + padding.left + padding.right) * (height + padding.top + padding.bottom) * dsf * dsf;
+    if (megapixels > CAPTURE_FRAME_BUDGET_MPX * 1_000_000) {
+      throw new ApiError(422, "capture_budget_exceeded",
+        `Case ${item.id} declares a paint field of ${padding.top}/${padding.right}/${padding.bottom}/${padding.left} CSS px,`
+        + ` which puts the frame at ${(megapixels / 1_000_000).toFixed(1)} megapixels at deviceScaleFactor ${dsf},`
+        + ` above the ${CAPTURE_FRAME_BUDGET_MPX} megapixel budget; shrink the field or the viewport`,
+        { issues: [issue(["cases", item.id, "paintPaddingPx"], `frame budget is ${CAPTURE_FRAME_BUDGET_MPX} megapixels`)] });
+    }
+  }
+}
+
 export function validateManifest(db: Database, componentId: string, raw: unknown): ValidatedManifest {
   const parsed = caseSetManifestSchema.safeParse(raw);
   if (!parsed.success) {
@@ -984,6 +1022,7 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
   }
 
   validateCropLineage(manifest, assetDims);
+  assertPaintPaddingDeclaration(manifest);
 
   // Алиасы: цель обязана существовать, не быть собой и сама не быть алиасом (цепочки запрещены —
   // вердикт наследуется ровно на один шаг, D10).
@@ -1318,6 +1357,11 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       ...(item.expectedSurfaces === undefined ? {} : { expectedSurfaces: item.expectedSurfaces }),
       ...(item.comparisonSurface === undefined ? {} : { comparisonSurface: item.comparisonSurface }),
       ...(item.clipExpectation === undefined ? {} : { clipExpectation: item.clipExpectation }),
+      // BR-02/BR-03 (план 2026-08-08 §2): поле краски по сторонам (кадровый слой) и hint
+      // предзагрузки (`report-only`). Тот же инвариант отсутствия, что у W4/W5-полей: не
+      // объявленное манифестом поле не доезжает ни до строки, ни до отпечатков вовсе.
+      ...(item.paintPaddingPx === undefined ? {} : { paintPaddingPx: item.paintPaddingPx }),
+      ...(item.preloadAssets === undefined ? {} : { preloadAssets: item.preloadAssets }),
       // W5b: координата случая в семье — вход `variantFamily` группировки ремедиаций.
       ...(item.dims ? { dims: item.dims } : {}),
     });

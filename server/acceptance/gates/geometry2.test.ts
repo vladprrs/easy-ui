@@ -267,7 +267,27 @@ test("clamped ink and a missing layout contour stay indeterminate with actionabl
   const clamped = await context({ inkBbox: ink({ x: 0, y: 64, width: 268, height: 96 }, { left: true }) });
   const clampedResult = await geometry2Gate.run(clamped.ctx);
   expect(clampedResult.status).toBe("indeterminate");
-  expect(clampedResult.detail).toContain("increase the paint margin");
+  // BR-02 (план 2026-08-08 §2): вместо безликого «increase the paint margin» — названная сторона,
+  // её фактическое поле и требуемый минимум, плюс типизированный код `paint_capture_clipped`.
+  expect(clampedResult.detail).toContain("ink touches the left edge of the capture field (left 64px)");
+  expect(clampedResult.detail).toContain("at least left 65");
+  expect(clampedResult.metrics!.codes).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: "paint_capture_clipped", severity: "error", ref: "left" }),
+  ]));
+  expect(clampedResult.metrics!.paintClipped).toMatchObject({
+    sides: ["left"], requestedPx: { top: 64, right: 64, bottom: 64, left: 64 }, minimumPx: { left: 65 },
+  });
+
+  // Kill-switch: доволновая формулировка возвращается целиком, кодов волны нет.
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const legacy = await context({ inkBbox: ink({ x: 0, y: 64, width: 268, height: 96 }, { left: true }) });
+    const legacyResult = await geometry2Gate.run(legacy.ctx);
+    expect(legacyResult.status).toBe("indeterminate");
+    expect(legacyResult.detail).toContain("increase the paint margin");
+    expect(legacyResult.metrics!.codes).toEqual([]);
+    expect(legacyResult.metrics!.paintClipped).toBeUndefined();
+  } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
 
   const noLayout = await context({ result: paintResult({ layoutBounds: null }) });
   const noLayoutResult = await geometry2Gate.run(noLayout.ctx);

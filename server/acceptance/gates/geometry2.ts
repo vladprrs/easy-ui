@@ -25,6 +25,7 @@ import type { CaptureCode } from "../../../src/capture/failureCodes";
 import type { GeometryDetail } from "../../../src/capture/geometry.mjs";
 import { putArtifact } from "../evidence";
 import { spawnInkBboxWorker, type RunInkBbox } from "../inkBbox";
+import { captureV4Enabled } from "../../capture/captureV4";
 import { captureCase } from "./capture";
 import type { Gate, GateContext, GateResult } from "./types";
 
@@ -53,6 +54,16 @@ export interface GeometryFacts {
    */
   rootBounds?: { x: number; y: number; width: number; height: number } | null;
   paintMargin: number | null;
+  /**
+   * **Поле краски кадра по сторонам**, CSS px (BR-02, план 2026-08-08 §2). Присутствует ровно у
+   * кадра, чей случай объявил `paintPaddingPx`.
+   *
+   * Держится **отдельно** от `paintMargin` намеренно (блокер B3 раунда 2): `paintMargin` — это
+   * comparison-owned поле канвы сравнения, и канва обязана оставаться прежней независимо от того,
+   * каким полем снят кадр. Асимметричное поле кадра приводится к канве сравнения кропом/подстановкой
+   * кандидатского растра в гейте `visual`, а не сдвигом самой канвы.
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number } | null;
   deviceScaleFactor: number;
 }
 
@@ -228,6 +239,38 @@ export function referenceExportCodes(measurement: ReferenceExportMeasurement, ct
   }];
 }
 
+/**
+ * Поле кадра по сторонам для политики (BR-02): объявленное per-side либо скаляр, растянутый на все
+ * четыре стороны. `null`-маргин (кадр, чьего поля мы не знаем) даёт `undefined` — политика тогда
+ * остаётся на доволновой безликой причине, а не выдумывает числа.
+ */
+export function paintFieldOf(
+  padding: { top: number; right: number; bottom: number; left: number } | null,
+  margin: number | null,
+): { top: number; right: number; bottom: number; left: number } | undefined {
+  if (padding !== null) return { ...padding };
+  return margin === null ? undefined : { top: margin, right: margin, bottom: margin, left: margin };
+}
+
+/**
+ * Ink clamp типизированным кодом (BR-02). Раньше этот исход был безликим `indeterminate`-reason'ом:
+ * гейт возвращал `indeterminate` **без единого кода**, и отчёт не мог сказать, какой стороне не
+ * хватило поля. `severity: "error"` — кадр непригоден для вердикта краски по названным сторонам.
+ */
+export function paintClippedCodes(policy: GeometryPolicyResult): CaptureCode[] {
+  const clipped = policy.paintClipped;
+  if (clipped === undefined || clipped.sides.length === 0) return [];
+  return [{
+    code: "paint_capture_clipped",
+    severity: "error",
+    detail: `ink touches the ${clipped.sides.join("/")} edge of the capture field`
+      + ` (${clipped.sides.map((side) => `${side} ${clipped.requestedPx[side]}px`).join(", ")});`
+      + ` declare cases[].paintPaddingPx with at least`
+      + ` ${clipped.sides.map((side) => `${side} ${clipped.minimumPx[side]}`).join(", ")} and recapture`,
+    ref: clipped.sides.join("/"),
+  }];
+}
+
 export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWorker): Gate {
   return {
     name: "geometry",
@@ -235,7 +278,16 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
       // Ink-воркер — шов: продакшн спавнит node-подпроцесс, тесты подсовывают чистую функцию,
       // поэтому вердикт политики проверяется без chromium и без pngjs-подпроцесса.
       const runInkBbox = ctx.inkBbox ?? fallbackInkBbox;
-      const capture = await captureCase(ctx, { probe: "paint", geometryDetailKeys: ctx.case.geometryDetailKeys ?? [] });
+      // BR-02: поле краски случая доезжает до съёмки. До волны гейт звал `captureCase` вовсе без
+      // поля, поэтому объявленный per-case `paintPaddingPx` не мог повлиять ни на один пиксель —
+      // случай снимался скалярным дефолтом. Условный спред: случай без декларации (и любой случай
+      // при выключенной группе) ставит джобу байт-в-байт прежней.
+      const paintPadding = captureV4Enabled() ? ctx.case.paintPaddingPx : undefined;
+      const capture = await captureCase(ctx, {
+        probe: "paint",
+        ...(paintPadding === undefined ? {} : { paintPadding }),
+        geometryDetailKeys: ctx.case.geometryDetailKeys ?? [],
+      });
       const geometry = capture.geometry ?? {};
       const detail = rootDetail(geometry);
       const image = capture.image;
@@ -274,6 +326,10 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         rootBounds,
         rootClip,
         referenceExportDims: referenceExport.dims,
+        // BR-02: поле кадра по сторонам — вход **называния** ink clamp'а. У скалярного кадра это
+        // четыре равные стороны фактического маргина съёмки; поля нет вовсе, когда группа
+        // выключена, и тогда вердикт остаётся доволновым байт-в-байт.
+        ...(captureV4Enabled() ? { paintField: paintFieldOf(capture.paintPadding ?? null, capture.paintMargin ?? null) } : {}),
         tolerances,
       });
 
@@ -294,6 +350,9 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         paintBoundsSource: paintBounds ? "alpha" : null,
         paintBoundsPixels: ink.ok ? ink.pixelBounds : null,
         paintClamped: ink.ok ? ink.clamped : null,
+        // BR-02: чем кадр снят (условный ключ — скалярный кадр остаётся доволновым байт-в-байт).
+        ...(capture.paintPadding === undefined ? {} : { paintPadding: capture.paintPadding }),
+        ...(policy.paintClipped === undefined ? {} : { paintClipped: policy.paintClipped }),
         ...(ink.ok ? {} : { inkError: ink.error }),
         policyVerdict: policy.policyVerdict,
         overflow: policy.overflow,
@@ -313,6 +372,8 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           : null,
         rootBounds,
         paintMargin: record.paintMargin,
+        // BR-02: capture-поле едет рядом с comparison-margin, не вместо него.
+        ...(capture.paintPadding === undefined ? {} : { paintPadding: capture.paintPadding }),
         deviceScaleFactor: ctx.surface.dsf,
       } satisfies GeometryFacts);
 
@@ -350,6 +411,7 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           // кадра, если поверхность их принесла: paint-джоба несёт доказательство).
           codes: [
             ...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons, policy.divergingSurfaces ?? []),
+            ...paintClippedCodes(policy),
             ...referenceExportCodes(referenceExport, ctx),
             ...(capture.readiness?.readinessCodes ?? []),
           ],
@@ -362,6 +424,9 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           paintBoundsSource: record.paintBoundsSource,
           paintClamped: record.paintClamped,
           paintMargin: record.paintMargin,
+          // BR-02: поле кадра и названный ink clamp — условные ключи; доволновой кадр их не несёт.
+          ...(capture.paintPadding === undefined ? {} : { paintPadding: capture.paintPadding }),
+          ...(policy.paintClipped === undefined ? {} : { paintClipped: policy.paintClipped }),
           deviceScaleFactor: ctx.surface.dsf,
           overflow: policy.overflow,
           expectedGeometryDelta: policy.expectedGeometryDelta,

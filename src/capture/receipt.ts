@@ -171,6 +171,22 @@ export interface CaptureReceiptOutput {
   surfaceRect: { x: number; y: number; width: number; height: number } | null;
   /** Поле paint-режима, CSS px (W3). Отсутствует в прочих режимах. */
   paintMargin?: number;
+  /**
+   * **Эффективное** поле краски по сторонам, CSS px (BR-02, план 2026-08-08 §2): то, чем кадр
+   * снят на самом деле — после клэмпа каждой стороны к `MAX_PAINT_MARGIN_PX`. Отсутствует у
+   * скалярной джобы: её поле целиком описано `paintMargin`.
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number };
+  /**
+   * **Запрошенное** поле по сторонам — до клэмпа. Пара requested/effective обязательна по §3
+   * фидбэка: без неё «поле обрезали до потолка» неотличимо от «поля столько и просили», и автор
+   * чинил бы не ту сторону.
+   */
+  paintPaddingRequested?: { top: number; right: number; bottom: number; left: number };
+  // Стороны, на которых краска упёрлась в край поля, здесь **намеренно отсутствуют**: ink clamp
+  // меряется по альфе уже снятого PNG (ink-bbox воркер гейта геометрии), то есть заведомо позже,
+  // чем пишется receipt кадра. Этот факт живёт там, где он измерен, — `paintClipped` в метриках и
+  // артефакте гейта геометрии плюс типизированный код `paint_capture_clipped`.
 }
 
 /**

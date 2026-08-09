@@ -26,7 +26,7 @@ import { MAX_ASSET_BYTES } from "../assets/validate";
 import { listActiveDesignSystems } from "../designSystems";
 import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
-import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "../screenshot/service";
+import { GEOMETRY_RECT_LIMIT, MAX_PAINT_MARGIN_PX, MAX_QUEUE } from "../screenshot/service";
 import { rendererReport } from "../capture/renderer";
 import { DEFAULT_REUSE_GATE_MODE, type ReuseGateMode } from "../catalog/gate";
 import { CALIBRATED_POLICY } from "../catalog/policy";
@@ -40,7 +40,7 @@ import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
-  CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
+  CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, CASE_SET_MAX_PRELOAD_ASSETS,
 } from "../../src/acceptance/caseSetSchema";
 import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
 import { candidateOverlayEnabled } from "../acceptance/caseSets";
@@ -48,6 +48,7 @@ import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
 import { blockerFingerprintEnabled } from "../acceptance/disposition";
 import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
 import { suggestedPolicyEnabled } from "../acceptance/suggest";
+import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
 import { RESOURCE_BARRIER_DISABLED } from "../capture/resourceBarrier";
 import { LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION, PROTOTYPE_SCHEMA_RESOLVER_VERSION, schemaResolverV2Enabled } from "../validation";
 import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../../src/capture/readinessPolicy";
@@ -188,6 +189,14 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // Оба числа — свойство политики v3, поэтому объявлены **независимо** от kill-switch'а:
       // выключенный барьер меняет версию политики (`acceptance.readinessPolicyVersion`), а не
       // потолки, которыми он исполняется.
+      // Поле краски по сторонам (BR-02, план 2026-08-08 §2): потолок **одной стороны** (тот же, что
+      // у скалярного `paintMargin`) и бюджет площади кадра `(w+left+right)×(h+top+bottom)×dsf²`.
+      // Два числа отвечают на разные вопросы автора: первое — «сколько можно объявить по стороне»,
+      // второе — «почему 256 по кругу при dsf 3 отвергнуто» (`422 capture_budget_exceeded`).
+      captureMaxPaintPaddingPx: MAX_PAINT_MARGIN_PX,
+      captureFrameBudgetMpx: CAPTURE_FRAME_BUDGET_MPX,
+      // Hint предзагрузки ассетов случая (BR-03): потолок массива `cases[].preloadAssets`.
+      caseSetMaxPreloadAssets: CASE_SET_MAX_PRELOAD_ASSETS,
       resourceBarrierMaxResources: RESOURCE_BARRIER_MAX_RESOURCES,
       resourceBarrierBudgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
@@ -406,6 +415,22 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
        * и тогда `prototypeSchemaResolverVersion` честно откатывается на доволновую 1.
        */
       prototypeSchemaResolverV2: schemaResolverV2Enabled(),
+      /**
+       * BR-02 (план 2026-08-08 §2): `cases[].paintPaddingPx` — поле краски **по сторонам**, кадровый
+       * слой ровно того случая, который его объявил (`limits.captureMaxPaintPaddingPx`,
+       * `limits.captureFrameBudgetMpx`). Матрицей **не** гейтится: поле едет и по прототипному
+       * capture-пути, а не только по приёмочному. false — при `EASYUI_CAPTURE_V4_DISABLED=1`, и
+       * тогда манифест с полем отвечает `422 capture_padding_disabled`, а кадр снимается скаляром.
+       */
+      paintCapturePaddingV1: captureV4Enabled(),
+      /**
+       * BR-04 (план 2026-08-08 §4): объявленная канва сравнения сводится **точно** (delta 0, без
+       * неявного zero-pad до `max(ref, cand)`), бюджет судится по поверхности сравнения
+       * (`rawDiffPctOfSurface`), а эталон не того масштаба называется `reference_scale_mismatch`
+       * вместо молчаливого `pass`. Общий тумблер с BR-02 — одна зона (кадр ↔ канва) и одно окно
+       * re-diff'а; false — при `EASYUI_CAPTURE_V4_DISABLED=1` (доволновая семантика byte-for-byte).
+       */
+      exactContentHugCanvasV1: captureV4Enabled(),
       /**
        * Версия контракта резолвера (фидбэк §4) — **число**, а не факт существования: клиенту нужно
        * знать, по какому контракту этот инстанс отвечает прямо сейчас, а не что умеет образ.

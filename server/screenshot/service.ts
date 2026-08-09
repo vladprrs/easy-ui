@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CaptureSlotTreeEntry, CaptureSurfaceBootstrap } from "../../src/capture/protocol";
+import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CapturePaintField, CaptureSlotTreeEntry, CaptureSurfaceBootstrap } from "../../src/capture/protocol";
 import {
   codesFromReadinessReason, isCaptureFailureCode, sanitizeCaptureCodes,
   type CaptureCode, type CaptureFailureCode,
@@ -24,6 +24,7 @@ import {
   impactedSnapEnabled, recordScreenFrame, screenFrameOf,
   type ScreenFrameInputs,
 } from "../prototypes/screenFrames";
+import { CAPTURE_FRAME_BUDGET_MPX } from "../capture/captureV4";
 import { resolveCaptureMode } from "../capture/modes";
 import { buildCaptureReceipt, type CaptureReceipt, type CaptureReceiptOutput, type CaptureReceiptTarget } from "../../src/capture/receipt";
 import { getJobReceipt, putAssetReceipt, putJobReceipt, putReceipt, readReceipt, receiptsDisabled } from "../capture/receiptStore";
@@ -219,6 +220,38 @@ export const MAX_PAINT_MARGIN_PX = 256;
  */
 export const VIEWPORT_SURFACE_PAINT_MARGIN_PX = 16;
 
+/** Поле краски по сторонам, CSS px (BR-02, план 2026-08-08 §2). */
+export interface PaintPadding { top: number; right: number; bottom: number; left: number }
+
+/**
+ * Клэмп поля по сторонам — те же правила, что у скаляра (`Math.round` + `[0, MAX_PAINT_MARGIN_PX]`),
+ * применённые **к каждой стороне отдельно**. Общий потолок на сумму не вводится: площадь судит
+ * бюджет кадра (`assertFrameBudget`), а не потолок стороны.
+ */
+export function clampPaintPadding(padding: PaintPadding): PaintPadding {
+  const side = (value: number): number => Math.min(Math.max(Math.round(value), 0), MAX_PAINT_MARGIN_PX);
+  return { top: side(padding.top), right: side(padding.right), bottom: side(padding.bottom), left: side(padding.left) };
+}
+
+/**
+ * Бюджет площади кадра с полем (BR-02): `(w + left + right) × (h + top + bottom) × dsf² ≤ 20 Мпикс`.
+ *
+ * `validateViewport` считает только сам вьюпорт, поэтому 256 px по кругу при dsf 3 проезжали мимо
+ * всякой проверки и падали уже внутри рендерера — без типизированного отказа и без кадра. Верхняя
+ * оценка габаритов компонента — вьюпорт: настоящих габаритов до съёмки не знает никто, а вьюпорт
+ * ограничивает их по построению.
+ */
+export function assertFrameBudget(viewport: Viewport, dsf: number, padding: PaintPadding): void {
+  const pixels = (viewport.width + padding.left + padding.right)
+    * (viewport.height + padding.top + padding.bottom) * dsf * dsf;
+  if (pixels > CAPTURE_FRAME_BUDGET_MPX * 1_000_000) {
+    throw new ApiError(422, "capture_budget_exceeded",
+      `paint field ${padding.top}/${padding.right}/${padding.bottom}/${padding.left} CSS px around a`
+      + ` ${viewport.width}×${viewport.height} viewport at deviceScaleFactor ${dsf} puts the frame at`
+      + ` ${(pixels / 1_000_000).toFixed(1)} megapixels, above the ${CAPTURE_FRAME_BUDGET_MPX} megapixel budget`);
+  }
+}
+
 /** Классификация провала джобы по сообщению воркер-раннера/исключения execute. */
 export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | "queue_full"> {
   // BR-06: два исхода шва аллокации проверяются **до** общего `timeout`/`worker_crash` — иначе
@@ -319,6 +352,12 @@ export interface ScreenshotPaintResult extends CaptureQuality, GeometryMeasureme
   dpr: number;
   /** Поле вокруг компонента, CSS px: краска, упёршаяся в его край, делает вердикт `indeterminate`. */
   paintMargin: number;
+  /**
+   * BR-02: **эффективное** поле по сторонам, CSS px. Присутствует ровно у кадра, чей случай его
+   * объявил; иначе поле скалярное и равно `paintMargin` со всех сторон. Гейт геометрии протягивает
+   * этот факт в `GeometryFacts.paintPadding` — канва сравнения от него **не** зависит (блокер B3).
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number };
   bytes: Uint8Array;
   /** Размер PNG в **device** px (`bounds` ink-воркера нормализуются делением на `dpr`). */
   width: number;
@@ -384,7 +423,7 @@ export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult 
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; runtimeDefaultsDisabled?: true; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: CapturePaintField; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; runtimeDefaultsDisabled?: true; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
@@ -456,6 +495,14 @@ interface InternalJob {
   captureSurface?: "viewport";
   /** W3: поле paint-режима, CSS px. Присутствует ровно тогда, когда `probe === "paint"`. */
   paintMargin?: number;
+  /**
+   * BR-02 (план 2026-08-08 §2): **поле по сторонам**, CSS px. Присутствует только у джобы, чей
+   * случай его объявил; тогда `paintMargin` несёт `max` сторон (диагностика и receipt читают обе
+   * величины). Отсутствие поля оставляет джобу скалярной байт-в-байт — включая bootstrap.
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number };
+  /** Запрошенное поле по сторонам **до** клэмпа к `MAX_PAINT_MARGIN_PX` (receipt: requested/effective). */
+  paintPaddingRequested?: { top: number; right: number; bottom: number; left: number };
   geometryDetailKeys?: string[];
   /** A4: куда уезжает PNG — в asset-store (по умолчанию) или байтами в результат джобы. */
   deliver?: "asset" | "bytes";
@@ -902,6 +949,8 @@ export class ScreenshotService {
       theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
       /** Поле paint-режима, CSS px; игнорируется в прочих режимах (W3). */
       paintMargin?: number;
+      /** BR-02: поле paint-режима **по сторонам**, CSS px; сильнее скалярного `paintMargin`. */
+      paintPadding?: { top: number; right: number; bottom: number; left: number };
       /** Поверхность съёмки (W5): `"viewport"` даёт сцену размера вьюпорта со stage host'ом. */
       surface?: "viewport";
       geometryDetailKeys?: string[];
@@ -948,6 +997,8 @@ export class ScreenshotService {
     opts: {
       props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean;
       probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; surface?: "viewport"; geometryDetailKeys?: string[];
+      /** BR-02: поле paint-режима по сторонам (нормализуется здесь же, вместе со скалярным). */
+      paintPadding?: { top: number; right: number; bottom: number; left: number };
       readinessPolicy?: ReadinessPolicy;
       slotBindings?: CaptureSlotBinding[];
       slotsHash?: string;
@@ -984,6 +1035,20 @@ export class ScreenshotService {
     const paintMargin = opts.probe === "paint"
       ? Math.min(Math.max(Math.round(opts.paintMargin ?? defaultPaintMargin), 0), MAX_PAINT_MARGIN_PX)
       : undefined;
+    // BR-02: поле по сторонам нормализуется **здесь же** и по тем же правилам, что скаляр — клэмп
+    // per side к `MAX_PAINT_MARGIN_PX`. Requested сохраняется отдельно: receipt обязан показывать
+    // и запрошенное, и эффективное, иначе «поле обрезали» неотличимо от «поля столько и просили».
+    const paintPaddingRequested = opts.probe === "paint" && opts.paintPadding !== undefined
+      ? { ...opts.paintPadding }
+      : undefined;
+    const paintPadding = paintPaddingRequested === undefined
+      ? undefined
+      : clampPaintPadding(paintPaddingRequested);
+    // Бюджет площади кадра (BR-02): `(w+left+right) × (h+top+bottom) × dsf² ≤ 20 Мпикс`.
+    // `validateViewport` считает только сам вьюпорт, поэтому поле проезжало мимо бюджета и роняло
+    // рендерер уже на кадре. Проверка стоит и на PUT манифеста (декларативно), и здесь — постановка
+    // джобы возможна и мимо case-set-пути.
+    if (paintPadding !== undefined) assertFrameBudget(viewport, dsf, paintPadding);
     const { jobId } = this.push({
       kind: "component", owner: { kind: "component", id }, expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
       draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },
@@ -994,6 +1059,8 @@ export class ScreenshotService {
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
       ...(opts.surface === undefined ? {} : { captureSurface: opts.surface }),
       ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
+      // BR-02: поле по сторонам — условные ключи; джоба без него остаётся скалярной байт-в-байт.
+      ...(paintPadding === undefined ? {} : { paintPadding, paintPaddingRequested }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
     });
@@ -1267,7 +1334,10 @@ export class ScreenshotService {
         ...(job.probe === "paint" ? { geometryDetailKeys: job.geometryDetailKeys ?? [] } : {}),
       };
       // Поле paint-режима едет поверхности через bootstrap: она и решает, рисовать ли фон.
-      if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
+      // BR-02: per-side форма едет вместо скалярной — union протокола (`CapturePaintField`).
+      // Джоба без объявленного поля по сторонам присылает **ровно прежний** `{marginPx}`.
+      if (job.paintPadding !== undefined) workerJob.bootstrap.paint = { paddingPx: job.paintPadding };
+      else if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
       // W5 (§T5c.6): поверхность съёмки — bootstrap-поле, как и `paint.marginPx`, и **не** входит
       // ни в `expected`, ни в `readyToExpected`: рукопожатие уже снятых кадров обязано остаться
       // тем же пре-образом, иначе старые кадры перестали бы сходиться сами с собой.
@@ -1343,6 +1413,9 @@ export class ScreenshotService {
           viewport: job.viewport,
           dpr: job.dsf,
           paintMargin: job.paintMargin ?? DEFAULT_PAINT_MARGIN_PX,
+          // BR-02: поле по сторонам — условный ключ. Кадр без него несёт доволновой результат
+          // байт-в-байт, а гейт геометрии по наличию ключа и отличает «поле объявлено» от «скаляр».
+          ...(job.paintPadding === undefined ? {} : { paintPadding: job.paintPadding }),
           bytes: new Uint8Array(bytes),
           width: result.width, height: result.height,
           imageProduced: true,
@@ -1538,6 +1611,10 @@ export class ScreenshotService {
           pngSha256: result.pngSha256 ?? null,
           surfaceRect: result.surfaceRect ?? null,
           ...(job.paintMargin === undefined ? {} : { paintMargin: job.paintMargin }),
+          // BR-02: requested/effective поля по сторонам и стороны, на которых краска упёрлась в
+          // край кадра. Условные ключи — receipt доволновой джобы остаётся прежним байт-в-байт.
+          ...(job.paintPadding === undefined ? {} : { paintPadding: job.paintPadding }),
+          ...(job.paintPaddingRequested === undefined ? {} : { paintPaddingRequested: job.paintPaddingRequested }),
         }
         : null;
       const receipt = buildCaptureReceipt({

@@ -429,6 +429,10 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   expectedSurfaces: {},
   comparisonSurface: "layoutUnion",
   clipExpectation: "root-does-not-clip-layout",
+  // BR-02/BR-03 (план 2026-08-08 §2): поле краски по сторонам — кадровый слой; hint предзагрузки —
+  // `report-only` (проверки слоёв ниже, дифференциальные golden'ы — в блоке BR-02).
+  paintPaddingPx: { top: 0, right: 0, bottom: 0, left: 0 },
+  preloadAssets: [],
 };
 
 test("каждое поле политики, случая и поверхности классифицировано по слоям (D3)", () => {
@@ -538,6 +542,65 @@ test("W1a: comparisonSurface — только сравнение, clipExpectatio
 });
 
 test("W1a: версия алгоритма отпечатка не двигается — легаси-семантика не менялась", () => {
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
+});
+
+// ------------------- BR-02/BR-04: поле краски по сторонам и версия семантики сравнения
+
+const PADDING = { top: 64, right: 128, bottom: 64, left: 64 } as const;
+
+test("BR-02: paintPaddingPx — чистый кадровый слой, и его отсутствие байт-в-байт прежнее", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+  // Каскад `caseFingerprintsOf`: поле обязано доехать до пре-образа, а не только иметь слой.
+  const padded = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A, paintPaddingPx: { ...PADDING } });
+  expect(padded.frame).not.toBe(base.frame);
+  // Канва сравнения от поля краски не зависит (блокер B3 раунда 2): слой сравнения не сдвинут.
+  expect(padded.comparison).toBe(base.comparison);
+  expect(padded.verdictPolicy).toBe(base.verdictPolicy);
+  expect("paintPaddingPx" in padded.verdictPolicySnapshot).toBe(false);
+
+  // Симметричное поле — тоже другой кадр, чем его отсутствие: «64 по кругу» и «дефолт съёмки» это
+  // одинаковые пиксели, но **разные декларации**, и приравнивать их значило бы обещать, что смена
+  // дефолта не тронет кадр объявившего случая.
+  const symmetric = fingerprints({
+    ...PLAIN, referenceAssetId: ASSET_A, paintPaddingPx: { top: 64, right: 64, bottom: 64, left: 64 },
+  });
+  expect(symmetric.frame).not.toBe(base.frame);
+  expect(symmetric.frame).not.toBe(padded.frame);
+
+  // Дифференциальный инвариант волны: доволновой кадр байт-в-байт прежний.
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT)).toBe(GOLDEN_FRAME);
+  expect(frameFingerprint({ ...GOLDEN_FRAME_INPUT, paintPaddingPx: undefined })).toBe(GOLDEN_FRAME);
+
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("paintPaddingPx")).toEqual(["frame"]);
+  // BR-03: hint предзагрузки не входит ни в один отпечаток — сервер обязан обнаружить ресурсы сам.
+  expect(layerOf("preloadAssets")).toEqual(["report-only"]);
+});
+
+test("BR-04: comparisonPolicyVersion — условный вход слоя сравнения, ALGO не двигается", () => {
+  const base = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+  const previous = process.env.EASYUI_CAPTURE_V4_DISABLED;
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const legacy = fingerprints({ ...PLAIN, referenceAssetId: ASSET_A });
+    // Инвалидация ровно одного слоя: кадр и вердикт не двигаются, сравнение — двигается, то есть
+    // включение волны стоит re-diff'а, а не пересъёмки и не пересчёта корпуса.
+    expect(legacy.frame).toBe(base.frame);
+    expect(legacy.verdictPolicy).toBe(base.verdictPolicy);
+    expect(legacy.comparison).not.toBe(base.comparison);
+    // Пре-образ legacy — доволновой: ключа `comparisonPolicyVersion` в нём нет вовсе.
+    expect(legacy.comparison).toBe(comparisonFingerprintOf({
+      referenceAssetId: ASSET_A,
+      expectedGeometry: null,
+      maxDimensionDeltaPx: DEFAULT.visual.maxDimensionDeltaPx,
+      paintMarginPx: 64, deviceScaleFactor: 2,
+    }));
+  } finally {
+    if (previous === undefined) delete process.env.EASYUI_CAPTURE_V4_DISABLED;
+    else process.env.EASYUI_CAPTURE_V4_DISABLED = previous;
+  }
+  // Механизм — условный спред, а не bump ALGO: тот инвалидировал бы и случаи без канвы сравнения.
   expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
 });
 

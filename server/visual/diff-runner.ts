@@ -43,6 +43,24 @@ export interface NormalizedDiffJob {
     padReferenceTo?: { width: number; height: number };
     /** Смещение эталона в этой канве; по умолчанию `(0, 0)`. Сервер шлёт `margin × dsf`. */
     referencePlacement?: { x: number; y: number };
+    /**
+     * BR-02 (план 2026-08-08 §2): **окно кандидатского растра** в его собственных device px —
+     * `(x, y)` может быть отрицательным (тогда недостающее поле дополняется прозрачным). Так кадр,
+     * снятый полем по сторонам, приводится к канве сравнения, которая от поля краски не зависит
+     * (блокер B3 раунда 2): двигается кандидат, а не канва и не эталон.
+     */
+    candidateWindow?: { x: number; y: number; width: number; height: number };
+    /**
+     * BR-04 (план 2026-08-08 §4): при **объявленной** канве (`padReferenceTo`) требовать точного
+     * совпадения размеров — допуск 0 вместо `maxDimensionDeltaPx`, и никакого неявного zero-pad до
+     * `max(ref, cand)`. Без канвы (legacy-ветка `padTo === null`) опция ничего не меняет.
+     */
+    exactCanvas?: boolean;
+    /**
+     * BR-04: **поверхность сравнения** в device px (`layoutRoot × dsf`) — знаменатель
+     * `rawDiffPctOfSurface`. Без неё процент считается только по канве, как до волны.
+     */
+    surfaceDims?: { width: number; height: number };
     /** Допуск расхождения габаритов после crop, px; больше — `indeterminate`. */
     maxDimensionDeltaPx?: number;
     rawThreshold?: number;
@@ -81,6 +99,14 @@ export interface DiffChannelStats {
 export interface NormalizedDiffMetrics {
   rawDiffPct: number; aaDiffPct: number;
   /**
+   * BR-04: тот же остаток, отнесённый к **поверхности сравнения** (`layoutRoot × dsf`), а не к
+   * канве с полем. Присутствуют вместе с `surfacePixels` и только при объявленной поверхности:
+   * доволновой результат воркера обязан остаться байт-в-байт прежним.
+   */
+  rawDiffPctOfSurface?: number;
+  aaDiffPctOfSurface?: number;
+  surfacePixels?: number;
+  /**
    * R7a: остаток относительно edge-маски эталона. Аддитивно; считается при `options.edge === true`
    * (так его просит гейт приёмки, §W4 T4b) либо под `EASYUI_VISUAL_SIGNALS_V2=1`.
    */
@@ -105,6 +131,12 @@ export interface Dims { width: number; height: number }
  * неотличимо от «сравнили не то» — ровно та непрозрачность, из-за которой автор фидбэка чинил
  * эталон вслепую по размерам из упавшего рана.
  */
+/** BR-02: что воркер сделал с кандидатским растром, прежде чем сравнивать (окно → канва сравнения). */
+export interface CandidateNormalization {
+  sourceDims: Dims;
+  window: { x: number; y: number; width: number; height: number };
+  dims: Dims;
+}
 export interface ReferenceNormalization {
   sourceDims: Dims;
   cropApplied: boolean;
@@ -118,6 +150,7 @@ export type NormalizedDiffIndeterminate = {
   sourceDims: Dims; refDims: Dims; candDims: Dims; cropApplied: boolean;
   dimensionDelta?: { width: number; height: number; tolerancePx: number };
   referenceNormalization?: ReferenceNormalization;
+  candidateNormalization?: CandidateNormalization;
 };
 export type NormalizedDiffMeasured = {
   ok: true; mode: "normalize"; indeterminate: false;
@@ -127,6 +160,7 @@ export type NormalizedDiffMeasured = {
   diffPngBase64: string;
   normalizedCandidatePngBase64: string;
   referenceNormalization?: ReferenceNormalization;
+  candidateNormalization?: CandidateNormalization;
   /** Дериват эталона — только когда сервер строил канву (`padReferenceTo`). */
   normalizedReferencePngBase64?: string;
 };

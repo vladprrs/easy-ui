@@ -16,9 +16,15 @@ import { referenceCanvasOf, visualGate } from "./visual";
 /**
  * **V0-D2 (план 2026-08-08 §4, EUI-BR-04) — трассировка «content-hug < 24 px».**
  *
- * Тесты здесь **не** описывают желаемое поведение: они фиксируют ФАКТИЧЕСКОЕ, чтобы развилка (a)
- * «клэмп у нас» / (b) «не воспроизводится» решалась числами, а не пересказом симптома. Всё, что
- * помечено `// RED (BR-04): фикс в V2`, — поведение, которое волна V2 обязана изменить осознанно.
+ * Тесты заводились как трассировка ФАКТИЧЕСКОГО поведения, чтобы развилка (a) «клэмп у нас» /
+ * (b) «не воспроизводится» решалась числами, а не пересказом симптома. **Волна V2 исполнена**, и
+ * бывшие RED-ассерты здесь инвертированы: каждый из них теперь описывает поведение под фичей
+ * (`capabilities.features.exactContentHugCanvasV1`), а рядом стоит парный legacy-тест под
+ * `EASYUI_CAPTURE_V4_DISABLED=1`, доказывающий доволновое поведение byte-for-byte.
+ *
+ * Что волна НЕ меняет и что тесты продолжают фиксировать как норму: ветка без объявленной канвы
+ * (`padTo === null`) — там сравниваются «голый» экспорт и paint-кадр, канвы не строил никто, и
+ * трогать её значило бы менять смысл сравнений, которых волна не касается.
  *
  * Единицы: `expectedGeometry`/`expectedSurfaces`/`paintMargin` — CSS px; канва, `padTo`,
  * `placement`, `refDims`/`candDims` — device px (× `dsf`). Эталон сервером **не** масштабируется.
@@ -144,8 +150,9 @@ test("BR-04 legacy: 16 px hug-экспорт против paint-кадра — i
     dimensionDelta: { width: 272, height: 272, tolerancePx: 4 },
   });
   expect(result.metrics!.referenceNormalization).toMatchObject({ padTo: null, placement: null });
-  // RED (BR-04): фикс в V2 — снаружи это и читается как «канву нормализовали не туда»; на деле
-  // канвы не строили вовсе, потому что случай её не запросил.
+  // V2-решение: ветка **остаётся** прежней. Снаружи она читается как «канву нормализовали не туда»,
+  // но канвы здесь не строил никто — случай её не запросил, и правки §4 (точная канва, процент по
+  // поверхности) включаются только при объявленной канве.
   db.close();
 });
 
@@ -167,8 +174,9 @@ test("BR-04: «внутренний минимум 24 px» = 16 + maxDimensionDe
     canvas: { width: 24, height: 24 },
     padded: { reference: true, candidate: false },
   });
-  // RED (BR-04): фикс в V2 — 16 px эталон молча дополнен нулями до 24×24 и осуждён на этой канве;
-  // относительный допуск здесь 8/16 = 50 %.
+  // V2-решение: неявный zero-pad до `max(ref, cand)` запрещён только при **объявленной** канве
+  // (`padTo !== null`). Здесь её нет, поэтому 16 px эталон по-прежнему дополняется нулями до 24×24 —
+  // и относительный допуск здесь по-прежнему 8/16 = 50 %. Число «24» и есть `16 + допуск 8`.
   within.db.close();
 
   // На 1 px дальше — обрыв: тот же кейс становится indeterminate. Никакого «минимума 24» в коде
@@ -236,22 +244,42 @@ test("BR-04 content-hug: @2x-эталон 32×32 сводится с кадро�
   db.close();
 });
 
-test("BR-04 content-hug: 1×-эталон 16×16 при dsf 2 сводится по размерам и вообще НЕ проваливается — вдвое меньший эталон проходит pixel-strict", async () => {
+test("BR-04 §4.4: 1×-эталон 16×16 при dsf 2 — indeterminate reference_scale_mismatch с числами", async () => {
   const { ctx, db, dir } = await context({ dsf: 2, referenceSurface: "content-hug", expectedGeometry: { width: 16, height: 16 } });
   ctx.case.referenceAssetId = await putAsset(db, dir, REFERENCE_16);
 
   const result = await visualGate.run(ctx);
-  // Размеры сведены (канва 288), но эталон занимает 16×16 device px там, где кандидат рисует 32×32:
-  // сервер нигде не приводит эталон к `deviceScaleFactor`.
-  expect(result.metrics!.reason).toBeUndefined();
-  expect(result.metrics).toMatchObject({ refDims: { width: 288, height: 288 }, canvas: { width: 288, height: 288 } });
-  expect(result.metrics!.totalPixels).toBe(288 * 288);
-  // RED (BR-04): фикс в V2 — расхождение «эталон вдвое меньше компонента» весит 0.469 % канвы,
-  // потому что 82944 её пикселей — это поле 64 CSS px вокруг 16 px корня. Бюджет 0.5 % профиля
-  // `pixel-strict-v1` такой случай пропускает.
-  expect(result.metrics!.rawDiffPct).toBe(0.469);
-  expect(result.status).toBe("pass");
+  // Сервер эталон не масштабирует нигде, поэтому 1×-экспорт при dsf 2 — не «расхождение на
+  // 0.469 %», а невозможность сравнивать: вердикт не выносится вовсе, и причина названа числами.
+  expect(result.status).toBe("indeterminate");
+  expect(result.metrics).toMatchObject({
+    reason: "reference_scale_mismatch",
+    sourceDims: { width: 16, height: 16 },
+    expectedSourceDims: { width: 32, height: 32 },
+    layoutRoot: { width: 16, height: 16 },
+    deviceScaleFactor: 2,
+  });
+  expect(result.detail).toContain("re-export the reference at 2x");
   db.close();
+});
+
+test("BR-04 legacy (kill-switch): тот же 1×-эталон снова проходит pixel-strict с 0.469 % по канве", async () => {
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const { ctx, db, dir } = await context({ dsf: 2, referenceSurface: "content-hug", expectedGeometry: { width: 16, height: 16 } });
+    ctx.case.referenceAssetId = await putAsset(db, dir, REFERENCE_16);
+
+    const result = await visualGate.run(ctx);
+    // Доволновое поведение byte-for-byte: размеры сведены (канва 288), эталон занимает 16×16 device
+    // px там, где кандидат рисует 32×32, и 82944 пикселя поля разбавляют расхождение до 0.469 %.
+    expect(result.metrics!.reason).toBeUndefined();
+    expect(result.metrics).toMatchObject({ refDims: { width: 288, height: 288 }, canvas: { width: 288, height: 288 } });
+    expect(result.metrics!.totalPixels).toBe(288 * 288);
+    expect(result.metrics!.rawDiffPct).toBe(0.469);
+    expect(result.metrics!.rawDiffPctOfSurface).toBeUndefined();
+    expect(result.status).toBe("pass");
+    db.close();
+  } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
 });
 
 test("BR-04 разведение процента: у 16 px корня ВЕСЬ компонент — 1.23 % канвы, поэтому полностью неверный кадр проходит default-v1", async () => {
@@ -274,12 +302,82 @@ test("BR-04 разведение процента: у 16 px корня ВЕСЬ 
   const result = await visualGate.run(ctx);
   expect(result.metrics!.rawDiffPixels).toBe(1024);
   expect(result.metrics!.totalPixels).toBe(82944);
+  // Обе величины едут в метрики: `rawDiffPct` — по канве с полем (1.23 %, доволновая), а судится
+  // случай по поверхности сравнения (`layoutRoot × dsf = 32×32`), где перекрашенный компонент
+  // весит честные 100 %. Бюджет 2 % профиля `default-v1` для 16 px кейса снова достижим сверху.
   expect(result.metrics!.rawDiffPct).toBe(1.2346);
-  // RED (BR-04): фикс в V2 — бюджет 2 % профиля `default-v1` для 16 px content-hug кейса
-  // недостижим сверху: гейт физически не может выдать `fail`, каким бы ни был компонент.
-  expect(result.status).toBe("pass");
+  expect(result.metrics!.surfacePixels).toBe(1024);
+  expect(result.metrics!.rawDiffPctOfSurface).toBe(100);
+  expect(result.metrics!.judgedRawDiffPct).toBe(100);
+  expect(result.status).toBe("fail");
   expect(result.metrics!.maxChannelDelta).toBe(223);
+  expect(result.detail).toContain("Visual diff 100% exceeds the 2% budget");
   db.close();
+});
+
+test("BR-04 legacy (kill-switch): тот же полностью неверный 16 px кадр снова проходит default-v1", async () => {
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const inverted = (() => {
+      const png = new PNG({ width: 32, height: 32 });
+      for (let index = 0; index < 32 * 32; index += 1) {
+        const offset = index * 4;
+        png.data[offset] = 0xff; png.data[offset + 1] = 0x00; png.data[offset + 2] = 0x00; png.data[offset + 3] = 0xff;
+      }
+      return PNG.sync.write(png);
+    })();
+    const { ctx, db, dir } = await context({
+      policyId: "default-v1", dsf: 2, referenceSurface: "content-hug", expectedGeometry: { width: 16, height: 16 },
+    });
+    ctx.case.referenceAssetId = await putAsset(db, dir, inverted);
+
+    const result = await visualGate.run(ctx);
+    expect(result.metrics!.rawDiffPct).toBe(1.2346);
+    expect(result.metrics!.rawDiffPctOfSurface).toBeUndefined();
+    expect(result.metrics!.judgedRawDiffPct).toBeUndefined();
+    expect(result.status).toBe("pass");
+    db.close();
+  } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
+});
+
+/* ------------------------------------------- 3b. точная канва: объявленная канва не терпит дельты */
+
+test("BR-04 §4.1/4.2: при объявленной канве дельта размеров = 0, без неявного zero-pad до max(ref,cand)", async () => {
+  // Кандидат на 1 device px шире объявленной канвы 288×288: доволновой допуск `pixel-strict-v1`
+  // (4 px) сводил бы такой кадр молча, дополняя эталон нулями до 289 и осуждая компонент на канве,
+  // которой сервер не объявлял.
+  const { ctx, db, dir } = await context({
+    dsf: 2, referenceSurface: "content-hug", expectedGeometry: { width: 16, height: 16 },
+    candidate: framePng(289, 289, { x: 128, y: 128, width: 32, height: 32 }),
+  });
+  ctx.case.referenceAssetId = await putAsset(db, dir, REFERENCE_32);
+
+  const result = await visualGate.run(ctx);
+  expect(result.status).toBe("indeterminate");
+  expect(result.metrics).toMatchObject({
+    reason: "dimensions_irreconcilable",
+    dimensionDelta: { width: 1, height: 1, tolerancePx: 0 },
+  });
+  expect(result.metrics!.referenceNormalization).toMatchObject({ padTo: { width: 288, height: 288 } });
+  db.close();
+});
+
+test("BR-04 legacy (kill-switch): та же дельта 1 px снова сводится допуском 4 px профиля", async () => {
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const { ctx, db, dir } = await context({
+      dsf: 2, referenceSurface: "content-hug", expectedGeometry: { width: 16, height: 16 },
+      candidate: framePng(289, 289, { x: 128, y: 128, width: 32, height: 32 }),
+    });
+    ctx.case.referenceAssetId = await putAsset(db, dir, REFERENCE_32);
+
+    const result = await visualGate.run(ctx);
+    expect(result.metrics!.reason).toBeUndefined();
+    // Эталон 288×288 молча дополнен нулями до канвы 289×289 — ровно то поведение, которое волна
+    // и снимает при объявленной канве.
+    expect(result.metrics).toMatchObject({ canvas: { width: 289, height: 289 }, padded: { reference: true, candidate: false } });
+    db.close();
+  } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
 });
 
 /* ------------------------------------- 4. ветка surfaces v3 (объявленная поверхность сравнения) */

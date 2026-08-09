@@ -92,6 +92,18 @@ services:
       # меняет, — поэтому тумблер безопасен в обе стороны: гаснут ручка (404) и поле
       # `blockerFingerprint` в ране, сводке и манифесте архива. Миграций у волны нет.
       EASYUI_BLOCKER_FINGERPRINT_DISABLED: ${EASYUI_BLOCKER_FINGERPRINT_DISABLED:-}
+      # BR-02 + BR-04 (план 2026-08-08 §2/§4): **общий** тумблер capture-группы
+      # (`features.paintCapturePaddingV1` + `features.exactContentHugCanvasV1`). Одно значение на две
+      # фичи — они делят одну зону (кадр капчура ↔ канва сравнения) и одно окно пересъёмки/re-diff'а.
+      # `1` — доволновое поведение byte-for-byte: манифест с `cases[].paintPaddingPx` отвергается
+      # (`422 capture_padding_disabled`), кадр снимается скалярным полем, объявленная канва снова
+      # сводится по `maxDimensionDeltaPx` с неявным zero-pad, бюджет считается по канве с полем, а
+      # эталон не того масштаба проходит молча. Снятие свитча добавляет `comparisonPolicyVersion` в
+      # `comparisonFingerprint` — то есть стоит **re-diff** сравнимых кейсов (не пересъёмки);
+      # обратное включение возвращает их к доволновым отпечаткам. Персистируемых форм у волны две
+      # (`paintPaddingPx`/`preloadAssets` в case-set): пока открыто окно отката нового образа —
+      # не публиковать наборы с этими полями (старый образ ответит на них 422).
+      EASYUI_CAPTURE_V4_DISABLED: ${EASYUI_CAPTURE_V4_DISABLED:-}
     expose:
       - "8787"
     volumes:

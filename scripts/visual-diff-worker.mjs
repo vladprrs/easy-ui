@@ -127,6 +127,32 @@ export function placePng(png, width, height, x, y) {
   return out;
 }
 
+/**
+ * **Окно кандидатского растра** (план 2026-08-08 §2, EUI-BR-02): прямоугольник `(x, y, w, h)` в
+ * координатах кандидата, вырезанный в новый холст; часть окна, вышедшая за растр, остаётся
+ * прозрачной.
+ *
+ * Одна операция вместо двух (crop при `x,y ≥ 0` и pad при отрицательных), потому что смысл у неё
+ * один: **привести кадр, снятый с полем по сторонам, к канве сравнения**. Канва сравнения
+ * comparison-owned и от поля краски не зависит (блокер B3 раунда 2), поэтому кандидат, снятый с
+ * асимметричным полем, приводится к ней здесь, а не сдвигом эталона.
+ */
+export function windowPng(png, x, y, width, height) {
+  if (width <= 0 || height <= 0) return null;
+  if (x === 0 && y === 0 && png.width === width && png.height === height) return png;
+  const out = new PNG({ width, height });
+  out.data.fill(0);
+  const fromY = Math.max(0, y), toY = Math.min(png.height, y + height);
+  const fromX = Math.max(0, x), toX = Math.min(png.width, x + width);
+  if (toY <= fromY || toX <= fromX) return out;
+  const cols = toX - fromX;
+  for (let row = fromY; row < toY; row += 1) {
+    const from = (row * png.width + fromX) * 4;
+    png.data.copy(out.data, ((row - y) * width + (fromX - x)) * 4, from, from + cols * 4);
+  }
+  return out;
+}
+
 /** Дополняет картинку прозрачным до холста `width×height`, выравнивая по левому-верхнему углу. */
 export function padPng(png, width, height) {
   if (png.width === width && png.height === height) return png;
@@ -473,9 +499,29 @@ export function bestOffsetOf(refData, candData, width, height, options = {}) {
  */
 export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
   const refSource = PNG.sync.read(referencePng);
-  const candidate = PNG.sync.read(candidatePng);
+  const candidateSource = PNG.sync.read(candidatePng);
   const sourceDims = { width: refSource.width, height: refSource.height };
+  // BR-02: кадр, снятый полем по сторонам, приводится к канве сравнения **до** любых размеров и
+  // метрик. Окно объявляет сервер числами (`candidateWindow`), как и канву эталона: воркер не знает
+  // ни поля съёмки, ни маргина канвы, и вывод на его стороне был бы вторым источником правды.
+  const window = options.candidateWindow ?? null;
+  const candidate = window
+    ? windowPng(candidateSource, window.x, window.y, window.width, window.height)
+    : candidateSource;
+  if (!candidate) {
+    return {
+      ok: true, mode: "normalize", indeterminate: true,
+      reason: `candidateWindow ${window.width}×${window.height} at (${window.x}, ${window.y}) selects no pixels`
+        + ` of the ${candidateSource.width}×${candidateSource.height} candidate frame`,
+      sourceDims, refDims: sourceDims,
+      candDims: { width: candidateSource.width, height: candidateSource.height },
+      cropApplied: false,
+    };
+  }
   const candDims = { width: candidate.width, height: candidate.height };
+  const candidateNormalization = window === null
+    ? null
+    : { sourceDims: { width: candidateSource.width, height: candidateSource.height }, window: { ...window }, dims: candDims };
 
   const cropRect = Array.isArray(options.cropRect) && options.cropRect.length === 4 ? options.cropRect : null;
   let reference = cropRect ? cropPng(refSource, cropRect) : refSource;
@@ -510,16 +556,27 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
     sourceDims, cropApplied: cropRect !== null, croppedDims,
     padTo, placement: padTo ? placement : null, refDims,
   };
-  const tolerance = options.maxDimensionDeltaPx ?? DEFAULT_MAX_DIMENSION_DELTA_PX;
+  // BR-04 (план 2026-08-08 §4): при **объявленной** канве допуск равен нулю. Канву построил сервер
+  // по объявленным числам, поэтому всякая дельта — ошибка декларации, а не «сводимое расхождение»;
+  // прежний допуск вдобавок молча дополнял меньшую картинку нулями до `max(ref, cand)`, и 16 px
+  // компонент осуждался на канве 24×24 с относительным допуском 50 %. При `padTo === null` (кадр
+  // против «голого» экспорта) поведение остаётся легаси байт-в-байт.
+  const exactCanvas = options.exactCanvas === true && padTo !== null;
+  const tolerance = exactCanvas ? 0 : (options.maxDimensionDeltaPx ?? DEFAULT_MAX_DIMENSION_DELTA_PX);
   const deltaWidth = Math.abs(refDims.width - candDims.width);
   const deltaHeight = Math.abs(refDims.height - candDims.height);
   if (deltaWidth > tolerance || deltaHeight > tolerance) {
     return {
       ok: true, mode: "normalize", indeterminate: true,
-      reason: `reference ${refDims.width}×${refDims.height} and candidate ${candDims.width}×${candDims.height} differ by ${deltaWidth}×${deltaHeight}px, beyond the ${tolerance}px pad tolerance`,
+      reason: exactCanvas
+        ? `reference ${refDims.width}×${refDims.height} and candidate ${candDims.width}×${candDims.height} differ by`
+          + ` ${deltaWidth}×${deltaHeight}px on a canvas the server declared exactly`
+          + ` (${padTo.width}×${padTo.height}): the declared comparison canvas admits no size delta`
+        : `reference ${refDims.width}×${refDims.height} and candidate ${candDims.width}×${candDims.height} differ by ${deltaWidth}×${deltaHeight}px, beyond the ${tolerance}px pad tolerance`,
       sourceDims, refDims, candDims, cropApplied: cropRect !== null,
       dimensionDelta: { width: deltaWidth, height: deltaHeight, tolerancePx: tolerance },
       referenceNormalization,
+      ...(candidateNormalization === null ? {} : { candidateNormalization }),
     };
   }
 
@@ -537,6 +594,12 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
     matteOver(paddedCand.data, total, matte);
   }
 
+  // BR-04: площадь поверхности сравнения в device px — знаменатель `rawDiffPctOfSurface`. Числа
+  // объявляет сервер (он один знает `layoutRoot` и `dsf`); ноль/отсутствие = «не объявлено».
+  const surface = options.surfaceDims ?? null;
+  const surfacePixels = surface && surface.width > 0 && surface.height > 0
+    ? Math.round(surface.width) * Math.round(surface.height)
+    : null;
   const rawThreshold = options.rawThreshold ?? RAW_THRESHOLD;
   const aaThreshold = options.aaThreshold ?? AA_THRESHOLD;
   const diff = new PNG({ width, height });
@@ -579,11 +642,21 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
     candDims,
     cropApplied: cropRect !== null,
     referenceNormalization,
+    ...(candidateNormalization === null ? {} : { candidateNormalization }),
     canvas: { width, height },
     padded: { reference: refDims.width !== width || refDims.height !== height, candidate: candDims.width !== width || candDims.height !== height },
     metrics: {
       rawDiffPct: round4((rawPixels / total) * 100),
       aaDiffPct: round4((aaPixels / total) * 100),
+      // BR-04: тот же числитель, но знаменатель — **поверхность сравнения** (`layoutRoot × dsf`), а
+      // не канва с полем. У 16 px корня при поле 64 сам компонент занимает 1.23 % канвы, поэтому
+      // бюджет 2 % был для него недостижим сверху: гейт физически не мог выдать `fail`, каким бы
+      // ни был компонент. Ключ условный: без объявленной поверхности он не считается вовсе.
+      ...(surfacePixels === null ? {} : {
+        rawDiffPctOfSurface: round4((rawPixels / surfacePixels) * 100),
+        aaDiffPctOfSurface: round4((aaPixels / surfacePixels) * 100),
+        surfacePixels,
+      }),
       rawDiffPixels: rawPixels,
       aaDiffPixels: aaPixels,
       totalPixels: total,

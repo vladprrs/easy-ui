@@ -384,6 +384,41 @@ export const caseSetComparisonSchema = z.strictObject({
 export const TEXT_AA_BUDGETS = ["live-text-v1"] as const;
 export type TextAaBudget = (typeof TEXT_AA_BUDGETS)[number];
 
+/**
+ * **Поле краски случая по сторонам** (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §2,
+ * EUI-BR-02, capability `paintCapturePaddingV1`).
+ *
+ * До этой волны поле было **скаляром** (`padding: 64px` со всех сторон, `src/capture/CaptureComponent.tsx`),
+ * и компонент с декором, уезжающим вправо на 55 px, приходилось снимать либо с симметричным полем в
+ * 4 раза больше нужного, либо с обрезанной краской (`ink clamp` ⇒ вечный `indeterminate`).
+ *
+ * Три инварианта именно схемы:
+ *
+ * 1. **Поле — per-case, а не `capture`-блок набора** (триаж раунда 2, M1). Значение в `capture`
+ *    двигало бы кадр **всех** случаев набора, нарушая AC фидбэка «recapture только затронутых
+ *    cases»; per-case поле входит во frame-слой ровно того случая, который его объявил.
+ * 2. **Стороны обязательны все четыре.** «Забытая сторона = 0» — это не декларация, а опечатка с
+ *    пиксельными последствиями: неназванная сторона обрезала бы краску молча.
+ * 3. **`.optional()` без `.default()`** (C6/C25, тот же инвариант, что у `cropLineage.sourceSurface`):
+ *    `caseSetIdOf` хэширует `parsed.data`, и zod-дефолт сменил бы контентный адрес **всех** уже
+ *    опубликованных манифестов.
+ *
+ * Потолок стороны совпадает с `MAX_PAINT_MARGIN_PX` капчур-сервиса (значение продублировано: `src/`
+ * не импортирует `server/`); бюджет кадра `(w+left+right)×(h+top+bottom)×dsf² ≤ 20 Мпикс` судит
+ * сервер типизированным `422 capture_budget_exceeded`, а не схема — потолок стороны про форму,
+ * бюджет про площадь.
+ */
+export const CASE_MAX_PAINT_PADDING_PX = 256;
+
+const paintPaddingSide = z.number().int().min(0).max(CASE_MAX_PAINT_PADDING_PX);
+
+/**
+ * Потолок hint'а предзагрузки (BR-03). Само поле — **только контракт**: семантику (расширенный
+ * барьер ресурсов) поставляет BR-03; здесь оно объявлено, чтобы манифест, написанный под волну,
+ * не отвергался strict-схемой, и чтобы слой (`report-only`) был назван до появления потребителя.
+ */
+export const CASE_SET_MAX_PRELOAD_ASSETS = 64;
+
 export const caseSetCaseSchema = z.strictObject({
   id: caseId,
   props: z.record(z.string(), z.unknown()),
@@ -467,6 +502,24 @@ export const caseSetCaseSchema = z.strictObject({
    * сохранённым числам.
    */
   textAaBudget: z.enum(TEXT_AA_BUDGETS).optional(),
+  /**
+   * Поле краски случая по сторонам (BR-02, см. `CASE_MAX_PAINT_PADDING_PX`). Кадровый слой: смена
+   * поля меняет сами пиксели кадра, поэтому она обязана давать пересъёмку **этого** случая — и
+   * ничьего больше. Канву сравнения поле **не** двигает (блокер B3 раунда 2): comparison margin
+   * остаётся comparison-owned, а кандидатский растр приводится к канве сравнения перед диффом.
+   */
+  paintPaddingPx: z.strictObject({
+    top: paintPaddingSide,
+    right: paintPaddingSide,
+    bottom: paintPaddingSide,
+    left: paintPaddingSide,
+  }).optional(),
+  /**
+   * Hint предзагрузки ассетов случая (BR-03, `preloadAssets`). **Слой `report-only`**: hint не
+   * освобождает сервер от обнаружения ресурсов, поэтому он не входит ни в один отпечаток — иначе
+   * подсказка автора меняла бы кадр, ничего не меняя на пикселях.
+   */
+  preloadAssets: z.array(z.string()).max(CASE_SET_MAX_PRELOAD_ASSETS).optional(),
 });
 
 export const caseSetManifestSchema = z.strictObject({

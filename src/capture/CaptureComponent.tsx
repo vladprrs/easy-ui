@@ -68,9 +68,21 @@ async function loadComponent(id: string, version: number, selection: PropsSelect
  * Поле paint-режима (план 2026-08-03 §3 D4, W3). `null` — обычный режим: поверхность остаётся
  * непрозрачной и без поля, то есть существующие захваты не меняются ни на пиксель.
  */
-function paintFieldMargin(): number | null {
-  const margin = readBootstrap()?.paint?.marginPx;
-  return typeof margin === "number" && Number.isFinite(margin) && margin >= 0 ? margin : null;
+function paintFieldPadding(): { top: number; right: number; bottom: number; left: number } | null {
+  const paint = readBootstrap()?.paint;
+  if (!paint) return null;
+  const side = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  // BR-02: per-side форма сильнее скалярной, но не смешивается с ней — union протокола (см.
+  // `CapturePaintField`), поэтому «одна сторона поверх скаляра» здесь невыразимо by construction.
+  if ("paddingPx" in paint) {
+    const padding = (paint as { paddingPx?: Record<string, unknown> }).paddingPx;
+    if (!padding) return null;
+    const top = side(padding.top), right = side(padding.right), bottom = side(padding.bottom), left = side(padding.left);
+    return top === null || right === null || bottom === null || left === null ? null : { top, right, bottom, left };
+  }
+  const margin = side((paint as { marginPx?: unknown }).marginPx);
+  return margin === null ? null : { top: margin, right: margin, bottom: margin, left: margin };
 }
 
 /**
@@ -176,17 +188,25 @@ function ComponentCaptureSurface({ name, designSystem, theme, props, custom, slo
 
   // Paint-режим: прозрачный фон (иначе `omitBackground` бессмыслен — краску закрывает
   // `bg-background`) плюс поле вокруг компонента, чтобы тень/блюр попали в кадр целиком.
-  const paintMargin = paintFieldMargin();
+  const paintPadding = paintFieldPadding();
   const viewportSurface = captureViewportSurface();
   return <SurfaceSpacingScope systemId={designSystem} themeTokens={theme?.tokens}>
     <div
       ref={ref}
       id="eui-capture-surface"
-      className={paintMargin === null ? "bg-background text-foreground inline-block" : "text-foreground inline-block"}
-      {...(paintMargin === null ? {} : { style: { padding: `${paintMargin}px`, background: "transparent" } })}
+      className={paintPadding === null ? "bg-background text-foreground inline-block" : "text-foreground inline-block"}
+      {...(paintPadding === null
+        ? {}
+        // BR-02: четырёхстороннее CSS-padding. Скалярная форма протокола раскрывается в четыре
+        // равные стороны выше, поэтому доволновая джоба даёт ровно прежнюю строку `64px 64px 64px 64px`
+        // — те же пиксели, что `padding: 64px`.
+        : { style: {
+          padding: `${paintPadding.top}px ${paintPadding.right}px ${paintPadding.bottom}px ${paintPadding.left}px`,
+          background: "transparent",
+        } })}
     >
       {/* Прозрачный документ: без этого `omitBackground` бессмыслен — краску закрыл бы фон body. */}
-      {paintMargin === null ? null : <style>{"html,body{background:transparent!important}"}</style>}
+      {paintPadding === null ? null : <style>{"html,body{background:transparent!important}"}</style>}
       <ThemeStyle content={theme} />
       <CaptureStage viewport={viewportSurface}>
         <CaptureSurface designSystem={designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />

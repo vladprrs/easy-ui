@@ -25,6 +25,8 @@ declare module "*/visual-diff-worker.mjs" {
   }
   interface NormalizedMetrics {
     rawDiffPct: number; aaDiffPct: number;
+    /** BR-04: тот же остаток по **поверхности сравнения** (`layoutRoot × dsf`), а не по канве с полем. */
+    rawDiffPctOfSurface?: number; aaDiffPctOfSurface?: number; surfacePixels?: number;
     edgeResidual?: EdgeResidualStats;
     rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
     maxChannelDelta: number;
@@ -40,10 +42,15 @@ declare module "*/visual-diff-worker.mjs" {
     /** §W4: цвет применённого matte; ключа нет вовсе, если матирования не было. */
     matteApplied?: string;
   }
+  interface CandidateNormalizationFacts {
+    sourceDims: Dims; window: { x: number; y: number; width: number; height: number }; dims: Dims;
+  }
   interface NormalizeIndeterminate {
     ok: true; mode: "normalize"; indeterminate: true; reason: string;
     sourceDims: Dims; refDims: Dims; candDims: Dims; cropApplied: boolean;
     dimensionDelta?: { width: number; height: number; tolerancePx: number };
+    /** BR-02: окно кандидатского растра, приведшее кадр к канве сравнения. */
+    candidateNormalization?: CandidateNormalizationFacts;
   }
   interface ReferenceNormalizationFacts {
     sourceDims: Dims; cropApplied: boolean; croppedDims: Dims;
@@ -57,6 +64,8 @@ declare module "*/visual-diff-worker.mjs" {
     diffPngBase64: string;
     normalizedCandidatePngBase64: string;
     referenceNormalization?: ReferenceNormalizationFacts;
+    /** BR-02: окно кандидатского растра, приведшее кадр к канве сравнения. */
+    candidateNormalization?: CandidateNormalizationFacts;
     /** Дериват эталона: сервер строил канву (`padReferenceTo`) либо матировал (§W4). */
     normalizedReferencePngBase64?: string;
   }
@@ -67,6 +76,12 @@ declare module "*/visual-diff-worker.mjs" {
       cropRect?: [number, number, number, number] | number[];
       /** W5: объявленная сервером каноническая канва и место эталона в ней. */
       padReferenceTo?: Dims; referencePlacement?: { x: number; y: number };
+      /** BR-02: окно кандидатского растра в его же координатах (crop при `x,y ≥ 0`, pad при отрицательных). */
+      candidateWindow?: { x: number; y: number; width: number; height: number };
+      /** BR-04: при объявленной канве требовать **точного** совпадения размеров (delta 0). */
+      exactCanvas?: boolean;
+      /** BR-04: поверхность сравнения в device px — знаменатель `rawDiffPctOfSurface`. */
+      surfaceDims?: Dims;
       /** §W4: matte сравнения — `"none"` либо `"#RRGGBB"`; применяется после placement/pad. */
       matte?: string;
       maxDimensionDeltaPx?: number; rawThreshold?: number; aaThreshold?: number;
@@ -123,6 +138,8 @@ declare module "*/visual-diff-worker.mjs" {
   export function cropPng(png: unknown, rect: number[]): unknown;
   export function padPng(png: unknown, width: number, height: number): unknown;
   export function placePng(png: unknown, width: number, height: number, x: number, y: number): unknown;
+  /** BR-02: окно кандидатского растра (crop/pad одной операцией). */
+  export function windowPng(png: unknown, x: number, y: number, width: number, height: number): unknown;
   /** §W4: разбор объявленного matte (`"none"`/мусор → `null`) и композитинг над ним. */
   export function parseMatte(value: unknown): { r: number; g: number; b: number; hex: string } | null;
   export function matteOver(

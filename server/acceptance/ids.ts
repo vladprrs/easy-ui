@@ -25,6 +25,7 @@ import {
 } from "../../src/acceptance/surfaces";
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
 import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import { captureV4Enabled, COMPARISON_POLICY_VERSION } from "../capture/captureV4";
 import { rendererFingerprint } from "../capture/renderer";
 import type { AcceptanceCase, RunOverlayNode } from "./cases";
 import type { AcceptancePolicy, GateMode, GateName, GeometryTolerances, VisualTolerances } from "./policies";
@@ -226,6 +227,16 @@ export interface FrameFingerprintInput {
    * golden-тест `ids.test.ts`.
    */
   candidateOverlay?: readonly RunOverlayNode[];
+  /**
+   * **Поле краски случая по сторонам** (BR-02, план 2026-08-08 §2). Кадровый вход по существу: с
+   * другим полем это буквально другие пиксели (другой размер растра и другое место компонента в нём).
+   *
+   * Кладётся **условным спредом** (`definedOnly`): `frameFingerprint` не версионируется, поэтому
+   * случай без объявленного поля обязан давать байт-в-байт тот же хэш, что до волны, — это
+   * доказывает дифференциальный golden-тест `ids.test.ts`. Тот же паттерн, что у `slotBindings` и
+   * `candidateOverlay`.
+   */
+  paintPaddingPx?: { top: number; right: number; bottom: number; left: number };
 }
 
 /** Кадровое подмножество разрешённой привязки слота (`ResolvedSlotBinding` без `name`/`props`). */
@@ -294,6 +305,13 @@ export function frameFingerprint(
     candidateOverlay: input.candidateOverlay !== undefined && input.candidateOverlay.length > 0
       ? input.candidateOverlay.map((node) => ({ ...node }))
       : undefined,
+    // BR-02: поля нет — ключа нет вовсе (`definedOnly`), поэтому доволновой кадр байт-в-байт прежний.
+    paintPaddingPx: input.paintPaddingPx === undefined
+      ? undefined
+      : {
+        top: input.paintPaddingPx.top, right: input.paintPaddingPx.right,
+        bottom: input.paintPaddingPx.bottom, left: input.paintPaddingPx.left,
+      },
     ...(geometryContractVersion > 1 ? { geometryContractVersion } : {}),
   }));
 }
@@ -355,6 +373,19 @@ export interface ComparisonFingerprintInput {
   /** Параметры канвы кадра: поле вокруг компонента и плотность пикселей. */
   paintMarginPx: number;
   deviceScaleFactor: number;
+  /**
+   * **Версия политики сравнения** (BR-04, план 2026-08-08 §4). Кладётся условным спредом ровно
+   * тогда, когда capture-группа волны активна (`EASYUI_CAPTURE_V4_DISABLED` снят), и это её
+   * единственный механизм инвалидации: точная канва при объявленном `padTo`, запрет неявного
+   * zero-pad, процент по поверхности сравнения и проверка масштаба эталона меняют **смысл кода**, не
+   * трогая ни одного поля манифеста, — сохранённые под старой семантикой метрики обязаны перестать
+   * переиспользоваться (ревью B2 раунда 2).
+   *
+   * Почему не bump `CASE_FINGERPRINT_ALGO_VERSION`: ALGO инвалидирует **весь** накопленный reuse,
+   * включая случаи без канвы сравнения, которых волна не касается вовсе. Условный спред двигает
+   * ровно слой сравнения и ровно у тех кейсов, которые по новым правилам и сравниваются.
+   */
+  comparisonPolicyVersion?: number;
 }
 
 const definedOnly = <T extends Record<string, unknown>>(value: T): Partial<T> =>
@@ -384,6 +415,8 @@ export function comparisonFingerprintOf(input: ComparisonFingerprintInput): stri
     maxDimensionDeltaPx: input.maxDimensionDeltaPx,
     paintMarginPx: input.paintMarginPx,
     deviceScaleFactor: input.deviceScaleFactor,
+    // BR-04: ключа нет при выключенной группе — доволновое сравнение байт-в-байт прежнее.
+    comparisonPolicyVersion: input.comparisonPolicyVersion,
   }));
 }
 
@@ -488,6 +521,12 @@ export interface CaseFingerprintCase {
    * то, что значение доехало до хэша.
    */
   candidateOverlay?: readonly RunOverlayNode[];
+  /**
+   * Поле краски по сторонам (BR-02). Как `slotBindings`/`candidateOverlay`, поле обязано быть **и
+   * здесь, и в `caseFingerprintsOf`**: тотальность `FIELD_LAYERS` доказывает только объявленный
+   * слой, но не то, что значение доехало до пре-образа хэша.
+   */
+  paintPaddingPx?: { top: number; right: number; bottom: number; left: number } | null;
 }
 
 export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFingerprintCase): VerdictPolicySnapshot {
@@ -562,6 +601,10 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     ...(input.case.slotBindings === undefined ? {} : { slotBindings: input.case.slotBindings }),
     // §W3: тот же условный спред. Overlay-free набор обязан остаться байт-в-байт доволновым.
     ...(input.case.candidateOverlay === undefined ? {} : { candidateOverlay: input.case.candidateOverlay }),
+    // BR-02: тот же условный спред. Случай без объявленного поля обязан остаться доволновым.
+    ...(input.case.paintPaddingPx === undefined || input.case.paintPaddingPx === null
+      ? {}
+      : { paintPaddingPx: input.case.paintPaddingPx }),
   });
   const comparison = comparisonFingerprintOf({
     referenceAssetId: input.case.referenceAssetId ?? null,
@@ -579,6 +622,9 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     maxDimensionDeltaPx: input.policy.visual.maxDimensionDeltaPx,
     paintMarginPx: COMPARISON_PAINT_MARGIN_PX,
     deviceScaleFactor: input.surface.dsf,
+    // BR-04: версия семантики сравнения — условный вход. Точка чтения тумблера одна на продукт
+    // (`captureV4Enabled`), поэтому постановка рана и раннер не могут разойтись в отпечатке.
+    ...(captureV4Enabled() ? { comparisonPolicyVersion: COMPARISON_POLICY_VERSION } : {}),
   });
   const snapshot = verdictPolicySnapshotOf(input.policy, input.case);
   const verdictPolicy = verdictPolicyHashOf(snapshot);
@@ -692,6 +738,15 @@ export const FIELD_LAYERS = {
   // капчура и evidence, но входом отпечатка быть не должен: иначе один и тот же факт учитывался бы
   // дважды, а рассинхрон хэша со своими же значениями стал бы неотличим от смены состава детей.
   slotsHash: ["report-only"],
+  // BR-02 (план 2026-08-08 §2): поле краски по сторонам — прямой вход пикселей (другой размер
+  // растра, другое место компонента в нём), значит кадровый слой. Канву сравнения оно **не**
+  // двигает: comparison margin остаётся comparison-owned, а кандидатский растр приводится к канве
+  // перед диффом, поэтому второго слоя (`comparison`) у поля нет и re-diff оно не стоит.
+  paintPaddingPx: ["frame"],
+  // BR-03: hint предзагрузки. `report-only` с письменным обоснованием (D3 требует его у каждого
+  // такого поля): подсказка не меняет ни пикселей, ни метрик, ни вердикта — сервер обязан
+  // обнаружить ресурсы сам, а вход отпечатка означал бы, что чужая подсказка гонит пересъёмку.
+  preloadAssets: ["report-only"],
 
   // --- поверхность
   "surface.viewport": ["frame"],
