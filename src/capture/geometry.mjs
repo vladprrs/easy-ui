@@ -205,6 +205,11 @@ export function collectGeometry({
   limit = 2000, roleKeys = {}, detailKeys, overlayAwareRoot = false,
   decorationOwnership = false, geometryOwnership = null, overflowOwnership = null,
 } = {}) {
+  // Литералы-двойники module-scope экспортов: функция сериализуется для page.evaluate
+  // и внутри страницы module-bindings не видит. Синхронизацию с экспортами держит
+  // element-map-limits-тест в geometry.test.ts.
+  const ELEMENT_MAP_NODE_LIMIT = 512;
+  const ELEMENT_MAP_TOTAL_LIMIT = 2048;
   const markerSelector = "[data-eui-key]";
   const surface = document.querySelector("#eui-capture-surface");
   if (!(surface instanceof Element)) throw new Error("#eui-capture-surface not found");

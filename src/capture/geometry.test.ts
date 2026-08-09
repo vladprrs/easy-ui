@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeGeometry, collectGeometry, ELEMENT_MAP_NODE_LIMIT, GEOMETRY_CONTRACT_VERSION, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
+import { analyzeGeometry, collectGeometry, ELEMENT_MAP_NODE_LIMIT, ELEMENT_MAP_TOTAL_LIMIT, GEOMETRY_CONTRACT_VERSION, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
 
 type Box = { left:number; top:number; right:number; bottom:number; width:number; height:number; x:number; y:number; toJSON():unknown };
 const box = (left:number, top:number, width:number, height:number):Box => ({ left, top, right:left+width, bottom:top+height, width, height, x:left, y:top, toJSON(){ return this; } });
@@ -525,6 +525,15 @@ describe("element map (BR-07 S1)", () => {
       // 0×0 — не факт владения: такой узел не может владеть ни одним пикселем.
       expect(map.nodes.some((node) => node.path.endsWith("div") && node.bbox.width === 0)).toBe(false);
     } finally { restore(); }
+  });
+
+  it("литералы потолков внутри collectGeometry синхронны с экспортами (сериализация в page.evaluate)", () => {
+    // collectGeometry сериализуется Playwright'ом и внутри страницы module-bindings не видит,
+    // поэтому потолки продублированы литералами в теле функции. Разъезд копий = ReferenceError
+    // либо молча другой потолок на проде.
+    const source = collectGeometry.toString();
+    expect(source).toContain(`const ELEMENT_MAP_NODE_LIMIT = ${ELEMENT_MAP_NODE_LIMIT};`);
+    expect(source).toContain(`const ELEMENT_MAP_TOTAL_LIMIT = ${ELEMENT_MAP_TOTAL_LIMIT};`);
   });
 
   it("карта аддитивна: контракт измерения и существующие поля детали не двигаются", () => {
