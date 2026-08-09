@@ -3,10 +3,10 @@ import { ApiError } from "./http";
 import { parseStoredPrototypeDoc, PrototypeRepo } from "./repos/prototypes";
 import { classifyRevision } from "./classify";
 import { ScenarioRepo } from "./repos/scenarios";
-import { collectAssetIds, snapshotDefinitions, themesForDoc } from "./validation";
+import { collectAssetIds, expandPrototypeForSave, schemaResolverV2Enabled, snapshotDefinitions, themesForDoc } from "./validation";
 import { validatePrototype } from "../src/prototype/validate";
 import { isServicePrototypeDocKind } from "../src/prototype/architectureLints";
-import type { ArchitectureExemptedIssue, ValidationIssue } from "../src/prototype/types";
+import type { ArchitectureExemptedIssue, ComponentSchemaContext, ValidationIssue } from "../src/prototype/types";
 import type { PrototypeDoc } from "../src/prototype/schema";
 import type { ComponentDefinition } from "../src/catalog/definitions";
 
@@ -169,23 +169,45 @@ export async function computeReadiness(db: Database, prototypeId: string, option
   let definitions: Record<string, ComponentDefinition> | null = null;
   // Мульти-поверхностный резолвер — тот же, что у валидации save-пути (план §4, «Readiness»).
   let definitionsBySurface: Record<string, Record<string, ComponentDefinition>> | undefined;
+  let componentMeta: Record<string, ComponentSchemaContext> | undefined;
+  // BR-01b: отчёт называет тот же резолв, что save/status/snap — из единого графа снимка.
+  let resolvedComponents: ResolvedComponentSummary[] | undefined;
   let snapshotError: { code: string; message: string } | null = null;
+  /**
+   * BR-01a (H2): резолв идёт по **раскрытому** документу — тем же путём, что save. По
+   * нераскрытому `@eui/Composition` — host-примитив, поэтому резолв не падал, а просто не
+   * доходил до компонентов, существующих только внутри раскрытия: гейт `schema` судил о другом
+   * дереве, чем принял save. Раскрытие — чистая функция: хранимая ревизия не мутируется
+   * (`expandCompositions` строит новый документ, документ без композиций возвращается как есть).
+   */
+  let validatedDoc = doc;
   try {
-    const snapshot = await snapshotDefinitions(db, doc, options.dataDir);
+    if (schemaResolverV2Enabled()) validatedDoc = expandPrototypeForSave(db, doc).doc;
+    const snapshot = await snapshotDefinitions(db, validatedDoc, options.dataDir);
     definitions = snapshot.definitions;
     definitionsBySurface = snapshot.definitionsBySurface;
+    componentMeta = snapshot.componentMeta;
+    resolvedComponents = schemaResolverV2Enabled()
+      ? snapshot.graph.nodes.map((node) => ({
+        name: node.name, componentId: node.componentId, resolvedVersion: node.version,
+        sourceHash: node.sourceHash, propsSchemaHash: node.propsSchemaHash, origin: node.origin,
+      }))
+      : undefined;
   } catch (error) {
+    validatedDoc = doc;
     snapshotError = error instanceof ApiError ? { code: error.code, message: error.message } : { code: "definitions_unavailable", message: error instanceof Error ? error.message : String(error) };
   }
 
   const validation = definitions
-    ? validatePrototype(doc, { definitions, kind: row.kind ?? undefined, ...(definitionsBySurface ? { definitionsBySurface } : {}), themes: themesForDoc(db, doc) })
+    ? validatePrototype(validatedDoc, { definitions, kind: row.kind ?? undefined, ...(definitionsBySurface ? { definitionsBySurface } : {}), ...(componentMeta ? { componentMeta } : {}), themes: themesForDoc(db, validatedDoc) })
     : null;
   const profile: ReadinessProfile = isServicePrototypeDocKind(row.kind ?? undefined) ? "service" : "product";
 
   const gates: ReadinessGate[] = [
-    architectureGate(doc, validation),
-    schemaGate(doc, validation, snapshotError),
+    // Локация issue'ов считается по тому же документу, который валидировался (раскрытому):
+    // индексы экранов совпадают с авторскими, а ключ элемента внутри раскрытия — `<host>$<inner>`.
+    architectureGate(validatedDoc, validation),
+    schemaGate(validatedDoc, validation, snapshotError, resolvedComponents),
     screensGate(db, doc, prototypeId, rev, options.serveDist),
     assetsGate(db, doc, prototypeId, rev),
     pinsGate(db, prototypeId, rev),
@@ -221,8 +243,17 @@ function architectureGate(doc: PrototypeDoc, validation: ReturnType<typeof valid
   });
 }
 
+/**
+ * Резолв компонента в отчёте (BR-01b): та же тройка `resolvedVersion`/`sourceHash`/
+ * `propsSchemaHash`, что называют save-ответ, render-status и snap.
+ */
+export type ResolvedComponentSummary = {
+  name: string; componentId: string; resolvedVersion: number;
+  sourceHash: string | null; propsSchemaHash: string | null; origin: string;
+};
+
 /** `schema` — ошибки и не-архитектурные предупреждения `validatePrototype`. */
-function schemaGate(doc: PrototypeDoc, validation: ReturnType<typeof validatePrototype> | null, snapshotError: { code: string; message: string } | null): ReadinessGate {
+function schemaGate(doc: PrototypeDoc, validation: ReturnType<typeof validatePrototype> | null, snapshotError: { code: string; message: string } | null, resolvedComponents?: ResolvedComponentSummary[]): ReadinessGate {
   if (!validation) {
     return gate("schema", "fail", snapshotError?.code ?? "definitions_unavailable", {
       errors: [{ path: "/screens", message: snapshotError?.message ?? "Component definitions could not be resolved" }],
@@ -232,7 +263,8 @@ function schemaGate(doc: PrototypeDoc, validation: ReturnType<typeof validatePro
   const errors = validation.errors.map((issue) => locate(doc, issue.path, issue.message));
   const warnings = validation.warnings.filter((issue) => !isArchIssue(issue)).map((issue) => locate(doc, issue.path, issue.message));
   const status: GateStatus = errors.length ? "fail" : warnings.length ? "warn" : "pass";
-  return gate("schema", status, errors.length ? "schema_errors" : warnings.length ? "schema_warnings" : "clean", { errors, warnings });
+  return gate("schema", status, errors.length ? "schema_errors" : warnings.length ? "schema_warnings" : "clean",
+    { errors, warnings, ...(resolvedComponents ? { resolvedComponents } : {}) });
 }
 
 /**

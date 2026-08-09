@@ -99,7 +99,23 @@ export interface CauseReadinessFacts {
   pendingRequests?: string[];
 }
 
+/**
+ * **Владельцы кластеров из атрибуции** (BR-07, план 2026-08-08 §7).
+ *
+ * До волны единственным источником имени виновника были `effectSources` геометрии — то есть узлы,
+ * которые красят **за** своей border-box. Кластер внутри обычного узла имени не получал вовсе.
+ * Здесь приезжает владелец, посчитанный по карте элементов **по пикселям**, уже в координатах
+ * канвы (перевод сделан на сервере, `elementMapToCanvas`), поэтому второго `toCanvas` тут нет.
+ */
+export interface CauseElementOwner {
+  elementKey: string;
+  /** bbox кластера в пикселях канвы — тот же, что у соответствующего `visual.regions[i]`. */
+  rect: CauseRect;
+}
+
 export interface CauseInput {
+  /** BR-07: владельцы кластеров из атрибуции; сильнее `effectSources` (счёт по пикселям, не по коробкам). */
+  elementOwners?: CauseElementOwner[];
   /** Метрики визуального гейта; `null` — вердикт `indeterminate` без измерения. */
   visual?: CauseVisualMetrics | null;
   geometry?: CauseGeometryFacts | null;
@@ -251,6 +267,17 @@ function unionBbox(rects: CauseRect[]): CauseRect | null {
  * без названного descendant/cause»), только применённая к пикселям, а не к overflow.
  */
 export function dominantElementKey(bbox: CauseRect, input: CauseInput): string | undefined {
+  // BR-07: атрибуция по пикселям сильнее атрибуции по коробкам эффектов. Она посчитана по той же
+  // маске, что и сам кластер, поэтому «ближайший источник эффекта» рядом с ней — догадка.
+  const owners = input.elementOwners ?? [];
+  let owned: { key: string; overlap: number } | null = null;
+  for (const owner of owners) {
+    if (!isRect(owner.rect) || owner.elementKey === "") continue;
+    const overlap = area(intersection(bbox, owner.rect));
+    if (overlap <= 0) continue;
+    if (!owned || overlap > owned.overlap) owned = { key: owner.elementKey, overlap };
+  }
+  if (owned) return owned.key;
   const sources = input.geometry?.effectSources ?? [];
   const dsf = input.deviceScaleFactor ?? 1;
   let best: { key: string; overlap: number } | null = null;

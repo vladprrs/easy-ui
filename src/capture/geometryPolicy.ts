@@ -100,7 +100,40 @@ export interface GeometryPolicyInput {
   rootClip?: { property: string; value: string } | null;
   /** Габариты эталонного экспорта в **CSS px** (гейт нормализует device px ассета делением на dsf). */
   referenceExportDims?: SurfaceDims | null;
+  /**
+   * **Эффективное поле краски кадра по сторонам**, CSS px (BR-02, план 2026-08-08 §2). Заполняется
+   * потребителем только при активной capture-группе волны; при выключенном
+   * `EASYUI_CAPTURE_V4_DISABLED` поля нет, и результат легаси-ветки байт-в-байт прежний.
+   *
+   * Единственная его роль — сделать ink clamp **называемым**: зная поле стороны, вердикт может
+   * сказать «правой стороне не хватило 64 px, объяви не меньше 65», а не безликое «увеличьте маргин».
+   */
+  paintField?: { top: number; right: number; bottom: number; left: number };
+  /**
+   * **Decoration-источники случая** (BR-05, план 2026-08-08 §5): узлы вне потока, признанные
+   * декорацией — авто-правилом замера либо декларацией `cases[].geometryOwnership`.
+   *
+   * Заполняется потребителем **только** при активной группе владения геометрией; поля нет — и
+   * вердикт исполняет доволновой код байт-в-байт (golden-тест `geometryPolicy.test.ts`).
+   *
+   * Смысл ровно один: краска, полностью объяснённая декорациями, перестаёт быть обвинением. До
+   * волны такой случай снимался только `allowPaintOverflow` — то есть отключением контроля краски
+   * целиком, включая ту краску, которую никто не объявлял (маршрут 2 диагностики V0-D3).
+   */
+  decorationSources?: GeometryDecorationSource[];
   tolerances?: GeometryTolerancesInput;
+}
+
+/** Узел-декорация: коробка, которой он красит, плюс происхождение роли. */
+export interface GeometryDecorationSource {
+  elementKey?: string;
+  elementPath?: string;
+  causes: string[];
+  /** `postTransformPaintBounds` замера — то, чем узел реально красит. */
+  bounds: GeometryPolicyRect;
+  preTransformBounds?: GeometryPolicyRect | null;
+  transform?: string | null;
+  roleSource: "auto" | "declared";
 }
 
 export type GeometryPolicyVerdict =
@@ -114,6 +147,13 @@ export type GeometryPolicyVerdict =
    * и накопленные вердикты сохраняют свой смысл.
    */
   | "surface-mismatch"
+  /**
+   * BR-05 (план 2026-08-08 §5): краска вышла за layout-контур, и **весь** выход объяснён
+   * объявленными/распознанными декорациями. Отдельный класс, а не `clean`: факт «краска вышла»
+   * остаётся фактом и обязан читаться по сохранённому вердикту. Блокирующим он не является —
+   * `geometryVerdictBlocks` отвечает `false` без единого допуска.
+   */
+  | "paint-overflow-decoration"
   | "indeterminate";
 
 /** Вердикт одной поверхности. `not-measured` — честное «факта нет», а не молчаливый `clean`. */
@@ -167,6 +207,30 @@ export interface GeometryPolicyResult {
   divergingSurfaces?: GeometrySurface[];
   /** Выполнено ли `clipExpectation`; `null` — проверить не по чему (нет `rootBounds`). */
   clipSatisfied?: boolean | null;
+  /**
+   * Ink clamp, названный по сторонам (BR-02). **Отсутствует** и у легаси-входа (нет `paintField`),
+   * и у кадра без клэмпа — лишний ключ уехал бы в `geometry.json` всего корпуса.
+   *
+   * `requestedPx` — поле, которым кадр снят; `minimumPx` — минимум, с которого сторону имеет смысл
+   * пересъёмывать. Минимум честно консервативен (`requested + 1`): сколько краски осталось **за**
+   * краем кадра, не знает никто — её там не сняли, — поэтому обещать точное число значило бы
+   * выдумать его.
+   */
+  paintClipped?: {
+    sides: ("top" | "right" | "bottom" | "left")[];
+    requestedPx: { top: number; right: number; bottom: number; left: number };
+    minimumPx: Partial<Record<"top" | "right" | "bottom" | "left", number>>;
+  };
+  /**
+   * Декорации, объяснившие выход краски (BR-05). **Отсутствует** и у легаси-входа, и там, где
+   * декораций нет либо они краску не объясняют: лишний ключ уехал бы в `geometry.json` корпуса.
+   */
+  decorationSources?: GeometryDecorationSource[];
+  /**
+   * Наблюдение поверхности `paint`, скорректированное по decoration-владению (BR-05, маршрут 3).
+   * Присутствует ровно тогда, когда коррекция применена; `raw` — то, что намерил ink-bbox.
+   */
+  paintOwnership?: { raw: SurfaceDims; observed: SurfaceDims; decorationSources: number };
 }
 
 const DEFAULT_TOLERANCE_PX = 1;
@@ -237,6 +301,68 @@ function attributeSources(
     || (left_.cause < right_.cause ? -1 : left_.cause > right_.cause ? 1 : 0));
 }
 
+// ------------------------------------------------ decoration ownership (BR-05, §5)
+
+const hullOf = (boxes: readonly GeometryPolicyRect[]): GeometryPolicyRect | null => {
+  if (boxes.length === 0) return null;
+  const x = Math.min(...boxes.map((box) => box.x));
+  const y = Math.min(...boxes.map((box) => box.y));
+  const r = Math.max(...boxes.map(right));
+  const b = Math.max(...boxes.map(bottom));
+  return { x, y, width: r - x, height: b - y };
+};
+
+const withinBox = (inner: GeometryPolicyRect, outer: GeometryPolicyRect, tolerance: number): boolean =>
+  inner.x >= outer.x - tolerance && inner.y >= outer.y - tolerance
+  && right(inner) <= right(outer) + tolerance && bottom(inner) <= bottom(outer) + tolerance;
+
+/**
+ * Оболочка, за которую компоненту красить **не** разрешено ничем, кроме декораций: layout-контур
+ * плюс коробки эффектов, декорациями не признанных (тень, размытие, аутлайн честного потомка).
+ *
+ * Она же — наблюдение поверхности `paint` при decoration-владении: краску за её пределами объяснили
+ * объявленные декорации, и сверять по ней объявленный по макету `expectedSurfaces.paint` — значит
+ * сверять то, что автор и объявлял (маршрут 3 диагностики V0-D3).
+ */
+function nonDecorationHull(input: GeometryPolicyInput, layout: GeometryPolicyRect): GeometryPolicyRect {
+  const decorated = new Set((input.decorationSources ?? []).map((source) => source.elementPath ?? ""));
+  const rest = (input.effectSources ?? [])
+    .filter((source) => source.rect && !decorated.has(source.elementPath ?? ""))
+    .map((source) => source.rect);
+  return hullOf([layout, ...rest])!;
+}
+
+/**
+ * Объясняют ли декорации **весь** выход краски за layout-контур.
+ *
+ * `null` — нет (декораций не объявлено, либо краска уходит за их коробки тоже): вердикт остаётся
+ * доволновым `paint-overflow-*`, и допуск по-прежнему требуется. Правило намеренно **тотальное**:
+ * «частично объяснено» — это всё ещё необъяснённая краска, а гейт обязан падать именно на ней.
+ */
+function decorationExplanation(
+  input: GeometryPolicyInput,
+  layout: GeometryPolicyRect,
+  paint: GeometryPolicyRect,
+  tolerance: number,
+): { sources: GeometryDecorationSource[]; observedPaint: GeometryPolicyRect } | null {
+  const decorations = input.decorationSources ?? [];
+  if (decorations.length === 0) return null;
+  const explained = hullOf([layout, ...decorations.map((source) => source.bounds)])!;
+  if (!withinBox(paint, explained, tolerance)) return null;
+  const hull = nonDecorationHull(input, layout);
+  // Значимые декорации — те, что и правда дотягиваются за оболочку: перечислять в вердикте узел,
+  // сидящий внутри контура, значило бы обвинять его в чужой краске.
+  const used = decorations.filter((source) => !withinBox(source.bounds, hull, tolerance));
+  if (used.length === 0) return null;
+  const observedPaint = {
+    x: Math.max(paint.x, hull.x), y: Math.max(paint.y, hull.y),
+    width: 0, height: 0,
+  };
+  observedPaint.width = round2(Math.max(0, Math.min(right(paint), right(hull)) - observedPaint.x));
+  observedPaint.height = round2(Math.max(0, Math.min(bottom(paint), bottom(hull)) - observedPaint.y));
+  return { sources: used, observedPaint };
+}
+
 /**
  * Вердикт геометрии одного случая. Порядок проверок значим и отражает «что чинить первым»:
  * сначала отсутствие измерения, затем честное расхождение layout-контура с заявленным
@@ -302,9 +428,23 @@ function evaluateLegacy(input: GeometryPolicyInput): GeometryPolicyResult {
   }
   if (anyClamp(input.paintClamped)) {
     const sides = (["left", "right", "top", "bottom"] as const).filter((side) => input.paintClamped![side]);
+    const field = input.paintField;
     return {
       policyVerdict: "indeterminate", overflow: emptyOverflow(), expectedGeometryDelta: null, clippedBy,
-      reasons: [`ink touches the ${sides.join("/")} edge of the capture field: increase the paint margin and recapture`],
+      reasons: [field === undefined
+        ? `ink touches the ${sides.join("/")} edge of the capture field: increase the paint margin and recapture`
+        : `ink touches the ${sides.join("/")} edge of the capture field`
+          + ` (${sides.map((side) => `${side} ${field[side]}px`).join(", ")}):`
+          + ` declare cases[].paintPaddingPx with at least ${sides.map((side) => `${side} ${field[side] + 1}`).join(", ")} and recapture`],
+      // BR-02: типизируемый факт вместо безликой причины. Условный ключ — легаси-вход (поля нет)
+      // обязан дать байт-в-байт прежний результат.
+      ...(field === undefined ? {} : {
+        paintClipped: {
+          sides: [...sides],
+          requestedPx: { ...field },
+          minimumPx: Object.fromEntries(sides.map((side) => [side, field[side] + 1])),
+        },
+      }),
     };
   }
 
@@ -322,6 +462,22 @@ function evaluateLegacy(input: GeometryPolicyInput): GeometryPolicyResult {
     };
   }
   const sources = attributeSources(layout, overflow, input.effectSources ?? [], tolerance);
+  // BR-05: весь выход краски объяснён декорациями ⇒ вердикт не блокирует и не требует
+  // `allowPaintOverflow`. Ветка условна по наличию `decorationSources`: легаси-вход (поля нет)
+  // проходит мимо неё и даёт байт-в-байт прежний результат.
+  const decoration = decorationExplanation(input, layout, paint, tolerance);
+  if (decoration !== null) {
+    return {
+      policyVerdict: "paint-overflow-decoration",
+      overflow: { ...overflow, sources },
+      expectedGeometryDelta: null,
+      clippedBy,
+      reasons: [`ink extends past the layout bounds by left ${overflow.left} / right ${overflow.right} / top ${overflow.top} / bottom ${overflow.bottom} CSS px,`
+        + ` fully explained by ${decoration.sources.length} decoration node(s):`
+        + ` ${decoration.sources.slice(0, 3).map((item) => `${item.elementKey || item.elementPath || "?"} (${item.causes.join(" ")}, ${item.roleSource})`).join(", ")}`],
+      decorationSources: decoration.sources,
+    };
+  }
   const named = sources.length > 0
     ? `; sources: ${sources.slice(0, 3).map((item) => `${item.elementKey || item.elementPath || "?"} (${item.cause}, ${item.contribution.total}px)`).join(", ")}`
     : "; no descendant effect explains it";
@@ -372,13 +528,32 @@ function evaluateSurfaces(input: GeometryPolicyInput, declared: ExpectedSurfaces
   const clip = (input.clipChain ?? []).find((link) => link.effective) ?? null;
   const clippedBy = clip ? { key: clip.key ?? null, property: clip.property, value: clip.value } : null;
 
+  // BR-05 (маршрут 3): наблюдение поверхности `paint` при decoration-владении. Автор объявляет
+  // поверхности **по макету** (391×88 без хвоста), а ink-bbox честно видит краску хвоста — до
+  // волны это давало безусловный `surface-mismatch`, не снимаемый ни одним допуском. Коррекция
+  // применяется ровно тогда, когда весь выход краски объяснён декорациями; иначе поверхность
+  // сверяется сырым измерением, как и до волны.
+  const paintOwnership = ((): GeometryPolicyResult["paintOwnership"] => {
+    const layout = input.layoutBounds;
+    const paint = input.paintBounds;
+    if (!layout || !paint || input.paintBoundsSource !== "alpha") return undefined;
+    const explained = decorationExplanation(input, layout, paint, tolerance);
+    if (explained === null) return undefined;
+    const raw = { width: round2(paint.width), height: round2(paint.height) };
+    const observed = { width: explained.observedPaint.width, height: explained.observedPaint.height };
+    if (raw.width === observed.width && raw.height === observed.height) return undefined;
+    return { raw, observed, decorationSources: explained.sources.length };
+  })();
+
   const surfaces: Partial<Record<GeometrySurface, SurfaceVerdict>> = {};
   const divergingSurfaces: GeometrySurface[] = [];
   const reasons: string[] = [];
   for (const name of GEOMETRY_SURFACES) {
     const expected = declared[name];
     if (expected === undefined) continue;
-    const observed = observedSurface(input, name);
+    const observed = name === "paint" && paintOwnership !== undefined
+      ? paintOwnership.observed
+      : observedSurface(input, name);
     if (observed === null) {
       surfaces[name] = { verdict: "not-measured", expected, observed: null, delta: null, tolerancePx: sizeTolerance };
       reasons.push(`surface ${name} was not measured: the frame carries no fact for it`);
@@ -439,6 +614,7 @@ function evaluateSurfaces(input: GeometryPolicyInput, declared: ExpectedSurfaces
       surfaces,
       divergingSurfaces,
       clipSatisfied,
+      ...(paintOwnership === undefined ? {} : { paintOwnership }),
     };
   }
   // Поверхности сошлись — дальше работает **тот же** аппарат краски, что и у легаси-входа:
@@ -451,6 +627,7 @@ function evaluateSurfaces(input: GeometryPolicyInput, declared: ExpectedSurfaces
     surfaces,
     divergingSurfaces,
     clipSatisfied,
+    ...(paintOwnership === undefined ? {} : { paintOwnership }),
   };
 }
 
@@ -473,6 +650,10 @@ export function geometryVerdictBlocks(
   // допуск у него уже применён внутри самого per-surface вердикта (`sizeDeltaPx`), и второго
   // послабления быть не может. `overflowBudgetPx`/`allowPaintOverflow` — про краску, не про размер.
   if (verdict === "surface-mismatch") return true;
+  // BR-05: краска, полностью объяснённая декорациями, не блокирует **без единого допуска** — в
+  // этом и смысл владения: `allowPaintOverflow` отключал контроль краски целиком, а декларация
+  // объясняет ровно ту краску, которую объявили.
+  if (verdict === "paint-overflow-decoration") return false;
   if (verdict !== "paint-overflow-not-clipped" && verdict !== "paint-overflow-clipped") return false;
   if (tolerances.allowPaintOverflow === true) return false;
   if (verdict === "paint-overflow-clipped" && tolerances.expectedClip === true) return false;

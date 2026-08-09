@@ -10,7 +10,8 @@ import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions
 import type { PrototypeDoc } from "../../src/prototype/schema";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { CompositionRepo, resolveCompositionPins, safeParseCompositionDocument } from "../repos/compositions";
-import { componentCanonicalRoles, componentLayoutContracts } from "../validation";
+import { componentCanonicalRoles, componentLayoutContracts, schemaResolverV2Enabled } from "../validation";
+import { resolveComponentGraph } from "../components/resolvedGraph";
 import { componentUsages } from "../usageGraph";
 import { requireActiveDesignSystem } from "../designSystems";
 import { requireResourceOwner, requireUser } from "../authorization";
@@ -294,6 +295,19 @@ export async function routeCompositions(request: Request, db: Database, segments
       componentRoles: componentCanonicalRoles(db, designSystem),
       componentLayouts: componentLayoutContracts(db, designSystem),
     });
+    // BR-01b (план 2026-08-08 §1): preview-дерево показывает **тот же** резолв компонентов, что
+    // примет save прототипа с этой композицией — через единый `ResolvedComponentGraph`, а не через
+    // `definition_meta` каталога (он схем props не резолвил вовсе). Резолв диагностический:
+    // неопубликованный тип уже назван в `issues`, поэтому отказ графа гасится и поля просто нет.
+    const resolvedComponents = (() => {
+      if (!schemaResolverV2Enabled()) return null;
+      try {
+        return resolveComponentGraph(db, expanded.doc as PrototypeDoc).nodes.map((node) => ({
+          id: node.componentId, name: node.name, resolvedVersion: node.version,
+          sourceHash: node.sourceHash, propsSchemaHash: node.propsSchemaHash, origin: node.origin,
+        }));
+      } catch { return null; }
+    })();
     const issues = [
       ...nested.missing.map((entry) => ({ path: ["spec", "elements"], message: entry.reason })),
       ...expanded.issues.map((issue) => ({ path: issue.path.split("/").filter(Boolean), message: issue.message, ...(issue.code ? { code: issue.code } : {}) })),
@@ -307,6 +321,7 @@ export async function routeCompositions(request: Request, db: Database, segments
       slotBindings: log.slots.map((event) => ({ slot: event.slot, compositionId: event.compositionId, required: event.required, filled: event.filled, fallbackUsed: event.fallbackUsed })),
       layoutOwners: log.layouts.map((event) => ({ elementKey: event.elementKey, type: event.type, props: event.props })),
       expandedTree: expandedFragment(expanded.doc),
+      ...(resolvedComponents === null ? {} : { components: resolvedComponents }),
       ...(candidateOverlay === null ? {} : { candidateOverlay }),
       issues,
     }, 200, noStore);

@@ -6,6 +6,7 @@ import { getDesignSystemVersion, latestDesignSystemMetaVersion, requireActiveDes
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import { ApiError } from "../http";
 import type { ComponentPin, CompositionPin } from "../validation";
+import { resolveHeadPublish, resolvedSchemaFields } from "../components/resolvedGraph";
 import { pinnedCompositionDocs } from "./compositions";
 import { collectCompositionRefs } from "../../src/prototype/composition";
 import { latestValidatedRev } from "../validationRecords";
@@ -57,7 +58,12 @@ export function themePinsOf(db: Database, id: string, rev: number, doc: Prototyp
 // `status` — статус публикации закреплённой версии (волна 3): включает бейдж «устарел»
 // в дереве компонентов редактора. Поле аддитивное, старые клиенты его игнорируют.
 type Pin = { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status: string };
-export type ResolvedPin = Pin;
+/**
+ * Пин read-путей + поля резолвера BR-01b (`resolvedVersion`/`sourceHash`/`propsSchemaHash`).
+ * Поля **опциональные**: при поднятом kill-switch'е `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` их
+ * нет вовсе (доволновой ответ byte-for-byte), и их нет у пина, чья публикация исчезла.
+ */
+export type ResolvedPin = Pin & { resolvedVersion?: number; sourceHash?: string | null; propsSchemaHash?: string | null };
 /**
  * `componentManifestHash` ревизии — sha256 стабильной тройки `(id, version, bundleHash)` каждого
  * пина в их порядке. Экспортируется (план 2026-08-05 §B2.3), потому что prototypeCandidateOverlay
@@ -143,8 +149,11 @@ export class PrototypeRepo {
    * трекающий док в док без компонента.
    */
   private headPin<T extends { id: string; version: number; bundleHash: string; status: string }>(pin: T): T {
-    const head = this.db.query("SELECT version,bundle_hash bundleHash,status FROM component_publishes WHERE component_id=? AND status='active' ORDER BY version DESC LIMIT 1")
-      .get(pin.id) as { version: number; bundleHash: string; status: string } | null;
+    // BR-01b: резолв головы — у единого графа (`resolveHeadPublish`), у которого его читает и
+    // save-путь. BR-01a (H4) там же: голова резолвится **в той же дизайн-системе**, что
+    // закреплённая версия. Найденная строка головы применяется всегда — fallback на предыдущую
+    // active при успешно разрешённой новой запрещён (иначе status/save называли бы разные версии).
+    const head = resolveHeadPublish(this.db, pin);
     return head ? { ...pin, version: head.version, bundleHash: head.bundleHash, status: head.status } : pin;
   }
   /**
@@ -163,7 +172,11 @@ export class PrototypeRepo {
   }
   /** Публичный вход для readiness-отчёта (волна 4): статусы пинов и их рендерабельность. */
   bundleReadiness(id: string, rev: number): BundleReadiness {
-    const resolvedPins: ResolvedPin[] = this.pins(id, rev);
+    // BR-01b: `resolvedVersion`/`sourceHash`/`propsSchemaHash` — деривация того же резолва, что
+    // назовут save-ответ и snap. Для `track:"head"` это факты **разрешённой** головы, а не пина
+    // ревизии: `pins()` уже вернул резолв графа.
+    const resolvedPins: ResolvedPin[] = this.pins(id, rev)
+      .map((pin) => ({ ...pin, ...resolvedSchemaFields(this.db, pin.id, pin.version) }));
     const warnings: { code: string; message: string }[] = [];
     const errors: { code: string; message: string }[] = [];
     for (const pin of resolvedPins) {

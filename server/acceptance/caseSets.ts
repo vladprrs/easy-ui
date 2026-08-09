@@ -36,6 +36,10 @@ import {
 } from "../../src/acceptance/caseSetSchema";
 import { caseSurfaceIssueOf } from "../../src/acceptance/surfaces";
 import { ApiError } from "../http";
+import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
+import { resourceBarrierV4Enabled } from "../capture/resourceBarrier";
+import { getLatestDesignSystemContent } from "../designSystems";
 import { candidatesRoot, type CandidateEntry } from "../components/candidates";
 import { propsHashOf, type AcceptanceCase, type ResolvedSlotBinding, type RunOverlayNode } from "./cases";
 import { COMPARISON_PAINT_MARGIN_PX, type CaseSurface } from "./ids";
@@ -945,6 +949,60 @@ export interface ValidatedManifest {
  * ошибке всегда указывало на первую настоящую причину:
  * схема → componentId → потолок → уникальность id → эталоны → алиасы → дубли props → dims.
  */
+/**
+ * Декларация поля краски по сторонам (BR-02, план 2026-08-08 §2) — два отказа, оба типизированные.
+ *
+ * 1. **Kill-switch группы.** `EASYUI_CAPTURE_V4_DISABLED=1` ⇒ манифест с `paintPaddingPx`
+ *    отвергается `422 capture_padding_disabled`, а не принимается с молчаливым игнорированием поля:
+ *    принятый и неисполненный `paintPaddingPx` дал бы кадр со скалярным полем под контентным
+ *    адресом набора, объявившего асимметричное, — то есть тихо другой кадр под тем же `cset_`.
+ * 2. **Бюджет площади кадра.** `(w + left + right) × (h + top + bottom) × dsf² ≤ 20 Мпикс`. Верхняя
+ *    оценка `w`/`h` — вьюпорт набора: настоящих габаритов компонента до съёмки не знает никто, а
+ *    вьюпорт их ограничивает по построению (компонент рендерится внутрь него). `validateViewport`
+ *    считает только сам вьюпорт (`server/screenshot/service.ts`), поэтому поле в 256 px по кругу
+ *    при dsf 3 проезжало мимо бюджета и убивало рендерер уже на кадре.
+ */
+function assertPaintPaddingDeclaration(manifest: CaseSetManifest): void {
+  const declared = manifest.cases.filter((item) => item.paintPaddingPx !== undefined);
+  if (declared.length === 0) return;
+  if (!captureV4Enabled()) {
+    throw new ApiError(422, "capture_padding_disabled",
+      "Per-side paint padding is disabled on this server (EASYUI_CAPTURE_V4_DISABLED=1);"
+      + " drop cases[].paintPaddingPx or re-enable the capture wave",
+      { issues: [issue(["cases", declared[0]!.id, "paintPaddingPx"], "per-side paint padding is disabled")] });
+  }
+  const dsf = manifest.capture.deviceScaleFactor ?? 2;
+  const { width, height } = manifest.capture.viewport;
+  for (const item of declared) {
+    const padding = item.paintPaddingPx!;
+    const megapixels = (width + padding.left + padding.right) * (height + padding.top + padding.bottom) * dsf * dsf;
+    if (megapixels > CAPTURE_FRAME_BUDGET_MPX * 1_000_000) {
+      throw new ApiError(422, "capture_budget_exceeded",
+        `Case ${item.id} declares a paint field of ${padding.top}/${padding.right}/${padding.bottom}/${padding.left} CSS px,`
+        + ` which puts the frame at ${(megapixels / 1_000_000).toFixed(1)} megapixels at deviceScaleFactor ${dsf},`
+        + ` above the ${CAPTURE_FRAME_BUDGET_MPX} megapixel budget; shrink the field or the viewport`,
+        { issues: [issue(["cases", item.id, "paintPaddingPx"], `frame budget is ${CAPTURE_FRAME_BUDGET_MPX} megapixels`)] });
+    }
+  }
+}
+
+/**
+ * Декларация владения геометрией (BR-05, план 2026-08-08 §5) под общим kill-switch'ем группы.
+ *
+ * Отказ, а не молчаливое игнорирование, — по той же причине, что у `paintPaddingPx`: набор
+ * контентно адресован, и принятая-но-неисполненная декларация дала бы под тем же `cset_` кадр,
+ * снятый по доволновой семантике, и вердикт, объявленный по волновой.
+ */
+function assertGeometryOwnershipDeclaration(manifest: CaseSetManifest): void {
+  if (geometryOwnershipEnabled()) return;
+  const declared = manifest.cases.find((item) => item.geometryOwnership !== undefined);
+  if (declared === undefined) return;
+  throw new ApiError(422, "geometry_ownership_disabled",
+    "Geometry ownership is disabled on this server (EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1);"
+    + " drop cases[].geometryOwnership or re-enable the geometry ownership wave",
+    { issues: [issue(["cases", declared.id, "geometryOwnership"], "geometry ownership is disabled")] });
+}
+
 export function validateManifest(db: Database, componentId: string, raw: unknown): ValidatedManifest {
   const parsed = caseSetManifestSchema.safeParse(raw);
   if (!parsed.success) {
@@ -984,6 +1042,8 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
   }
 
   validateCropLineage(manifest, assetDims);
+  assertPaintPaddingDeclaration(manifest);
+  assertGeometryOwnershipDeclaration(manifest);
 
   // Алиасы: цель обязана существовать, не быть собой и сама не быть алиасом (цепочки запрещены —
   // вердикт наследуется ровно на один шаг, D10).
@@ -1318,6 +1378,13 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       ...(item.expectedSurfaces === undefined ? {} : { expectedSurfaces: item.expectedSurfaces }),
       ...(item.comparisonSurface === undefined ? {} : { comparisonSurface: item.comparisonSurface }),
       ...(item.clipExpectation === undefined ? {} : { clipExpectation: item.clipExpectation }),
+      // BR-02/BR-03 (план 2026-08-08 §2): поле краски по сторонам (кадровый слой) и hint
+      // предзагрузки (`report-only`). Тот же инвариант отсутствия, что у W4/W5-полей: не
+      // объявленное манифестом поле не доезжает ни до строки, ни до отпечатков вовсе.
+      ...(item.paintPaddingPx === undefined ? {} : { paintPaddingPx: item.paintPaddingPx }),
+      ...(item.preloadAssets === undefined ? {} : { preloadAssets: item.preloadAssets }),
+      // BR-05: владение геометрией узлов (слой frame+verdict). Тот же инвариант отсутствия.
+      ...(item.geometryOwnership === undefined ? {} : { geometryOwnership: item.geometryOwnership }),
       // W5b: координата случая в семье — вход `variantFamily` группировки ремедиаций.
       ...(item.dims ? { dims: item.dims } : {}),
     });
@@ -1385,6 +1452,43 @@ export interface ResolveSlotBindingsInput {
  * пустой объект биндингов (`{}`, схема его допускает) не создаёт ни `slotBindings`, ни `slotsHash` —
  * иначе slot-free наборы сменили бы кадровый отпечаток (§A4).
  */
+/**
+ * **Хэш содержимого темы** ДС субъекта (BR-03, план 2026-08-08 §3, ревью M6).
+ *
+ * Зачем отдельная величина. Кадровые входы знают версию темы (`buildFingerprint.themeVersion` →
+ * `candidateId`), но не её **содержимое**: реестр иконок доезжает до кадра ассетами, и «иконка
+ * темы стала другим файлом» обязано инвалидировать кадр — иначе барьер честно дождётся реестра, а
+ * переиспользован будет растр с прежней иконкой, и §6 фидбэка выполнен только на словах.
+ *
+ * Деривация — из объявленных фактов, а не из байтов: `designSystemMetaVersion` плюс отсортированные
+ * пины ассетов темы (иконки во всех темах и шрифты). Ассеты контентно адресованы (`asset_<sha256>`),
+ * поэтому список пинов и есть отпечаток содержимого, читать файлы не нужно.
+ *
+ * `undefined` при выключенной волне (оба kill-switch'а) — и это единственный механизм байтовой
+ * совместимости: поле уезжает в `frameFingerprint` условным спредом, и его отсутствие оставляет
+ * доволновые отпечатки прежними.
+ */
+export function themeContentHashOf(db: Database, designSystem: string | null): string | undefined {
+  if (!resourceBarrierV4Enabled() || designSystem === null) return undefined;
+  let content: { icons?: { assetId: string; themes?: { light?: string; dark?: string } }[]; fonts?: { src: string }[]; latestMetaVersion?: number | null } | null = null;
+  try { content = getLatestDesignSystemContent(db, designSystem); }
+  // ДС без темы — не повод отказывать в постановке рана: отпечаток честно вырождается в
+  // «версия темы + пустой список», а не в исключение посреди сборки набора.
+  catch { content = null; }
+  const assets = new Set<string>();
+  for (const icon of content?.icons ?? []) {
+    assets.add(icon.assetId);
+    if (icon.themes?.light) assets.add(icon.themes.light);
+    if (icon.themes?.dark) assets.add(icon.themes.dark);
+  }
+  for (const font of content?.fonts ?? []) assets.add(font.src);
+  return new Bun.CryptoHasher("sha256").update(canonicalStringify({
+    designSystem,
+    metaVersion: content?.latestMetaVersion ?? null,
+    assets: [...assets].sort(),
+  })).digest("hex");
+}
+
 export function resolveSlotBindings(input: ResolveSlotBindingsInput): AcceptanceCase[] {
   // §W3: overlay резолвится **до** биндингов и прикладывается к каждому случаю набора — он вход
   // кадрового слоя целиком (принятая цена, триаж C-m10). Переданный `overlay` (реконструкция)
@@ -1403,9 +1507,17 @@ export function resolveSlotBindings(input: ResolveSlotBindingsInput): Acceptance
     const row = input.db.query("SELECT name FROM components WHERE id=?").get(node.componentId) as { name: string } | null;
     overlayNames.set(node.componentId, row?.name ?? node.componentId);
   }
-  const withOverlay = overlay === undefined || overlay.length === 0
+  // BR-03 (ревью M6): хэш содержимого темы прикладывается к **каждому** случаю набора — как и
+  // overlay, это общий кадровый вход субъекта, а не свойство отдельного случая. Считается здесь,
+  // в единственной легальной точке построения набора, поэтому постановка рана, реконструкция,
+  // evidence и dry-run не могут разойтись в отпечатке.
+  const themeContentHash = themeContentHashOf(input.db, input.designSystem);
+  const withTheme = themeContentHash === undefined
     ? input.cases
-    : input.cases.map((item) => ({ ...item, candidateOverlay: overlay }));
+    : input.cases.map((item) => ({ ...item, themeContentHash }));
+  const withOverlay = overlay === undefined || overlay.length === 0
+    ? withTheme
+    : withTheme.map((item) => ({ ...item, candidateOverlay: overlay }));
   const bindingsById = new Map(input.manifest.cases
     .filter((item) => item.slotBindings !== undefined)
     .map((item) => [item.id, item.slotBindings!] as const));

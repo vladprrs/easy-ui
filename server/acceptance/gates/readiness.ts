@@ -13,13 +13,15 @@
  *   продуктовый исход, а не инфраструктурный**: ретраев здесь нет (ретраит только `jobOutcome`,
  *   A3) — компонент, который не успевает подгрузить свою иконку за 15 с, будет не успевать и на
  *   второй попытке;
- * - `indeterminate` — кадр не принёс доказательства вовсе (старый шелл/preview-режим) либо
- *   поверхность ждала по **другой** политике: вердикт не выдаётся, но и обвинения нет.
+ * - `indeterminate` — кадр не принёс доказательства вовсе (старый шелл/preview-режим), поверхность
+ *   ждала по **другой** политике, либо (BR-03, план 2026-08-08 §3) готовности помешал **только**
+ *   барьер ресурсов: вердикт не выдаётся, но и обвинения нет.
  *
  * Инвариант D5 («capture с `met:false` не получает визуального вердикта») держит не этот гейт, а
  * раннер: он пропускает последующие визуальные/геометрические сравнения случая (см. `runner.ts`).
  */
-import { readinessRequiresBarrier } from "../../capture/resourceBarrier";
+import type { CaptureCode } from "../../../src/capture/failureCodes";
+import { readinessRequiresBarrier, readinessRequiresBarrierV4 } from "../../capture/resourceBarrier";
 import { putArtifact } from "../evidence";
 import { readinessPolicyHashOf } from "../ids";
 import type { CaptureOutcome } from "./capture";
@@ -34,6 +36,40 @@ export function readinessOfCase(ctx: GateContext): CaptureOutcome["readiness"] |
 /** `met === false` у наблюдённого кадра — единственный признак «визуальный вердикт запрещён» (D5). */
 export function readinessBlocksVisual(ctx: GateContext): boolean {
   return readinessOfCase(ctx)?.readinessMet === false;
+}
+
+/**
+ * Причины `met:false`, которыми владеет **барьер ресурсов** (BR-03, план 2026-08-08 §3). Ровно на
+ * них — и ни на чём другом — исход гейта сужается до `indeterminate`: недогруженный/поздний ассет
+ * это дефект съёмки, а не расхождение компонента с эталоном. Шрифты, overflow и таймаут readiness
+ * остаются `fail` ровно как до волны (ревью M7: флип «на всё met:false» спрятал бы настоящие
+ * провалы под нейтральным исходом).
+ *
+ * `resource_barrier_timeout` в список **не** входит осознанно: исчерпанный бюджет барьера — это
+ * «страница так и не успокоилась за 8 с», то есть свойство самой страницы, и списывать его на
+ * инфраструктуру значило бы выдать пропуск компоненту, который не грузится.
+ */
+const BARRIER_REASONS: readonly string[] = ["resource_late_after_barrier", "resource_decode_failed"];
+
+/**
+ * Барьер не доказал полноту кадра, и **всё**, что помешало готовности, — барьерное. Второе условие
+ * обязательно: случай, у которого вместе с поздним ассетом не приехал шрифт, обязан остаться
+ * `fail` — иначе одна барьерная причина прятала бы любую другую.
+ */
+export function barrierIncompleteOf(
+  reason: string | null | undefined,
+  barrier: { expected?: unknown; decoded?: unknown } | null,
+): { incomplete: boolean; expectedMismatch: boolean } {
+  const reasons = typeof reason === "string" && reason.length > 0
+    ? reason.split(",").map((part) => part.trim()).filter((part) => part.length > 0)
+    : [];
+  const expectedMismatch = barrier !== null
+    && typeof barrier.expected === "number" && typeof barrier.decoded === "number"
+    && barrier.expected !== barrier.decoded;
+  const barrierOnly = reasons.length > 0 && reasons.every((item) => BARRIER_REASONS.includes(item));
+  // Причин нет вовсе (доказательство пришло без `reason`, но с `met:false`) — тогда сужение
+  // держится на самом расхождении `expected≠decoded`, третьей барьерной причине контракта §3.
+  return { incomplete: reasons.length === 0 ? expectedMismatch : barrierOnly, expectedMismatch };
 }
 
 export const readinessGate: Gate = {
@@ -113,10 +149,37 @@ export const readinessGate: Gate = {
       const pending = metrics.pendingRequests.slice(0, 5).join("; ");
       // Типизированные коды с указателем на виновника (R4) — в `detail`: читателю отчёта нужен
       // не только класс причины, но и **что именно** не доехало (семейство, URL, ключ элемента).
-      const typed = (observed.readinessCodes ?? [])
-        .filter((code) => code.severity === "error")
+      const errorCodes = (observed.readinessCodes ?? []).filter((code) => code.severity === "error");
+      const typed = errorCodes
         .map((code) => (code.ref === undefined ? code.code : `${code.code}(${code.ref})`))
         .slice(0, 5).join(", ");
+      // BR-03 (план 2026-08-08 §3, ревью M7): сужение вердикта — **только** для барьерных причин и
+      // **только** под политикой v4. Инвариант D5 при этом не трогается ни на йоту: `met` остаётся
+      // `false`, поэтому раннер по-прежнему пропускает сравнивающие гейты случая
+      // (`readinessBlocksVisual`) — «capture не становится visual evidence» держится на нём, а не
+      // на статусе этого гейта.
+      const barrier = barrierIncompleteOf(observed.readinessReason, metrics.resourceBarrier as { expected?: unknown; decoded?: unknown } | null);
+      if (readinessRequiresBarrierV4(ctx.policy.readiness) && barrier.incomplete) {
+        const first = errorCodes.find((code) => code.code === "resource_late_after_barrier" || code.code === "resource_decode_failed");
+        const incomplete: CaptureCode = {
+          code: "resource_barrier_incomplete",
+          severity: "error",
+          detail: barrier.expectedMismatch
+            ? "resource barrier proved fewer resources than it declared (expected ≠ decoded)"
+            : "resource barrier did not prove frame completeness",
+          ...(first?.ref === undefined ? {} : { ref: `${first.code}(${first.ref})` }),
+        };
+        return {
+          gate: "readiness",
+          status: "indeterminate",
+          artifacts,
+          // Типизированный код едет **в метриках гейта**: это и есть канал, которым исход доезжает
+          // до case-receipt'а и evidence (`gates_json`), не трогая ни `foldRunVerdict`, ни путь
+          // error_json резюмируемости (BR-06) — ран остаётся `fail` по прочим гейтам случая.
+          metrics: { ...metrics, codes: [...metrics.codes, incomplete], barrierIncomplete: true },
+          detail: `Capture readiness not met by the resource barrier (${observed.readinessReason ?? "unknown"})${typed ? ` [${typed}]` : ""}${pending ? `: ${pending}` : ""}`,
+        };
+      }
       return {
         gate: "readiness", status: "fail", artifacts, metrics,
         detail: `Capture readiness not met (${observed.readinessReason ?? "unknown"})${typed ? ` [${typed}]` : ""}${pending ? `: ${pending}` : ""}`,

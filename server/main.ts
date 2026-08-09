@@ -44,10 +44,18 @@ import { AcceptanceRepo } from "./acceptance/repo";
 import { referencedArtifactShas } from "./acceptance/evidence";
 import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
-import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
+import { RESOURCE_BARRIER_DISABLED, RESOURCE_BARRIER_V4_DISABLED } from "./capture/resourceBarrier";
 import { geometrySurfacesEnabled } from "./acceptance/gates/geometry2";
 import { runtimeDefaultsDisabled } from "./components/runtimeDefaults";
+import { schemaResolverV2Enabled } from "./validation";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
+import { acceptanceResumeEnabled } from "./acceptance/orchestrator";
+import { blockerFingerprintEnabled } from "./acceptance/disposition";
+import { captureV4Enabled } from "./capture/captureV4";
+import { geometryOwnershipEnabled } from "./capture/geometryOwnership";
+// BR-07/BR-08 (план 2026-08-08 §7/§8): три оси волны — атрибуция, профили рендерера, владение.
+import { comparisonOwnershipEnabled, visualAttributionV2Enabled } from "./visual/attribution";
+import { rendererPolicyProfilesEnabled } from "./acceptance/rendererProfiles";
 import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
@@ -282,6 +290,51 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // создавать нельзя — старый образ промоутит такой ран **без** верификации графа зависимостей.
     if(!candidateOverlayEnabled()) console.warn("[acceptance] EASYUI_CANDIDATE_OVERLAY_DISABLED=1: candidate dependency overlay off, case-set manifests with candidateOverlay are refused (422 candidate_overlay_disabled)");
     if(RESOURCE_BARRIER_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_DISABLED=1: resource barrier off, profiles fall back to their pre-wave readiness policies (default-v1 → v1, pixel-strict-v1 → v2, reference → v2)");
+    // BR-06 (план 2026-08-08 §6): kill-switch продолжения приёмки. Гасит **только** ручку
+    // `/resume` и её флаг; наблюдаемость волны (error_json случая, шов allocate-renderer,
+    // circuit breaker, per-gate отпечатки) остаётся включённой — это фиксы дефектов.
+    // Rollback-window миграции v37: пока откат образа возможен без восстановления тома,
+    // продолжения создавать нельзя — старый образ о lineage не знает.
+    if(!acceptanceResumeEnabled()) console.warn("[acceptance] EASYUI_ACCEPTANCE_RESUME_DISABLED=1: resumable acceptance off, POST /api/acceptance-runs/:id/resume answers 409 acceptance_resume_disabled");
+    // BR-10a (план 2026-08-08 §10): kill-switch отпечатка блокера. Слой read-only — вердикты,
+    // отпечатки случаев и evidence-хэш от него не зависят ни в каком положении тумблера; гаснут
+    // ровно две поверхности: ручка `/retry-disposition` (404) и поле `blockerFingerprint`
+    // (представление рана, сводка, манифест архива).
+    // BR-02/BR-04 (план 2026-08-08 §2/§4): **общий** kill-switch capture-группы. Гасит обе фичи
+    // разом — поле краски по сторонам (манифест с `paintPaddingPx` отвечает
+    // `422 capture_padding_disabled`, кадр снимается скаляром) и точную канву сравнения (допуск
+    // размеров возвращается к `maxDimensionDeltaPx`, процент считается по канве с полем, эталон не
+    // того масштаба снова проходит молча). Слой отпечатков: при снятом свитче в
+    // `comparisonFingerprint` появляется `comparisonPolicyVersion`, то есть включение стоит
+    // re-diff'а сравнимых кейсов, а выключение возвращает их к доволновым отпечаткам.
+    // BR-03 (план 2026-08-08 §3): два этажа одного тумблера. Старший гасит барьер целиком (каждый
+    // профиль возвращается в **свою** доволновую политику), младший оставляет барьер, но
+    // исполняемый по v3 byte-for-byte. Оба — restart-required: политика читается один раз на
+    // процесс и питает `policyProfileHash`, `readinessPolicyHash` и `rendererFingerprint`.
+    if(!RESOURCE_BARRIER_DISABLED && RESOURCE_BARRIER_V4_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_V4_DISABLED=1: resource barrier runs the pre-BR-03 v3 policy byte-for-byte (no registry phase, no srcset/pseudo/font/icon-registry channels, no per-resource records, readiness verdict stays fail on barrier codes)");
+    if(!captureV4Enabled()) console.warn("[capture] EASYUI_CAPTURE_V4_DISABLED=1: per-side paint padding and exact content-hug canvas off, case sets declaring paintPaddingPx are refused (422 capture_padding_disabled) and comparisons fall back to the pre-wave dimension tolerance");
+    // BR-05/BR-09 (план 2026-08-08 §5/§9): **общий** kill-switch группы владения геометрией. Обе
+    // фичи меняют интерпретацию одних и тех же фактов замера, поэтому тумблер один: два независимых
+    // дали бы состояние «декорация прозрачна для корня, но её перелив всё ещё поднимает warning».
+    // Слой отпечатков — вердиктный (`geometryOwnershipPolicyVersion` в снимке политики): включение
+    // стоит recompute'а, а не пересъёмки. Персистируемые формы волны — `cases[].geometryOwnership`
+    // (case-set) и `overflowOwnership` (документ прототипа): под свитчем обе отвергаются на записи.
+    if(!geometryOwnershipEnabled()) console.warn("[capture] EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1: decoration-aware geometry and FlowRoot overflow ownership off, case sets declaring geometryOwnership are refused (422 geometry_ownership_disabled), documents declaring overflowOwnership are refused (422 flow_overflow_ownership_disabled), and geometry collection/verdict stay pre-wave byte-for-byte");
+    if(!blockerFingerprintEnabled()) console.warn("[acceptance] EASYUI_BLOCKER_FINGERPRINT_DISABLED=1: blocker fingerprint off, GET /api/acceptance-runs/:id/retry-disposition answers 404 and runs carry no blockerFingerprint");
+    // BR-07 (план 2026-08-08 §7): атрибуция по элементам — слой **report-only**. Под свитчем
+    // исчезают карта элементов в evidence, owner-тоталы, кластеры §10 и квитанция сравнения;
+    // вердикты, отпечатки случаев и `evidence_manifest_hash` от него не зависят ни в каком
+    // положении. Отдельная ось от профилей рендерера намеренно: у той цена — promote-eligibility.
+    if(!visualAttributionV2Enabled()) console.warn("[acceptance] EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1: element-level visual attribution off, cases carry no element-map.json, no owner totals and no §10 clusters (verdicts and fingerprints are unaffected)");
+    // BR-07: профили политики рендерера. **Меняют promote-eligibility**: при опущенном свитче
+    // визуальный гейт впервые в продукте пишет `exceptions[]`, а профиль политики
+    // `default-v1-exceptions` становится промоутабельным. Включать только вместе с решением о
+    // том, что объяснённый renderer-only остаток допускает публикацию.
+    if(!rendererPolicyProfilesEnabled()) console.warn("[acceptance] EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1: renderer policy profiles off, no run produces exceptions[] and default-v1-exceptions is not a promotion policy profile");
+    // BR-08 (план 2026-08-08 §8): второй вердикт по владению. Вердикт случая он не меняет ни в
+    // каком положении тумблера — им остаётся интеграционный; гаснут ровно subject-метрики,
+    // группировка исключённых пикселей по зависимостям и предикат субъектной промоутабельности.
+    if(!comparisonOwnershipEnabled()) console.warn("[acceptance] EASYUI_COMPARISON_OWNERSHIP_DISABLED=1: subject/integration verdicts off, cases[].comparison.ownership stays a declaration without effect (case verdict is the integration one either way)");
     // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —
     // ручку плана (404) и запись кадров экранов на горячем пути съёмки, — потому что писать в
     // таблицу v34 при откате образа некуда. Уже записанные кадры не трогаются: включение обратно
@@ -308,6 +361,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // W9 (план 2026-08-07 §1.6): **render-affecting** аварийный kill-switch — он меняет пиксели,
     // не входя ни в один отпечаток, поэтому ран, снятый при поднятом флаге, внешне неотличим от
     // честного. Отсюда предупреждение в логе старта и `runtime_defaults_disabled` в accept-status.
+    // BR-01a (план 2026-08-08 §1): kill-switch резолвера схемы. Возвращает **все четыре** фикса
+    // разом — пины композиции снова текут по имени на весь документ, readiness снова судит о
+    // нераскрытом дереве, `track:head` снова перескакивает в чужую ДС, а неизвестный prop теряет
+    // диагностический контекст. Ничего не мигрирует и не инвалидирует: путь save/readiness
+    // персистентных форм не заводит, поэтому тумблер безопасен в обе стороны.
+    if(!schemaResolverV2Enabled()) console.warn("[prototypes] EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1: prototype schema resolver v2 off, composition pins apply document-wide by type name, readiness resolves the unexpanded document, head-tracking pins ignore the design-system filter and unknown props answer without component_prop_unknown context");
     if(runtimeDefaultsDisabled()) console.warn("[components] EASYUI_RUNTIME_DEFAULTS_DISABLED=1: schema defaults are NOT applied at render; acceptance of families declaring capabilities.runtimeSchemaDefaults is invalid while this is set");
     // Watchdog фаз саги (триаж O-M7, R7): периодических таймеров в сервере нет, поэтому зависшая
     // фаза подметается на старте процесса — рядом с `failStagingPublishes` — и на каждом запросе

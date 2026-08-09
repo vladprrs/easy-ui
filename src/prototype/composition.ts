@@ -30,7 +30,7 @@ import {
   compositionHandlerV3Schema, isActionParamDirective, substituteHandlers,
 } from "./compositionV3/actions";
 import {
-  compiledLayoutProps, compileLayout, compositionLayoutSchema, layoutSupportIssues,
+  compiledLayoutProps, compileLayout, compileLayoutElementFields, compositionLayoutSchema, layoutSupportIssues,
   type CompositionLayout,
 } from "./compositionV3/layout";
 import {
@@ -548,7 +548,7 @@ export { compositionSlotNames, normalizeCompositionSlots };
 export type { CompositionSlotMeta, CompositionSlotsDeclaration };
 export type { CompositionRepeatParam };
 /** W8d–W8f: параметр-действие, token layout и варианты — публичная поверхность v3. */
-export { compileLayout, layoutSupportIssues } from "./compositionV3/layout";
+export { compileLayout, compileLayoutElementFields, layoutSupportIssues } from "./compositionV3/layout";
 export type { CompositionLayout } from "./compositionV3/layout";
 export { resolveVariant, variantDimensionsOf } from "./compositionV3/variants";
 export type { CompositionVariants } from "./compositionV3/variants";
@@ -1277,6 +1277,9 @@ function expandRecursiveCompositions(
               elementKey: key, innerKey, type: element.type, props: compiled,
             });
             (elements[key] as { props: Record<string, unknown> }).props = { ...compiled, ...props };
+            // BR-09: `overflowOwnership` — поле **элемента**, а не prop: prop'ом оно было бы
+            // неизвестным ключом схемы любого компонента и роняло бы раскрытие.
+            Object.assign(elements[key] as Record<string, unknown>, compileLayoutElementFields(layout));
             if (options.componentLayouts) {
               for (const issue of layoutSupportIssues(element.type, layout, options.componentLayouts[element.type])) {
                 addIssue([...base, key, "layout"], `composition ${source.id}: ${issue.message}`, issue.code);

@@ -16,7 +16,7 @@
  */
 import { ApiError } from "../http";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaseSetComparison, CropSourceSurface, ReferenceSurface, TextAaBudget } from "../../src/acceptance/caseSetSchema";
+import type { CaseSetComparison, CaseSetGeometryOwnership, CropSourceSurface, ReferenceSurface, TextAaBudget } from "../../src/acceptance/caseSetSchema";
 import type { ClipExpectation, ExpectedSurfaces, GeometrySurface } from "../../src/acceptance/surfaces";
 import type { CandidateEntry } from "../components/candidates";
 import type { CasePolicyValues, CaseSurface } from "./ids";
@@ -212,6 +212,35 @@ export interface AcceptanceCase {
    * «отсутствует, а не пусто».
    */
   slotsHash?: string;
+  /**
+   * **Поле краски случая по сторонам**, CSS px (BR-02, план 2026-08-08 §2). Присутствует только
+   * при явной декларации манифеста: отсутствие означает скалярный дефолт капчура
+   * (`DEFAULT_PAINT_MARGIN_PX`/`VIEWPORT_SURFACE_PAINT_MARGIN_PX`), то есть доволновой кадр.
+   * Кадровый слой — смена поля пересобирает **этот** случай и ничей больше.
+   */
+  paintPaddingPx?: { top: number; right: number; bottom: number; left: number };
+  /**
+   * Hint предзагрузки ассетов случая (BR-03). Слой `report-only`: сервер обязан обнаружить ресурсы
+   * сам, и семантику hint'а поставляет BR-03 — здесь он только протянут из манифеста, чтобы
+   * контракт и слой существовали до появления потребителя.
+   */
+  preloadAssets?: string[];
+  /**
+   * **Владение геометрией узлов** случая (BR-05, план 2026-08-08 §5). Присутствует только при
+   * явной декларации манифеста: слой `frame`+`verdict`, поэтому отсутствие обязано оставлять
+   * отпечатки байт-в-байт доволновыми. Кадр такого случая снимается под контрактом измерения 3
+   * (`GEOMETRY_OWNERSHIP_CONTRACT_VERSION`) — доволновой кадр не несёт `preTransformBounds`, и
+   * decoration-семантику по нему восстановить нечем.
+   */
+  geometryOwnership?: CaseSetGeometryOwnership;
+  /**
+   * **Хэш содержимого темы** ДС субъекта (BR-03, план 2026-08-08 §3, ревью M6): версия темы плюс
+   * пины её ассетов. Кадровый слой — смена иконки темы обязана инвалидировать кадр, а не молча
+   * переиспользоваться. Присутствует только при активной волне (`resourceBarrierV4`); отсутствие
+   * оставляет отпечатки доволновыми байт-в-байт. Значение считает `themeContentHashOf`
+   * (`caseSets.ts`) в единственной точке построения набора.
+   */
+  themeContentHash?: string;
 }
 
 /** `caseId` из имени example: сам ключ, если он в charset, иначе стабильный хэш-суррогат. */

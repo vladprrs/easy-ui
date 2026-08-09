@@ -43,6 +43,24 @@ export interface NormalizedDiffJob {
     padReferenceTo?: { width: number; height: number };
     /** Смещение эталона в этой канве; по умолчанию `(0, 0)`. Сервер шлёт `margin × dsf`. */
     referencePlacement?: { x: number; y: number };
+    /**
+     * BR-02 (план 2026-08-08 §2): **окно кандидатского растра** в его собственных device px —
+     * `(x, y)` может быть отрицательным (тогда недостающее поле дополняется прозрачным). Так кадр,
+     * снятый полем по сторонам, приводится к канве сравнения, которая от поля краски не зависит
+     * (блокер B3 раунда 2): двигается кандидат, а не канва и не эталон.
+     */
+    candidateWindow?: { x: number; y: number; width: number; height: number };
+    /**
+     * BR-04 (план 2026-08-08 §4): при **объявленной** канве (`padReferenceTo`) требовать точного
+     * совпадения размеров — допуск 0 вместо `maxDimensionDeltaPx`, и никакого неявного zero-pad до
+     * `max(ref, cand)`. Без канвы (legacy-ветка `padTo === null`) опция ничего не меняет.
+     */
+    exactCanvas?: boolean;
+    /**
+     * BR-04: **поверхность сравнения** в device px (`layoutRoot × dsf`) — знаменатель
+     * `rawDiffPctOfSurface`. Без неё процент считается только по канве, как до волны.
+     */
+    surfaceDims?: { width: number; height: number };
     /** Допуск расхождения габаритов после crop, px; больше — `indeterminate`. */
     maxDimensionDeltaPx?: number;
     rawThreshold?: number;
@@ -62,7 +80,87 @@ export interface NormalizedDiffJob {
      * классификатор `text-raster-residual`.
      */
     edge?: boolean;
+    /**
+     * **Карта элементов кандидата** (BR-07, план 2026-08-08 §7) в координатах **канвы сравнения**
+     * (device px). Перевод из CSS px поверхности делает сервер (`elementMapToCanvas`) — воркер не
+     * знает ни `deviceScaleFactor`, ни окна кандидатского растра, и вывод на его стороне был бы
+     * вторым источником правды о том, куда смотрит прямоугольник.
+     *
+     * `nodes` усекается контрактом до `ATTRIBUTION_MAX_NODES` (512): построчный индекс строится по
+     * ним, и «сколько узлов поместится» обязано быть свойством контракта, а не удачи кадра.
+     * `ownership: true` дополнительно просит субъектные метрики (BR-08).
+     */
+    attribution?: {
+      nodes: AttributionJobNode[];
+      truncated?: boolean;
+      ownership?: boolean;
+    };
   };
+}
+
+/** Узел карты элементов в координатах канвы диффа (device px). */
+export interface AttributionJobNode {
+  /** Стабильный ключ узла (`<markerKey>//<elementPath>`) — он же `ownerElementKey` кластера. */
+  key: string;
+  path: string;
+  markerKey: string;
+  componentId: string | null;
+  depth: number;
+  hasText: boolean;
+  /** BR-08: субъект случая или его зависимость (поддерево slot-биндинга чужого компонента). */
+  ownership: "subject" | "dependency";
+  x: number; y: number; width: number; height: number;
+}
+
+/** Тотал владения одного узла по **полной** diff-маске. */
+export interface AttributionOwnerTotal {
+  elementKey: string;
+  markerKey: string | null;
+  componentId: string | null;
+  depth: number;
+  mismatchedPixels: number;
+}
+
+/** Пер-регионный факт атрибуции: владелец кластера и сигналы, по которым назван класс краски. */
+export interface AttributionRegionFact {
+  index: number;
+  ownerElementKey: string | null;
+  ownerMarkerKey: string | null;
+  ownerPath: string | null;
+  ownerDepth: number | null;
+  ownerHasText: boolean;
+  ownerComponentId: string | null;
+  mismatchedPixels: number;
+  unknownPixels: number;
+  edgeInsidePixels: number;
+  edgeOutsidePixels: number;
+  alphaDominantPixels: number;
+  meanMaxDelta: number;
+  maxChannelDelta: number;
+}
+
+/** BR-08: разбиение расхождения на субъектное и зависимое. */
+export interface AttributionOwnershipTotals {
+  subjectRawDiffPixels: number;
+  dependencyRawDiffPixels: number;
+  subjectAaDiffPixels: number;
+  dependencyAaDiffPixels: number;
+  byDependency: { markerKey: string; componentId: string | null; pixels: number }[];
+}
+
+export interface AttributionTotals {
+  owners: AttributionOwnerTotal[];
+  attributedPixels: number;
+  unknownPixels: number;
+  totalMismatchedPixels: number;
+  /** Доля атрибутированных пикселей, % (цель §10 — ≥95); `null` — расхождения нет вовсе. */
+  coveragePct: number | null;
+  dependencyPixels: number;
+  dependencyByMarker: { markerKey: string; componentId: string | null; pixels: number }[];
+  regions: AttributionRegionFact[];
+  /** Карта неполна (потолок узлов замера либо контракта транспорта) — честный факт, не догадка. */
+  truncated?: boolean;
+  ownership?: AttributionOwnershipTotals;
 }
 export interface DiffRegion { bbox: { x: number; y: number; width: number; height: number }; areaPct: number; meanDelta: number }
 /**
@@ -81,6 +179,14 @@ export interface DiffChannelStats {
 export interface NormalizedDiffMetrics {
   rawDiffPct: number; aaDiffPct: number;
   /**
+   * BR-04: тот же остаток, отнесённый к **поверхности сравнения** (`layoutRoot × dsf`), а не к
+   * канве с полем. Присутствуют вместе с `surfacePixels` и только при объявленной поверхности:
+   * доволновой результат воркера обязан остаться байт-в-байт прежним.
+   */
+  rawDiffPctOfSurface?: number;
+  aaDiffPctOfSurface?: number;
+  surfacePixels?: number;
+  /**
    * R7a: остаток относительно edge-маски эталона. Аддитивно; считается при `options.edge === true`
    * (так его просит гейт приёмки, §W4 T4b) либо под `EASYUI_VISUAL_SIGNALS_V2=1`.
    */
@@ -91,6 +197,11 @@ export interface NormalizedDiffMetrics {
    * бывает by construction: этим фактом обесточивается классификатор `alpha-compositing`.
    */
   matteApplied?: string;
+  /**
+   * BR-07: атрибуция расхождения по карте элементов. Условное поле — задание без карты (и любой
+   * ран под опущенным `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED`) несёт доволновые метрики.
+   */
+  attribution?: AttributionTotals;
   rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
   maxChannelDelta: number;
   channelStats?: DiffChannelStats;
@@ -105,6 +216,12 @@ export interface Dims { width: number; height: number }
  * неотличимо от «сравнили не то» — ровно та непрозрачность, из-за которой автор фидбэка чинил
  * эталон вслепую по размерам из упавшего рана.
  */
+/** BR-02: что воркер сделал с кандидатским растром, прежде чем сравнивать (окно → канва сравнения). */
+export interface CandidateNormalization {
+  sourceDims: Dims;
+  window: { x: number; y: number; width: number; height: number };
+  dims: Dims;
+}
 export interface ReferenceNormalization {
   sourceDims: Dims;
   cropApplied: boolean;
@@ -118,6 +235,7 @@ export type NormalizedDiffIndeterminate = {
   sourceDims: Dims; refDims: Dims; candDims: Dims; cropApplied: boolean;
   dimensionDelta?: { width: number; height: number; tolerancePx: number };
   referenceNormalization?: ReferenceNormalization;
+  candidateNormalization?: CandidateNormalization;
 };
 export type NormalizedDiffMeasured = {
   ok: true; mode: "normalize"; indeterminate: false;
@@ -127,6 +245,7 @@ export type NormalizedDiffMeasured = {
   diffPngBase64: string;
   normalizedCandidatePngBase64: string;
   referenceNormalization?: ReferenceNormalization;
+  candidateNormalization?: CandidateNormalization;
   /** Дериват эталона — только когда сервер строил канву (`padReferenceTo`). */
   normalizedReferencePngBase64?: string;
 };

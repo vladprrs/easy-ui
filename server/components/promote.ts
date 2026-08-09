@@ -10,12 +10,18 @@ import { assertPublishRoleAvailable, duplicateWarnings, type ReuseGateMode, type
 import { importPublished, materializeSource, sha256 } from "./pipeline";
 import { ensureDraftCandidate } from "./validate";
 import { getCandidateBundle } from "./candidates";
-import type { AcceptanceRepo, AcceptanceRunRow, CandidateRow } from "../acceptance/repo";
+import type { AcceptanceCaseRow, AcceptanceRepo, AcceptanceRunRow, CandidateRow } from "../acceptance/repo";
 import { isTerminalRunStatus } from "../acceptance/repo";
 import {
   ACCEPTANCE_POLICIES, PROMOTABLE_RUN_STATUSES, PROMOTION_POLICY_PROFILES,
-  isAcceptancePolicyId, isPromotionPolicyProfile, policyProfileHash,
+  isAcceptancePolicyId, isPromotionPolicyProfile, policyProfileHash, subjectPromotionEligible,
 } from "../acceptance/policies";
+import { CaseSetRepo, manifestOfRow, publishedPinByNameAndVersion } from "../acceptance/caseSets";
+import { comparisonOwnershipEnabled } from "../visual/attribution";
+import {
+  COMPARISON_DEPENDENCY_POLICY, COMPARISON_OWNERSHIP,
+  type CaseSetManifest, type CaseSetSlotBindings,
+} from "../../src/acceptance/caseSetSchema";
 
 /**
  * Promote (RFC candidate-acceptance-pipeline §4.3, волна R1) — **сага**, не одна транзакция:
@@ -110,6 +116,28 @@ export type PromoteResult = {
    * хэшей сюда и в аудит-событие `component.promoted`. `null` — promote без ссылки на ран.
    */
   acceptancePolicy: PromoteAcceptancePolicy | null;
+  /**
+   * Квитанция субъектного promote (EUI-BR-08, план 2026-08-08 §8). `null` — обычный путь: все
+   * раны промоутабельны сами по себе. Непустой массив — версия опубликована **при провальном
+   * интеграционном вердикте**, и это признано явно: по элементу на каждый ран, который прошёл
+   * через субъектный гейт.
+   */
+  subjectPromotion: SubjectPromotionReceipt[] | null;
+};
+
+/**
+ * Один ран, промоутнутый по субъектному владению. Форма — контракт квитанции (§8 п.4): провальный
+ * интеграционный вердикт **сохраняется**, а не заменяется субъектным.
+ */
+export type SubjectPromotionReceipt = {
+  runId: string;
+  caseSetId: string;
+  /** Терминальный статус рана как есть (`fail`) — вердикт случая интеграционный и им остаётся. */
+  integrationVerdict: string;
+  /** Субъектный вердикт по фактам рана; иначе promote сюда не дошёл бы. */
+  subjectVerdict: "pass";
+  /** Runtime-зависимости дерева случаев и раны, которыми доказана каждая из них. */
+  dependencies: { componentId: string; name: string; version: number; runId: string }[];
 };
 
 export type PromoteAcceptancePolicy = {
@@ -143,7 +171,9 @@ export const promotePolicyStrictEnabled = (): boolean => {
  * - живой (`queued|running`) ран кандидата запрещает публикацию (`409 acceptance_run_in_flight`):
  *   вердикт ещё не сложен;
  * - ран обязан принадлежать этому кандидату (`422 acceptance_run_mismatch`) и быть терминальным
- *   `pass|pass_with_exceptions` (`422 acceptance_run_not_passed`);
+ *   `pass|pass_with_exceptions` (`422 acceptance_run_not_passed`) — **либо** пройти субъектный
+ *   гейт BR-08 (`subjectPromotionDecision`: набор объявил владение, субъект чист, зависимости
+ *   доказаны), и тогда провальный интеграционный вердикт уезжает в квитанцию;
  * - профиль рана обязан входить в `PROMOTION_POLICY_PROFILES` (`422 acceptance_policy_mismatch`).
  *
  * **Чего здесь больше нет** (план 2026-08-04 W3, D-A): равенства `policy_profile_hash` рана и
@@ -160,11 +190,12 @@ export const promotePolicyStrictEnabled = (): boolean => {
 function resolveAcceptanceRefs(
   db: Database,
   acceptance: PromoteAcceptance,
-  input: { id: string; baseRev: number; sourceHash: string },
+  input: { id: string; baseRev: number; sourceHash: string; designSystem: string },
   headRev: number,
 ): {
   candidate: CandidateRow; runId: string | null; runIds: string[]; evidenceManifestHashes: string[];
   policy: PromoteAcceptancePolicy | null; warnings: string[];
+  subjectPromotion: SubjectPromotionReceipt[] | null;
 } {
   const { repo } = acceptance;
   if (acceptance.acceptanceRunId !== undefined && acceptance.acceptanceRunIds !== undefined) {
@@ -196,9 +227,12 @@ function resolveAcceptanceRefs(
   if (inFlight) {
     throw new ApiError(409, "acceptance_run_in_flight", "Candidate has a non-terminal acceptance run; wait for it to finish before promoting", { runId: inFlight.run_id });
   }
-  if (run === null) return { candidate, runId: null, runIds: [], evidenceManifestHashes: [], policy: null, warnings: [] };
+  if (run === null) {
+    return { candidate, runId: null, runIds: [], evidenceManifestHashes: [], policy: null, warnings: [], subjectPromotion: null };
+  }
   const strict = promotePolicyStrictEnabled();
   const warnings: string[] = [];
+  const subjectPromotion: SubjectPromotionReceipt[] = [];
   for (const row of runs) {
     if (row.candidate_id !== candidate.candidate_id) {
       throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run belongs to another candidate, not ${candidate.candidate_id}`, { runId: row.run_id });
@@ -211,10 +245,26 @@ function resolveAcceptanceRefs(
     } else if (!isPromotionPolicyProfile(row.policy_profile_id)) {
       throw new ApiError(422, "acceptance_policy_mismatch",
         `Acceptance run was executed under policy profile ${row.policy_profile_id}, which is not allowed to back a promotion`,
-        { runId: row.run_id, runPolicyProfileId: row.policy_profile_id, allowed: [...PROMOTION_POLICY_PROFILES] });
+        // BR-08 (замечание visual-агента): множество допущенных профилей считается **предикатом**,
+        // а не сырым реестром: под `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1` реестр шире
+        // реального допуска, и клиенту отдавался бы профиль, публикацию под которым сервер тут же
+        // отверг бы.
+        { runId: row.run_id, runPolicyProfileId: row.policy_profile_id, allowed: PROMOTION_POLICY_PROFILES.filter(isPromotionPolicyProfile) });
     }
     if (!isTerminalRunStatus(row.status) || !PROMOTABLE_RUN_STATUSES.has(row.status)) {
-      throw new ApiError(422, "acceptance_run_not_passed", `Acceptance run is ${row.status}; only pass or pass_with_exceptions may back a promote`, { runId: row.run_id });
+      // BR-08 (план 2026-08-08 §8): непромоутабельный ран получает **второй** вопрос — не
+      // «прошёл ли он», а «чист ли субъект и доказаны ли его зависимости». `null` означает, что
+      // вопрос не стоит (декларации владения нет либо волна выключена), и отказ остаётся прежним.
+      const receipt = subjectPromotionDecision(db, repo, row, input.designSystem);
+      if (receipt === null) {
+        throw new ApiError(422, "acceptance_run_not_passed", `Acceptance run is ${row.status}; only pass or pass_with_exceptions may back a promote`, { runId: row.run_id });
+      }
+      subjectPromotion.push(receipt);
+      warnings.push(`Acceptance run ${row.run_id} is ${row.status} by the integration verdict and was promoted by subject`
+        + ` ownership instead: the subject pixels are clean and ${receipt.dependencies.length} runtime dependenc`
+        + `${receipt.dependencies.length === 1 ? "y carries" : "ies carry"} an eligible acceptance of their own`
+        + ` (${receipt.dependencies.map((item) => `${item.name} v${item.version}`).join(", ")});`
+        + " the failing integration verdict is recorded in the promote receipt");
     }
   }
   // Когерентность набора (W7): единый профиль, единый рендерер, дизъюнктное покрытие и — при
@@ -245,7 +295,10 @@ function resolveAcceptanceRefs(
     .filter((hash): hash is string => typeof hash === "string" && hash !== "");
   // Легаси-скаляр — **первый элемент отсортированного** набора (контракт C7): старые читатели
   // (Library `accepted`, `audit --versions`) продолжают видеть один детерминированный id.
-  return { candidate, runId: runIds[0]!, runIds, evidenceManifestHashes, policy, warnings };
+  return {
+    candidate, runId: runIds[0]!, runIds, evidenceManifestHashes, policy, warnings,
+    subjectPromotion: subjectPromotion.length === 0 ? null : subjectPromotion,
+  };
 }
 
 /**
@@ -302,6 +355,223 @@ function assertOverlayDependenciesPublished(db: Database, repo: AcceptanceRepo, 
       + ` and is now published as v${match.version} with the same build`);
   }
   return warnings;
+}
+
+/**
+ * **Субъектный promote** (EUI-BR-08, план 2026-08-08 §8, п. 1–4 врезки).
+ *
+ * Отвечает на один вопрос: имеет ли право стать версией ран, который **не** промоутабелен по
+ * интеграционному вердикту. Ответ `null` означает «вопрос не стоит» — вызывающий обязан отказать
+ * ровно так, как отказывал до волны (`422 acceptance_run_not_passed`, байт-в-байт). Любой другой
+ * исход — либо квитанция, либо **типизованный** отказ с различимым кодом: «почему субъектный
+ * путь не сработал» — вопрос агента, и общий `acceptance_run_not_passed` на него не отвечает.
+ *
+ * Четыре условия §8, в порядке дешевизны:
+ *
+ * 1. **Набор объявил владение** — `comparison.ownership: "subject-and-integration"` вместе с
+ *    `comparison.dependencyPolicy: "require-eligible-acceptance"`. Ноль деклараций — это не
+ *    ошибка, а обычный набор: возвращается `null` (доволновое поведение). Объявленная **половина**
+ *    (одно поле без другого) — `422 subject_promotion_ownership_missing`: намерение заявлено, но
+ *    promote-гейту нечего читать, и молча промолчать значило бы притвориться, что декларации нет.
+ * 2. **Субъект чист по фактам рана** — `subjectPromotionEligible` над строками случаев
+ *    (`gates_json`): субъектный вердикт визуального гейта плюс провалы невизуальных гейтов
+ *    **полного** дерева. Строки БД, а не evidence-манифест: манифест — производный артефакт, а
+ *    вердикт обязан читаться из того же места, где его записал раннер.
+ * 3. **Все runtime-зависимости опубликованы и доказаны собственной приёмкой** — пины
+ *    `slotBindings` дерева случаев (рекурсивно). «Доказаны» проверяется по БД, а не по флагу:
+ *    у опубликованной версии зависимости обязан быть свой терминальный promotable-ран
+ *    (`component_publishes.acceptance_run_id`/`acceptance_run_ids` → `acceptance_runs.status`).
+ * 4. **Провальный интеграционный вердикт сохраняется** — он уезжает в квитанцию (`PromoteResult`,
+ *    он же `receipt_json` migration-саги), а не «прощается»: вердикт случая не менялся вовсе.
+ *
+ * Overlay-зависимости (неопубликованные кандидаты) этой функцией не рассматриваются: их закрывает
+ * `assertOverlayDependenciesPublished`, и он строже — требует того же билда, а не просто приёмки.
+ */
+/**
+ * Статусы запиненной версии зависимости, при которых её приёмка ещё что-то доказывает. Тот же
+ * набор, что у слот-пинов (`caseSets.ts`): `deprecated`/`superseded` рендерятся и остаются
+ * законной целью пина, `archived`/`rejected`/`staging`/`failed` — нет.
+ */
+const DEPENDENCY_PIN_ACCEPTED_STATUS: ReadonlySet<string> = new Set(["active", "deprecated", "superseded"]);
+
+function subjectPromotionDecision(
+  db: Database, repo: AcceptanceRepo, run: AcceptanceRunRow, designSystem: string,
+): SubjectPromotionReceipt | null {
+  // Kill-switch волны: под ним `comparison.ownership` остаётся валидной декларацией без эффекта, а
+  // promote ведёт себя байт-в-байт доволново (та же формулировка, что у гейта visual).
+  if (!comparisonOwnershipEnabled()) return null;
+  // Судить можно только **вынесенный** вердикт. `error`/`cancelled`/незавершённый ран вердикта не
+  // несёт вовсе, и «субъект чист» на нём означало бы «мы не мерили».
+  if (run.status !== "fail") return null;
+  if (run.case_set_id === null || run.case_set_id === "") return null;
+  const row = new CaseSetRepo(db).get(run.case_set_id);
+  if (row === undefined) return null;
+  const manifest = manifestOfRow(row);
+
+  // --- условие 1: декларация владения ---------------------------------------
+  const owning = manifest.cases.filter((item) => item.comparison?.ownership === COMPARISON_OWNERSHIP);
+  const policyDeclared = manifest.cases.filter((item) => item.comparison?.dependencyPolicy === COMPARISON_DEPENDENCY_POLICY);
+  if (owning.length === 0 && policyDeclared.length === 0) return null;
+  const missingPolicy = owning.filter((item) => item.comparison?.dependencyPolicy !== COMPARISON_DEPENDENCY_POLICY);
+  if (owning.length === 0 || missingPolicy.length > 0) {
+    const missing = owning.length === 0 ? "comparison.ownership" : "comparison.dependencyPolicy";
+    throw new ApiError(422, "subject_promotion_ownership_missing",
+      `Acceptance run ${run.run_id} failed and its case set declares only half of the ownership contract:`
+      + ` ${missing} is not declared, so a subject promote cannot be judged`,
+      {
+        runId: run.run_id, caseSetId: row.case_set_id, missing,
+        cases: (owning.length === 0 ? policyDeclared : missingPolicy).map((item) => item.id).slice(0, 20),
+      });
+  }
+
+  // --- условие 2: субъект чист ----------------------------------------------
+  const caseRows = repo.cases(run.run_id);
+  const facts = caseRows.map((item) => ({ caseId: item.case_id, ...subjectFactsOf(item) }));
+  if (!subjectPromotionEligible({ ownershipDeclared: true, cases: facts })) {
+    const offending = facts.filter((item) => item.nonVisualFailed === true
+      || item.subjectFailed === true
+      || (item.subjectFailed === null && item.verdict !== "pass" && item.verdict !== "skipped"));
+    throw new ApiError(422, "subject_promotion_subject_failed",
+      `Acceptance run ${run.run_id} is not promotable by subject ownership: ${offending.length || caseRows.length}`
+      + " case(s) either fail the subject verdict, fail a non-visual gate, or carry no subject verdict at all",
+      {
+        runId: run.run_id, caseSetId: row.case_set_id,
+        cases: offending.map((item) => ({
+          caseId: item.caseId, verdict: item.verdict,
+          subjectFailed: item.subjectFailed ?? null, nonVisualFailed: item.nonVisualFailed === true,
+        })).slice(0, 20),
+      });
+  }
+
+  // --- условие 3: зависимости опубликованы и доказаны ------------------------
+  const declared = slotDependenciesOf(manifest);
+  if (declared.length === 0) {
+    // Владение без зависимостей нечем оправдать: расхождение, которым не владеет субъект, в таком
+    // наборе не принадлежит **никому**, и прощать его — ровно та подмена, против которой §8.
+    throw new ApiError(422, "subject_promotion_dependency_ineligible",
+      `Acceptance run ${run.run_id} declares comparison ownership, but its cases bind no published runtime`
+      + " dependencies; there is no owner for the residual that the integration verdict failed on",
+      { runId: run.run_id, caseSetId: row.case_set_id, dependencies: [] });
+  }
+  const dependencies: SubjectPromotionReceipt["dependencies"] = [];
+  const ineligible: { name: string; version: number; componentId: string | null; reason: string }[] = [];
+  for (const dependency of declared) {
+    // Надгробие компонента и отсутствие строки версии — одна причина: soft-deleted зависимость
+    // «опубликованной» не считается, а различать их в payload значило бы отвечать про удалённое.
+    const pin = publishedPinByNameAndVersion(db, dependency.name, dependency.version, designSystem);
+    if (pin === null) {
+      ineligible.push({ ...dependency, componentId: null, reason: "not_published" });
+      continue;
+    }
+    // Статус самой запиненной версии: архивированная/отклонённая публикация не рендерится, и её
+    // приёмка не доказывает того, что увидит прод.
+    if (!DEPENDENCY_PIN_ACCEPTED_STATUS.has(pin.status)) {
+      ineligible.push({ ...dependency, componentId: pin.componentId, reason: "pin_not_renderable" });
+      continue;
+    }
+    const active = db.query("SELECT 1 ok FROM component_publishes WHERE component_id=? AND status='active' LIMIT 1")
+      .get(pin.componentId) as { ok: number } | null;
+    if (active === null) {
+      ineligible.push({ ...dependency, componentId: pin.componentId, reason: "no_active_publication" });
+      continue;
+    }
+    const runIds = publishAcceptanceRunIds(db, pin.componentId, pin.version);
+    if (runIds.length === 0) {
+      ineligible.push({ ...dependency, componentId: pin.componentId, reason: "no_acceptance_evidence" });
+      continue;
+    }
+    const backing = runIds.map((id) => repo.run(id));
+    const eligible = backing.every((candidateRun) => candidateRun !== undefined
+      && candidateRun.component_id === pin.componentId
+      && isTerminalRunStatus(candidateRun.status) && PROMOTABLE_RUN_STATUSES.has(candidateRun.status));
+    if (!eligible) {
+      ineligible.push({ ...dependency, componentId: pin.componentId, reason: "acceptance_not_promotable" });
+      continue;
+    }
+    dependencies.push({ componentId: pin.componentId, name: pin.name, version: pin.version, runId: runIds[0]! });
+  }
+  if (ineligible.length > 0) {
+    throw new ApiError(422, "subject_promotion_dependency_ineligible",
+      `Acceptance run ${run.run_id} is not promotable by subject ownership: ${ineligible.length} runtime`
+      + ` dependenc${ineligible.length === 1 ? "y" : "ies"} lack an eligible acceptance of their own`
+      + ` (${ineligible.map((item) => `${item.name} v${item.version}: ${item.reason}`).join(", ")})`,
+      { runId: run.run_id, caseSetId: row.case_set_id, dependencies: ineligible });
+  }
+
+  // --- условие 4: провальный интеграционный вердикт — в квитанцию -------------
+  return {
+    runId: run.run_id, caseSetId: row.case_set_id,
+    integrationVerdict: run.status, subjectVerdict: "pass",
+    dependencies,
+  };
+}
+
+/**
+ * Факты одного случая для `subjectPromotionEligible` — из строки БД, а не из evidence.
+ *
+ * `subjectFailed: null` — «субъектный вердикт не посчитан» (кейс без карты элементов, re-diff без
+ * свежих фактов, выключенная атрибуция): предикат в этом случае судит по обычному вердикту случая.
+ * Нечитаемый `gates_json` трактуется так же — выдумывать «чисто» по битой строке нельзя.
+ */
+function subjectFactsOf(row: AcceptanceCaseRow): { verdict: string | null; subjectFailed: boolean | null; nonVisualFailed: boolean } {
+  const empty = { verdict: row.verdict, subjectFailed: null, nonVisualFailed: false };
+  if (row.gates_json === null || row.gates_json === "") return empty;
+  let gates: { gate?: string; status?: string; metrics?: { ownership?: { subject?: { failed?: unknown } } } }[];
+  try {
+    const parsed = JSON.parse(row.gates_json) as unknown;
+    if (!Array.isArray(parsed)) return empty;
+    gates = parsed as typeof gates;
+  } catch { return empty; }
+  const nonVisualFailed = gates.some((gate) => gate.gate !== "visual"
+    && (gate.status === "fail" || gate.status === "indeterminate"));
+  const failed = gates.find((gate) => gate.gate === "visual")?.metrics?.ownership?.subject?.failed;
+  return { verdict: row.verdict, subjectFailed: typeof failed === "boolean" ? failed : null, nonVisualFailed };
+}
+
+/**
+ * Runtime-зависимости набора: **опубликованные** пины `slotBindings` всех случаев, рекурсивно по
+ * вложенным уровням (§W6). Overlay-форма пропускается намеренно — она не версия, и её проверяет
+ * `assertOverlayDependenciesPublished` строже (тем же билдом, а не просто приёмкой).
+ *
+ * Ключ дедупа — `(type, version)`: одна и та же публикация, привязанная в десяти случаях, — одна
+ * зависимость и одна проверка.
+ */
+function slotDependenciesOf(manifest: CaseSetManifest): { name: string; version: number }[] {
+  const found = new Map<string, { name: string; version: number }>();
+  const walk = (bindings: CaseSetSlotBindings): void => {
+    for (const children of Object.values(bindings)) {
+      for (const child of children) {
+        if ("overlay" in child) {
+          if (child.slotBindings !== undefined) walk(child.slotBindings);
+          continue;
+        }
+        found.set(`${child.type}@${child.version}`, { name: child.type, version: child.version });
+        if (child.slotBindings !== undefined) walk(child.slotBindings);
+      }
+    }
+  };
+  for (const item of manifest.cases) if (item.slotBindings !== undefined) walk(item.slotBindings);
+  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version - b.version);
+}
+
+/**
+ * Раны, которыми доказана конкретная опубликованная версия (A9/W7-receipts строки версии): союз
+ * легаси-скаляра и массива. Пусто — версия опубликована без ссылки на приёмку вовсе.
+ */
+function publishAcceptanceRunIds(db: Database, componentId: string, version: number): string[] {
+  const row = db.query(`SELECT acceptance_run_id one, acceptance_run_ids many
+    FROM component_publishes WHERE component_id=? AND version=?`)
+    .get(componentId, version) as { one: string | null; many: string | null } | null;
+  if (row === null) return [];
+  const ids = new Set<string>();
+  if (typeof row.one === "string" && row.one !== "") ids.add(row.one);
+  if (typeof row.many === "string" && row.many !== "") {
+    try {
+      const parsed = JSON.parse(row.many) as unknown;
+      if (Array.isArray(parsed)) for (const id of parsed) if (typeof id === "string" && id !== "") ids.add(id);
+    } catch { /* битая колонка — читаем только скаляр */ }
+  }
+  return [...ids];
 }
 
 /**
@@ -445,7 +715,9 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
   // дешёвым и не оставлять за собой ни stage-строки, ни пересборки бандла.
   const acceptanceRefs = input.acceptance === undefined
     ? null
-    : resolveAcceptanceRefs(db, input.acceptance, input, revision.rev);
+    : resolveAcceptanceRefs(db, input.acceptance, {
+      id: input.id, baseRev: input.baseRev, sourceHash: input.sourceHash, designSystem: revision.designSystem,
+    }, revision.rev);
 
   // --- Фаза A.2: артефакты кандидата ------------------------------------------
   // Тёплый кэш отдаёт extraction/bundle без typecheck+compile; холодный — пересобирает
@@ -550,5 +822,6 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
     acceptanceRunIds: acceptanceRefs?.runIds ?? [],
     evidenceManifestHashes: acceptanceRefs?.evidenceManifestHashes ?? [],
     acceptancePolicy: acceptanceRefs?.policy ?? null,
+    subjectPromotion: acceptanceRefs?.subjectPromotion ?? null,
   };
 }

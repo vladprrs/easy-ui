@@ -32,6 +32,12 @@ export const RECEIPT_FONT_FACES_LIMIT = 64;
 export const RECEIPT_IMAGES_LIMIT = 64;
 export const RECEIPT_CONSOLE_LIMIT = 100;
 export const RECEIPT_THEME_RESOURCES_LIMIT = 200;
+/**
+ * Потолок пер-ресурсных записей барьера в receipt'е (BR-03). Обрезка **типизирована** флагом
+ * `resourcesTruncated`: «двести записей» и «двести из тысячи» — разные факты, и молчаливый slice
+ * сделал бы их неразличимыми ровно там, где читатель ищет недоехавший ассет.
+ */
+export const RECEIPT_RESOURCE_RECORDS_LIMIT = 200;
 /** Сколько **различных** сигнатур подавленного шума едет в receipt (W10); счётчики точны. */
 export const RECEIPT_SUPPRESSED_SIGNATURES_LIMIT = 32;
 /** Потолок длины одной сигнатуры: она — ключ агрегации, а не сообщение целиком. */
@@ -125,6 +131,32 @@ export interface CaptureReceiptResourceBarrier {
   stableFrames: number;
   lateAfterBarrier: string[];
   durationMs: number;
+  /** BR-03: `4` при барьере волны; `null` — доволновой барьер (v3), а не «волна ничего не нашла». */
+  policyVersion: number | null;
+  /** BR-03: исход фазы `registry`; `null` — фазы не было (v3). */
+  registry: { iconsExpected: number; iconsObserved: number; waitedMs: number; timedOut: boolean } | null;
+  /**
+   * BR-03: пер-ресурсные записи (контракт фидбэка §6). `null` — записей в доказательстве не было
+   * (v3); пустой массив — были, но ни одного ресурса кадр не объявил.
+   */
+  resources: CaptureReceiptResourceRecord[] | null;
+  /** Записи обрезаны потолком receipt'а (`RECEIPT_RESOURCE_RECORDS_LIMIT`) — факт, а не молчание. */
+  resourcesTruncated: boolean;
+}
+
+/** Пер-ресурсная запись в receipt'е (проекция `ReadinessResourceRecord`, BR-03). */
+export interface CaptureReceiptResourceRecord {
+  assetId: string | null;
+  ownerElementKey: string | null;
+  ownerComponentId: string | null;
+  channel: string;
+  discoveredAt: string;
+  url: string;
+  requested: boolean;
+  loaded: boolean;
+  decoded: boolean;
+  completedBeforeStableFrame: boolean;
+  phase: string | null;
 }
 
 export interface CaptureReceiptResources {
@@ -171,6 +203,22 @@ export interface CaptureReceiptOutput {
   surfaceRect: { x: number; y: number; width: number; height: number } | null;
   /** Поле paint-режима, CSS px (W3). Отсутствует в прочих режимах. */
   paintMargin?: number;
+  /**
+   * **Эффективное** поле краски по сторонам, CSS px (BR-02, план 2026-08-08 §2): то, чем кадр
+   * снят на самом деле — после клэмпа каждой стороны к `MAX_PAINT_MARGIN_PX`. Отсутствует у
+   * скалярной джобы: её поле целиком описано `paintMargin`.
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number };
+  /**
+   * **Запрошенное** поле по сторонам — до клэмпа. Пара requested/effective обязательна по §3
+   * фидбэка: без неё «поле обрезали до потолка» неотличимо от «поля столько и просили», и автор
+   * чинил бы не ту сторону.
+   */
+  paintPaddingRequested?: { top: number; right: number; bottom: number; left: number };
+  // Стороны, на которых краска упёрлась в край поля, здесь **намеренно отсутствуют**: ink clamp
+  // меряется по альфе уже снятого PNG (ink-bbox воркер гейта геометрии), то есть заведомо позже,
+  // чем пишется receipt кадра. Этот факт живёт там, где он измерен, — `paintClipped` в метриках и
+  // артефакте гейта геометрии плюс типизированный код `paint_capture_clipped`.
 }
 
 /**
@@ -369,9 +417,39 @@ function resourceBarrierOf(evidence: Record<string, unknown> | null): CaptureRec
   const durationMs = num(record.durationMs);
   const fontsReady = bool(record.fontsReady);
   if (expected === null || decoded === null || stableFrames === null || durationMs === null || fontsReady === null) return null;
+  const rawResources = record.resources;
+  const resources = Array.isArray(rawResources)
+    ? rawResources.slice(0, RECEIPT_RESOURCE_RECORDS_LIMIT).flatMap((item): CaptureReceiptResourceRecord[] => {
+      if (item === null || typeof item !== "object") return [];
+      const entry = item as Record<string, unknown>;
+      return [{
+        assetId: str(entry.assetId),
+        ownerElementKey: str(entry.ownerElementKey),
+        ownerComponentId: str(entry.ownerComponentId),
+        channel: str(entry.channel) ?? "img",
+        discoveredAt: str(entry.discoveredAt) ?? "dom",
+        url: str(entry.url) ?? "",
+        requested: entry.requested === true,
+        loaded: entry.loaded === true,
+        decoded: entry.decoded === true,
+        completedBeforeStableFrame: entry.completedBeforeStableFrame === true,
+        phase: str(entry.phase),
+      }];
+    })
+    : null;
+  const rawRegistry = record.registry as Record<string, unknown> | null | undefined;
   return {
     expected, decoded, fontsReady, stableFrames, durationMs,
     lateAfterBarrier: strings(record.lateAfterBarrier, RECEIPT_THEME_RESOURCES_LIMIT),
+    policyVersion: num(record.policyVersion),
+    registry: rawRegistry === null || rawRegistry === undefined || typeof rawRegistry !== "object" ? null : {
+      iconsExpected: num(rawRegistry.iconsExpected) ?? 0,
+      iconsObserved: num(rawRegistry.iconsObserved) ?? 0,
+      waitedMs: num(rawRegistry.waitedMs) ?? 0,
+      timedOut: rawRegistry.timedOut === true,
+    },
+    resources,
+    resourcesTruncated: Array.isArray(rawResources) && rawResources.length > RECEIPT_RESOURCE_RECORDS_LIMIT,
   };
 }
 

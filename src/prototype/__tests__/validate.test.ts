@@ -23,6 +23,29 @@ describe("element props validation", () => {
     expect(validate({ label: "Valid" })).toEqual({ errors: [], warnings: [] });
   });
 
+  /**
+   * BR-01a (план 2026-08-08 §1): контекст резолвера превращает «Unrecognized key» в
+   * типизированный `component_prop_unknown` с адресом самого prop'а и фактически применённой
+   * схемой. Без контекста (клиентская валидация редактора) форма issue доволновая.
+   */
+  it("types an unrecognized prop as component_prop_unknown when the resolver context is supplied", () => {
+    const schemaContext = {
+      componentId: "test-component",
+      resolvedVersion: 2,
+      sourceHash: "a".repeat(64),
+      propsSchemaHash: "b".repeat(64),
+      catalogRevision: "catalog-1",
+      acceptedKeys: ["label"],
+    };
+    expect(validateElementProps({ definition, props: { label: "Valid", mode: "current-main" }, state: {}, path: ["props"], schemaContext }).errors).toEqual([
+      { path: "/props/mode", message: expect.stringContaining("mode"), code: "component_prop_unknown", ...schemaContext },
+    ]);
+    // Без контекста — прежняя форма: путь до объекта props, без кода.
+    expect(validate({ label: "Valid", mode: "current-main" }).errors).toEqual([
+      { path: "/props", message: expect.stringContaining("mode") },
+    ]);
+  });
+
   it("reports schema violations", () => {
     expect(validate({ label: "x" }).errors).toEqual([
       { path: "/props/label", message: "Too small: expected string to have >=2 characters" },

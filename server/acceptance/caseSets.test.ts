@@ -9,6 +9,7 @@ import {
 } from "../../src/acceptance/caseSetSchema";
 import {
   buildCasesFromManifest, CaseSetRepo, caseDedupKeyOf, casePolicyHashOf, caseSetIdOf, casesOfRun, coverageOf,
+  themeContentHashOf,
   dedupSlotsKeyOf, manifestOfRow, publishedPinByNameAndVersion, slotsHashOf, surfaceOfManifest,
   validateManifest,
 } from "./caseSets";
@@ -1097,6 +1098,43 @@ test("§W6: вложенный слот судится по definition запи�
   db.close();
 });
 
+test("BR-08: ownership/subjectComponentId/dependencyPolicy доезжают до случая, чужое поле — отказ", () => {
+  const db = dbWithAsset();
+  const parsed = validateManifest(db, "yp-badge", manifest({
+    cases: [
+      {
+        id: "owned", props: { tone: "neutral" },
+        comparison: {
+          ownership: "subject-and-integration", subjectComponentId: "yp-badge",
+          dependencyPolicy: "require-eligible-acceptance",
+        },
+      },
+      { id: "plain", props: { tone: "accent" } },
+    ],
+  } as unknown as Partial<CaseSetManifest>)).manifest;
+  const [owned, plain] = buildCasesFromManifest(parsed);
+  expect(owned).toMatchObject({
+    comparison: {
+      ownership: "subject-and-integration", subjectComponentId: "yp-badge",
+      dependencyPolicy: "require-eligible-acceptance",
+    },
+  });
+  // Инвариант отсутствия: случай без объявления не получает ни ключа (контентный адрес набора).
+  expect(Object.keys(plain!)).not.toContain("comparison");
+
+  // Строгая схема: свободные значения литералов и опечатки в ключах — 422, а не молчаливый дефолт.
+  for (const bad of [
+    { comparison: { ownership: "subject-only" } },
+    { comparison: { dependencyPolicy: "any" } },
+    { comparison: { subjectComponent: "yp-badge" } },
+  ]) {
+    fails(() => validateManifest(db, "yp-badge", manifest({
+      cases: [{ id: "default", props: { tone: "neutral" }, ...bad }],
+    } as unknown as Partial<CaseSetManifest>)), 422, "validation_failed");
+  }
+  db.close();
+});
+
 test("§W4: comparison.matte и textAaBudget доезжают до случая, а их отсутствие остаётся отсутствием", () => {
   const db = dbWithAsset();
   const parsed = validateManifest(db, "yp-badge", manifest({
@@ -1149,12 +1187,32 @@ test("W1a: доволновой манифест байт-в-байт — адр
     candidateId: `cand_${"0".repeat(64)}`, surface: surfaceOfManifest(legacy.manifest),
     policy: ACCEPTANCE_POLICIES["default-v1"], case: built,
   });
-  expect(fingerprints.comparison).toBe(comparisonFingerprintOf({
+  // BR-04 (план 2026-08-08 §4): при активной capture-группе слой сравнения несёт
+  // `comparisonPolicyVersion` — семантика сравнения изменилась, не тронув ни одного поля манифеста,
+  // и сохранённые под старой метрики обязаны перестать переиспользоваться. Инвариант W1a от этого
+  // не страдает: **адрес набора** и кадровый слой остаются доволновыми (проверки выше и ниже), а
+  // включение группы стоит ровно re-diff'а. Второй вызов доказывает и обратное: с выключенной
+  // группой пре-образ сравнения снова доволновой байт-в-байт.
+  const comparisonInput = {
     referenceAssetId: null,
     expectedGeometry: { width: 480, height: 88 },
     maxDimensionDeltaPx: ACCEPTANCE_POLICIES["default-v1"].visual.maxDimensionDeltaPx,
     paintMarginPx: 64, deviceScaleFactor: 2,
-  }));
+  };
+  expect(fingerprints.comparison).toBe(comparisonFingerprintOf({ ...comparisonInput, comparisonPolicyVersion: 2 }));
+  const previous = process.env.EASYUI_CAPTURE_V4_DISABLED;
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const legacyFingerprints = caseFingerprintsOf({
+      candidateId: `cand_${"0".repeat(64)}`, surface: surfaceOfManifest(legacy.manifest),
+      policy: ACCEPTANCE_POLICIES["default-v1"], case: built,
+    });
+    expect(legacyFingerprints.comparison).toBe(comparisonFingerprintOf(comparisonInput));
+    expect(legacyFingerprints.frame).toBe(fingerprints.frame);
+  } finally {
+    if (previous === undefined) delete process.env.EASYUI_CAPTURE_V4_DISABLED;
+    else process.env.EASYUI_CAPTURE_V4_DISABLED = previous;
+  }
   expect("expectedSurfaces" in fingerprints.verdictPolicySnapshot).toBe(false);
   db.close();
 });
@@ -1403,4 +1461,119 @@ test("§W3: каталог неизменен — overlay не создаёт н
   casesOfRun({ db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null, manifest: parsed, mode: "gating" });
   expect(snapshot()).toBe(before);
   db.close();
+});
+
+// ------------------------------------- BR-02/BR-03: поле краски по сторонам и hint предзагрузки
+
+const paddingCase = (extra: Record<string, unknown>, capture?: Record<string, unknown>): Record<string, unknown> =>
+  manifest({
+    ...(capture === undefined ? {} : { capture }),
+    cases: [{ id: "default", props: { tone: "neutral" }, ...extra }],
+  } as unknown as Partial<CaseSetManifest>);
+
+test("BR-02: paintPaddingPx и preloadAssets протягиваются как объявлены и двигают адрес набора", () => {
+  const db = dbWithAsset();
+  const padding = { top: 64, right: 128, bottom: 64, left: 0 };
+  const declared = validateManifest(db, "yp-badge", paddingCase({ paintPaddingPx: padding, preloadAssets: [ASSET] }));
+  // Контентный адрес: новое поле — новый набор, старые наборы не перевыпускаются (`.optional()`
+  // без `.default()`).
+  expect(declared.caseSetId).not.toBe(validateManifest(db, "yp-badge", paddingCase({})).caseSetId);
+  const built = buildCasesFromManifest(declared.manifest)[0]!;
+  expect(built.paintPaddingPx).toEqual(padding);
+  expect(built.preloadAssets).toEqual([ASSET]);
+  // Случай без декларации не получает ни дефолта, ни ключа: инвариант отсутствия.
+  expect(buildCasesFromManifest(validateManifest(db, "yp-badge", paddingCase({})).manifest)[0]!.paintPaddingPx).toBeUndefined();
+  db.close();
+});
+
+test("BR-02: неполный объект сторон и значение за потолком — отказ схемы", () => {
+  const db = dbWithAsset();
+  // Все четыре стороны обязательны: «забытая сторона = 0» — это опечатка с пиксельными
+  // последствиями, а не декларация.
+  fails(() => validateManifest(db, "yp-badge", paddingCase({ paintPaddingPx: { top: 64, right: 64, bottom: 64 } })),
+    422, "validation_failed");
+  fails(() => validateManifest(db, "yp-badge", paddingCase({ paintPaddingPx: { top: 64, right: 257, bottom: 64, left: 64 } })),
+    422, "validation_failed");
+  fails(() => validateManifest(db, "yp-badge", paddingCase({ paintPaddingPx: { top: 64, right: 64.5, bottom: 64, left: 64 } })),
+    422, "validation_failed");
+  db.close();
+});
+
+test("BR-02: бюджет площади кадра — 422 capture_budget_exceeded, а не падение рендерера", () => {
+  const db = dbWithAsset();
+  // (1000 + 2×256)² × 3² = 20.6 Мпикс при бюджете 20: поле по кругу стоит ×9 после dsf, и до
+  // волны эта арифметика не проверялась нигде — кадр падал уже внутри рендерера.
+  fails(() => validateManifest(db, "yp-badge", paddingCase(
+    { paintPaddingPx: { top: 256, right: 256, bottom: 256, left: 256 } },
+    { viewport: { width: 1000, height: 1000 }, deviceScaleFactor: 3, theme: "light" },
+  )), 422, "capture_budget_exceeded");
+  // Тот же вьюпорт и то же поле при dsf 1 — 2.3 Мпикс, в бюджете.
+  expect(validateManifest(db, "yp-badge", paddingCase(
+    { paintPaddingPx: { top: 256, right: 256, bottom: 256, left: 256 } },
+    { viewport: { width: 1000, height: 1000 }, deviceScaleFactor: 1, theme: "light" },
+  )).caseSetId).toMatch(/^cset_[0-9a-f]{64}$/);
+  db.close();
+});
+
+test("BR-02 kill-switch: манифест с paintPaddingPx отвергается 422 capture_padding_disabled", () => {
+  const db = dbWithAsset();
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    fails(() => validateManifest(db, "yp-badge", paddingCase({ paintPaddingPx: { top: 64, right: 64, bottom: 64, left: 64 } })),
+      422, "capture_padding_disabled");
+    // Принять и молча проигнорировать поле нельзя: набор контентно адресован, и кадр под тем же
+    // `cset_` оказался бы снят не тем полем, которое объявлено.
+    expect(validateManifest(db, "yp-badge", paddingCase({})).caseSetId).toMatch(/^cset_/);
+  } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
+  db.close();
+});
+
+// ------------------------------------ BR-05: владение геометрией (план 2026-08-08 §5)
+
+const OWNERSHIP_DECL = {
+  "pay-tooltip//i.tail": { role: "decoration" as const, participatesIn: ["paint"] as ["paint"] },
+};
+
+test("BR-05: geometryOwnership протягивается в случай как объявлен, форма ключа проверяется схемой", () => {
+  const db = dbWithAsset();
+  const { manifest } = validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: OWNERSHIP_DECL }));
+  expect(buildCasesFromManifest(manifest)[0]!.geometryOwnership).toEqual(OWNERSHIP_DECL);
+  // Отсутствие поля обязано остаться отсутствием: доволновой случай не получает ни ключа, ни дефолта.
+  expect("geometryOwnership" in buildCasesFromManifest(validateManifest(db, "yp-badge", paddingCase({})).manifest)[0]!).toBe(false);
+  // Свободный набор поверхностей невыразим: единственная законная декларация — «только краска».
+  fails(() => validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: { "a": { role: "decoration", participatesIn: ["layoutUnion"] } } })),
+    422, "validation_failed");
+  fails(() => validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: {} })), 422, "validation_failed");
+  db.close();
+});
+
+test("BR-05 kill-switch: манифест с geometryOwnership отвергается 422 geometry_ownership_disabled", () => {
+  const db = dbWithAsset();
+  process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = "1";
+  try {
+    fails(() => validateManifest(db, "yp-badge", paddingCase({ geometryOwnership: OWNERSHIP_DECL })),
+      422, "geometry_ownership_disabled");
+    expect(validateManifest(db, "yp-badge", paddingCase({})).caseSetId).toMatch(/^cset_/);
+  } finally { delete process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED; }
+  db.close();
+});
+
+// ------------------------------------------- BR-03: хэш содержимого темы (план 2026-08-08 §3, M6)
+
+test("BR-03: themeContentHash прикладывается к каждому случаю и следует за содержимым темы", () => {
+  const db = dbWithOverlayFamily();
+  const { manifest: parsed } = validateManifest(db, "yp-badge", overlayManifest());
+  const cases = casesOfRun({
+    db, componentId: "yp-badge", designSystem: "yandex-pay", candidateEntry: null,
+    manifest: parsed, mode: "gating",
+  });
+  const hash = themeContentHashOf(db, "yandex-pay");
+  expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  // Общий вход субъекта: он одинаков у всех случаев набора — как и overlay.
+  for (const item of cases) expect(item.themeContentHash).toBe(hash);
+  // Чистая функция от содержимого: повторный расчёт даёт то же значение, чужая ДС — другое.
+  expect(themeContentHashOf(db, "yandex-pay")).toBe(hash);
+  expect(themeContentHashOf(db, "other-ds")).not.toBe(hash);
+  // ДС не объявлена — считать нечего, и поле не появляется (доволновые отпечатки сохраняются).
+  expect(themeContentHashOf(db, null)).toBeUndefined();
 });

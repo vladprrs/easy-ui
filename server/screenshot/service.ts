@@ -1,12 +1,12 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CaptureSlotTreeEntry, CaptureSurfaceBootstrap } from "../../src/capture/protocol";
+import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CapturePaintField, CaptureResourceExpectations, CaptureSlotTreeEntry, CaptureSurfaceBootstrap } from "../../src/capture/protocol";
 import {
   codesFromReadinessReason, isCaptureFailureCode, sanitizeCaptureCodes,
   type CaptureCode, type CaptureFailureCode,
 } from "../../src/capture/failureCodes";
-import { DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
-import type { GeometryCollection, GeometryRect, GeometryRole } from "../../src/capture/geometry.mjs";
+import { barrierPolicyIsV4, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import type { GeometryCollection, GeometryOverflowOwner, GeometryRect, GeometryRole, OverflowOwnershipDeclaration } from "../../src/capture/geometry.mjs";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import type { SpaceToken } from "../../src/designSystems/types";
 import { analyzeScreenRegions } from "../../src/prototype/runtimeSpec";
@@ -19,11 +19,14 @@ import { runtimeDefaultsDisabled } from "../components/runtimeDefaults";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { componentManifestHashOf, docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
+import { resolvedSchemaFields } from "../components/resolvedGraph";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
 import {
   impactedSnapEnabled, recordScreenFrame, screenFrameOf,
   type ScreenFrameInputs,
 } from "../prototypes/screenFrames";
+import { CAPTURE_FRAME_BUDGET_MPX } from "../capture/captureV4";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { resolveCaptureMode } from "../capture/modes";
 import { buildCaptureReceipt, type CaptureReceipt, type CaptureReceiptOutput, type CaptureReceiptTarget } from "../../src/capture/receipt";
 import { getJobReceipt, putAssetReceipt, putJobReceipt, putReceipt, readReceipt, receiptsDisabled } from "../capture/receiptStore";
@@ -121,7 +124,18 @@ export interface CaptureQuality {
  * acceptance-ретраев своя таксономия. `queue_full` не бывает исходом поставленной джобы —
  * его возвращает enqueue (см. {@link jobOutcomeOfError}).
  */
-export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error" | "renderer_mismatch" | "surface_missing";
+export type JobOutcome =
+  | "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error" | "renderer_mismatch" | "surface_missing"
+  // BR-06 (план 2026-08-08 §6): шов `allocate-renderer` — аллокация браузера отделена от съёмки.
+  | "renderer_unavailable" | "allocate_timeout";
+
+/**
+ * Исходы **класса аллокации** (BR-06): рендерер не достался джобе вовсе — кадра нет и быть не
+ * могло. Это ровно те исходы, по которым считается circuit breaker рана приёмки: три подряд
+ * означают, что дальше платить N×3×60 s не за что.
+ */
+export const ALLOCATE_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_unavailable", "allocate_timeout", "queue_full"] as const;
+export const isAllocateJobOutcome = (outcome: JobOutcome): boolean => ALLOCATE_JOB_OUTCOMES.includes(outcome);
 
 /**
  * Исходы, которые ретраить бессмысленно (§5 R3, минор приёмки R1). `renderer_mismatch` —
@@ -133,7 +147,14 @@ export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "sub
  * `subprocess_error` и жгло `maxInfraRetries` приёмки, хотя повтор даёт ровно ту же пустую
  * страницу — терминальность по канону `renderer_mismatch`.
  */
-export const TERMINAL_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_mismatch", "surface_missing"] as const;
+/**
+ * `renderer_unavailable` (BR-06) — терминальный по тому же аргументу: бинаря chromium в образе
+ * нет либо `chromium.launch` бросил, и повтор в том же процессе даст ровно тот же отказ. До волны
+ * это ехало как `subprocess_error` (а 501 `screenshot_unavailable` — вообще мимо таксономии) и
+ * жгло `maxInfraRetries` каждого случая матрицы. `allocate_timeout` терминальным **не** является:
+ * аллокация могла не успеть под нагрузкой, и следующая попытка законно может успеть.
+ */
+export const TERMINAL_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_mismatch", "surface_missing", "renderer_unavailable"] as const;
 export const isTerminalJobOutcome = (outcome: JobOutcome): boolean => TERMINAL_JOB_OUTCOMES.includes(outcome);
 
 /**
@@ -201,8 +222,50 @@ export const MAX_PAINT_MARGIN_PX = 256;
  */
 export const VIEWPORT_SURFACE_PAINT_MARGIN_PX = 16;
 
+/** Поле краски по сторонам, CSS px (BR-02, план 2026-08-08 §2). */
+export interface PaintPadding { top: number; right: number; bottom: number; left: number }
+
+/**
+ * Клэмп поля по сторонам — те же правила, что у скаляра (`Math.round` + `[0, MAX_PAINT_MARGIN_PX]`),
+ * применённые **к каждой стороне отдельно**. Общий потолок на сумму не вводится: площадь судит
+ * бюджет кадра (`assertFrameBudget`), а не потолок стороны.
+ */
+export function clampPaintPadding(padding: PaintPadding): PaintPadding {
+  const side = (value: number): number => Math.min(Math.max(Math.round(value), 0), MAX_PAINT_MARGIN_PX);
+  return { top: side(padding.top), right: side(padding.right), bottom: side(padding.bottom), left: side(padding.left) };
+}
+
+/**
+ * Бюджет площади кадра с полем (BR-02): `(w + left + right) × (h + top + bottom) × dsf² ≤ 20 Мпикс`.
+ *
+ * `validateViewport` считает только сам вьюпорт, поэтому 256 px по кругу при dsf 3 проезжали мимо
+ * всякой проверки и падали уже внутри рендерера — без типизированного отказа и без кадра. Верхняя
+ * оценка габаритов компонента — вьюпорт: настоящих габаритов до съёмки не знает никто, а вьюпорт
+ * ограничивает их по построению.
+ */
+export function assertFrameBudget(viewport: Viewport, dsf: number, padding: PaintPadding): void {
+  const pixels = (viewport.width + padding.left + padding.right)
+    * (viewport.height + padding.top + padding.bottom) * dsf * dsf;
+  if (pixels > CAPTURE_FRAME_BUDGET_MPX * 1_000_000) {
+    throw new ApiError(422, "capture_budget_exceeded",
+      `paint field ${padding.top}/${padding.right}/${padding.bottom}/${padding.left} CSS px around a`
+      + ` ${viewport.width}×${viewport.height} viewport at deviceScaleFactor ${dsf} puts the frame at`
+      + ` ${(pixels / 1_000_000).toFixed(1)} megapixels, above the ${CAPTURE_FRAME_BUDGET_MPX} megapixel budget`);
+  }
+}
+
 /** Классификация провала джобы по сообщению воркер-раннера/исключения execute. */
 export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | "queue_full"> {
+  // BR-06: два исхода шва аллокации проверяются **до** общего `timeout`/`worker_crash` — иначе
+  // «браузер не достался» неотличимо от «съёмка не уложилась», а это разные фазы с разной ценой
+  // и разной терминальностью. Маркеры дословные: их пишет `worker-runner.ts` и никто больше.
+  if (/renderer allocation timed out|allocate_timeout/i.test(message)) return "allocate_timeout";
+  // Только маркеры **отсутствующего браузера**: сюда намеренно не входит `worker spawn failed`
+  // (упал спавн node-процесса — это инфраструктурный шум, повтор может пройти), иначе
+  // ретраибельный отказ стал бы терминальным.
+  if (/renderer unavailable|renderer_unavailable|Executable doesn't exist|browserType\.launch|chromium.*(not installed|missing)/i.test(message)) {
+    return "renderer_unavailable";
+  }
   if (/timed out|timeout|deadline/i.test(message)) return "timeout";
   // `worker produced no result` — процесс умер, не написав результат (OOM/SIGKILL/креш chromium).
   if (/produced no result|target closed|browser has been closed|crash|SIGSEGV|SIGKILL|out of memory/i.test(message)) return "worker_crash";
@@ -212,8 +275,26 @@ export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | 
 /** Исход для ошибки постановки/чтения джобы: 429 `queue_full` — единственный enqueue-исход. */
 export function jobOutcomeOfError(error: unknown): Exclude<JobOutcome, "ok"> {
   if (error instanceof ApiError && error.code === "queue_full") return "queue_full";
+  // BR-06: `501 screenshot_unavailable` — это отсутствующий рендерер, а не «сервер приболел».
+  // До волны он не попадал в таксономию вовсе (`classifyJobFailure` по тексту давал
+  // `subprocess_error`), проходил мимо `isProductRefusal` (статус ≥ 500) и ретраился
+  // `maxInfraRetries` раз на каждом случае матрицы. Теперь это терминальный исход аллокации.
+  if (error instanceof ApiError && error.code === "screenshot_unavailable") return "renderer_unavailable";
   return classifyJobFailure(error instanceof Error ? error.message : String(error));
 }
+
+/**
+ * Пин кадра в ответе джобы + поля единого резолвера (BR-01b, план 2026-08-08 §1).
+ *
+ * `resolvedVersion` дублирует `version` намеренно: это контракт фидбэка §4, по которому мигратор
+ * сверяет save-ответ, `render-status` и снап **одинаковыми именами полей**. Поля опциональны —
+ * их нет при поднятом `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` и у подменённого кандидата
+ * (у неопубликованного исходника строки публикации нет).
+ */
+export type ResolvedCapturePin = {
+  id: string; version: number; bundleHash: string;
+  resolvedVersion?: number; sourceHash?: string | null; propsSchemaHash?: string | null;
+};
 
 /**
  * Статус джобы наружу. `error` — доволновая форма (её код остаётся из старого словаря ручек:
@@ -236,7 +317,11 @@ export interface ScreenshotImageResult extends CaptureQuality {
   bundleHash?: string;
   /** Draft head-revision target (P1b): the rendered rev, so clients can report "draft rev N". */
   draftRev?: number;
-  componentPins?: { id: string; version: number; bundleHash: string }[];
+  /**
+   * BR-01b: пины кадра + поля резолвера (`resolvedVersion`/`sourceHash`/`propsSchemaHash`).
+   * Условны — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` запись пина доволновая byte-for-byte.
+   */
+  componentPins?: ResolvedCapturePin[];
   rendererBuild: string | null; browserVersion: string;
   /** Объявленный рендерер джобы (R1): отпечаток и его входы. */
   renderer?: RendererOnJob;
@@ -261,7 +346,11 @@ export interface ScreenshotImageBytesResult extends CaptureQuality, CaptureReadi
   consoleErrors: string[]; pageErrors: string[];
   bundleHash?: string;
   draftRev?: number;
-  componentPins?: { id: string; version: number; bundleHash: string }[];
+  /**
+   * BR-01b: пины кадра + поля резолвера (`resolvedVersion`/`sourceHash`/`propsSchemaHash`).
+   * Условны — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` запись пина доволновая byte-for-byte.
+   */
+  componentPins?: ResolvedCapturePin[];
   rendererBuild: string | null; browserVersion: string;
   renderer?: RendererOnJob;
   /** Адрес capture-receipt'а этого кадра (R5). */
@@ -286,6 +375,12 @@ export interface ScreenshotPaintResult extends CaptureQuality, GeometryMeasureme
   dpr: number;
   /** Поле вокруг компонента, CSS px: краска, упёршаяся в его край, делает вердикт `indeterminate`. */
   paintMargin: number;
+  /**
+   * BR-02: **эффективное** поле по сторонам, CSS px. Присутствует ровно у кадра, чей случай его
+   * объявил; иначе поле скалярное и равно `paintMargin` со всех сторон. Гейт геометрии протягивает
+   * этот факт в `GeometryFacts.paintPadding` — канва сравнения от него **не** зависит (блокер B3).
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number };
   bytes: Uint8Array;
   /** Размер PNG в **device** px (`bounds` ink-воркера нормализуются делением на `dpr`). */
   width: number;
@@ -311,6 +406,8 @@ interface GeometryMeasurement {
   scroll: GeometryCollection["scroll"];
   viewportOwnership: GeometryCollection["viewportOwnership"];
   issues: GeometryCollection["issues"];
+  /** BR-09: владельцы перелива замера; отсутствует у документа без деклараций. */
+  overflowOwners?: GeometryOverflowOwner[];
   /** Детальные измерения W3 (`layoutBounds`/`effectSources`/`clipChain`) — только у `probe:"paint"`. */
   details?: GeometryCollection["details"];
   detailKeys?: string[];
@@ -322,7 +419,7 @@ export interface ScreenshotPrototypeGeometryResult extends CaptureQuality, Geome
   surface: "prototype";
   resolvedRev: number;
   prototypeInstanceId: string;
-  componentPins: { id: string; version: number; bundleHash: string }[];
+  componentPins: ResolvedCapturePin[];
   designSystemMetaVersion: number | null;
   resolvedSpaceScale: Record<SpaceToken, string>;
   viewport: Viewport;
@@ -351,11 +448,20 @@ export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult 
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; runtimeDefaultsDisabled?: true; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: CapturePaintField; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; resources?: CaptureResourceExpectations; runtimeDefaultsDisabled?: true; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
   geometryDetailKeys?: string[];
+  /**
+   * BR-05 (план 2026-08-08 §5): авто-правило decoration включено. Отсутствие поля — доволновой
+   * сбор байт-в-байт (`EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` его и не кладёт).
+   */
+  geometryDecorationOwnership?: true;
+  /** BR-05: декларации случая `cases[].geometryOwnership`; сильнее авто-правила. */
+  geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
+  /** BR-09: `elementKey → overflowOwnership` снимаемого экрана (из документа). */
+  overflowOwnership?: Record<string, OverflowOwnershipDeclaration>;
   /**
    * Детерминизм-args запуска chromium (R2a): их выбирает **сервер** тем же списком, которым
    * считает `launchDeterminismArgsHash` объявленного рендерера. Воркер `EASYUI_RENDERER_FLAGS`
@@ -389,7 +495,11 @@ interface InternalJob {
   id: string; status: JobStatus["status"]; kind: "prototype" | "component";
   expected: CaptureExpected; allowedUrls: string[]; props?: Record<string, unknown>;
   captureUrl: string; viewport: Viewport; dsf: number; theme: "light" | "dark"; waitForFonts: boolean;
-  componentPins?: { id: string; version: number; bundleHash: string }[];
+  /**
+   * BR-01b: пины кадра + поля резолвера (`resolvedVersion`/`sourceHash`/`propsSchemaHash`).
+   * Условны — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` запись пина доволновая byte-for-byte.
+   */
+  componentPins?: ResolvedCapturePin[];
   /**
    * Полные пины, замороженные на enqueue, и их manifest-hash (план 2026-08-02, P2.3).
    * Едут в `bootstrap.target`, и поверхность рендерит именно их: для track:head-дока
@@ -416,6 +526,8 @@ interface InternalJob {
   slotChildren?: CapturePin[];
   slotTree?: CaptureSlotTreeEntry[];
   probe?: CaptureProbe; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  /** BR-09: декларации владения переливом снимаемого экрана (`overflowOwnersOf`). */
+  overflowOwnership?: Record<string, OverflowOwnershipDeclaration>;
   /**
    * W5: поверхность съёмки. Присутствует только у viewport-джобы (`"hug"` — отсутствие поля):
    * поверхность строит внутри себя узел размера вьюпорта и монтирует на нём stage host.
@@ -423,7 +535,17 @@ interface InternalJob {
   captureSurface?: "viewport";
   /** W3: поле paint-режима, CSS px. Присутствует ровно тогда, когда `probe === "paint"`. */
   paintMargin?: number;
+  /**
+   * BR-02 (план 2026-08-08 §2): **поле по сторонам**, CSS px. Присутствует только у джобы, чей
+   * случай его объявил; тогда `paintMargin` несёт `max` сторон (диагностика и receipt читают обе
+   * величины). Отсутствие поля оставляет джобу скалярной байт-в-байт — включая bootstrap.
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number };
+  /** Запрошенное поле по сторонам **до** клэмпа к `MAX_PAINT_MARGIN_PX` (receipt: requested/effective). */
+  paintPaddingRequested?: { top: number; right: number; bottom: number; left: number };
   geometryDetailKeys?: string[];
+  /** BR-05: декларации владения геометрией случая (`cases[].geometryOwnership`). */
+  geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
   /** A4: куда уезжает PNG — в asset-store (по умолчанию) или байтами в результат джобы. */
   deliver?: "asset" | "bytes";
   /**
@@ -437,6 +559,12 @@ interface InternalJob {
    * считался `case_fingerprint`.
    */
   fonts?: CaptureFontManifest;
+  /**
+   * BR-03 (план 2026-08-08 §3): ожидания барьера ресурсов — число иконок реестра темы джобы и
+   * ассеты, объявленные исходником кандидата/overlay. Присутствует **только** у джобы с политикой
+   * v4: bootstrap доволновой джобы обязан остаться байт-в-байт прежним.
+   */
+  resources?: CaptureResourceExpectations;
   /**
    * Объявленный рендерер, замороженный на постановке (R1). Заморожен именно здесь, а не читается
    * в момент результата: отпечаток обязан относиться к тому же процессу и той же политике, по
@@ -472,6 +600,32 @@ interface InternalJob {
  * authored spec (the capture surface renders them inline, without the player's
  * `data-eui-region` slots), the panel is the screen root subtree.
  */
+/**
+ * Декларации владения переливом снимаемого экрана (BR-09, план 2026-08-08 §9):
+ * `elementKey → {axis, mode, viewportOwner?, expectedContentOverflow?}`.
+ *
+ * Канон — элементное поле `elements[].overflowOwnership`: в него компилируется и composition
+ * layout-токен (`compileLayoutElementFields`, prop'ом он быть не может — неизвестный ключ схемы
+ * компонента ронял бы раскрытие). Одноимённый prop читается **оборонительно**, чтобы рукописный
+ * документ с полем в props не молчал. Ключ элемента доезжает до DOM как `data-eui-key`
+ * (`docs/prototype-format.md`), поэтому сбор находит владельца по нему же — второго реестра нет.
+ *
+ * Пустая карта нормализуется в «деклараций нет»: замер обязан остаться доволновым байт-в-байт.
+ */
+export function overflowOwnersOf(doc: unknown, screenId: string): Record<string, OverflowOwnershipDeclaration> | undefined {
+  const screens = (doc as { screens?: { id: string; spec?: { elements?: Record<string, unknown> } }[] }).screens ?? [];
+  const screen = screens.find((item) => item.id === screenId);
+  if (!screen?.spec?.elements) return undefined;
+  const owners: Record<string, OverflowOwnershipDeclaration> = {};
+  for (const [key, element] of Object.entries(screen.spec.elements)) {
+    const item = element as { overflowOwnership?: unknown; props?: Record<string, unknown> };
+    const declared = item.overflowOwnership ?? item.props?.overflowOwnership;
+    if (declared === undefined || declared === null || typeof declared !== "object") continue;
+    owners[key] = declared as OverflowOwnershipDeclaration;
+  }
+  return Object.keys(owners).length === 0 ? undefined : owners;
+}
+
 export function geometryRoleKeysOf(doc: unknown, screenId: string): Partial<Record<GeometryRole, string>> {
   const screens = (doc as { screens?: { id: string; canvas?: { width: number; height: number }; spec: { root: string; elements: Record<string, unknown> } }[] }).screens ?? [];
   const screen = screens.find((item) => item.id === screenId);
@@ -608,6 +762,32 @@ export function fontManifestOf(content: ThemeContent | null): CaptureFontManifes
   return { declared, manifestHash: new Bun.CryptoHasher("sha256").update(canonicalStringify(declared)).digest("hex") };
 }
 
+/**
+ * **Ожидания барьера ресурсов** джобы (BR-03, план 2026-08-08 §3).
+ *
+ * Считаются ровно там же, где манифест шрифтов, и из того же чтения темы: `themeIcons` — число
+ * иконок реестра, которое поверхность обязана дождаться в фазе `registry` (0 ⇒ фаза завершается
+ * мгновенно, дедлока у ДС без иконок нет by construction), `expectedAssets` — id ассетов,
+ * объявленных исходником кандидата и его overlay-детей (те же, что питают allowlist).
+ *
+ * `undefined` для любой джобы **не** под политикой v4: её bootstrap обязан остаться байт-в-байт
+ * доволновым, поэтому ключа в нём не появляется вовсе, а не появляется с нулями.
+ */
+function resourceExpectationsOf(
+  policy: ReadinessPolicy | undefined,
+  theme: ThemeContent | null,
+  assetIds: readonly string[] = [],
+): CaptureResourceExpectations | undefined {
+  if (policy === undefined || !barrierPolicyIsV4(policy.resourceBarrier)) return undefined;
+  // Порядок ассетов детерминирован: bootstrap уезжает в страницу и в диагностику, и «тот же кадр
+  // с переставленным списком» не должен выглядеть другой джобой.
+  const expectedAssets = [...new Set(assetIds)].sort();
+  return {
+    themeIcons: theme?.icons?.length ?? 0,
+    ...(expectedAssets.length === 0 ? {} : { expectedAssets }),
+  };
+}
+
 export interface ScreenshotServiceDeps {
   db: Database; dataDir: string; serveDist?: string;
   captureOrigin: string; chromiumAvailable: boolean; runJob: RunJob;
@@ -738,6 +918,9 @@ export class ScreenshotService {
       : undefined;
     const fonts = fontManifestOf(themeContent ?? null);
     const geometryRoleKeys = opts.probe === "geometry" ? geometryRoleKeysOf(full.doc, screenId) : undefined;
+    // BR-09: владение переливом читается из документа снимаемого экрана и едет с **любой**
+    // probe-джобой: перелив rail'а одинаково искажает и `probe:"geometry"`, и paint-замер.
+    const overflowOwnership = geometryOwnershipEnabled() ? overflowOwnersOf(full.doc, screenId) : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
     // Пины джобы: подменённые — на content-addressed бандл кандидата (§B2.2).
     const capturePins: CapturePin[] = full.components.map((p) => {
@@ -759,7 +942,13 @@ export class ScreenshotService {
       ? undefined
       : capturePins.filter((pin) => pin.candidate !== undefined)
         .map((pin) => ({ componentId: pin.id, candidateId: pin.candidate!.candidateId, bundleHash: pin.bundleHash, sourceHash: pin.candidate!.sourceHash }));
-    const componentPins = capturePins.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
+    // BR-01b: запись пина снапа несёт ту же тройку резолва, что save-ответ и render-status —
+    // мигратор сверяет `resolvedVersion`/`sourceHash`/`propsSchemaHash` между тремя ручками.
+    // Подменённый кандидат опубликованной строки не имеет: его поля остаются пустыми.
+    const componentPins: ResolvedCapturePin[] = capturePins.map((p) => ({
+      id: p.id, version: p.version, bundleHash: p.bundleHash,
+      ...(p.candidate === undefined ? resolvedSchemaFields(this.deps.db, p.id, p.version) : {}),
+    }));
     // §W5: отпечаток кадра экрана — из тех же фактов, что уже резолвила постановка (пины ревизии,
     // тела композиций, пины темы, политика готовности). Второе чтение ревизии здесь было бы не
     // экономией, а риском: план и запись обязаны считать одну и ту же величину.
@@ -800,8 +989,15 @@ export class ScreenshotService {
       // W2 (§1.5, триаж O-M4): опт-ин `readiness:"barrier"` прототипного запроса. Поле условное —
       // джоба без опт-ина обязана остаться байт-в-байт прежней (bootstrap без ключа `readiness`).
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
+      // BR-03: ожидания барьера у опт-ина `readiness:"barrier"` — реестр иконок темы снимаемого
+      // экрана. Ассетов кандидата у прототипной джобы нет: её ожидаемый манифест — сам документ.
+      ...(resourceExpectationsOf(opts.readinessPolicy, themeContent ?? null) === undefined
+        ? {}
+        : { resources: resourceExpectationsOf(opts.readinessPolicy, themeContent ?? null)! }),
       ...(screenFrame === undefined ? {} : { screenFrame: { prototypeId: id, rev: snap.rev, screenId, fingerprint: screenFrame.fingerprint, inputs: screenFrame.inputs } }),
-      ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
+      ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}),
+      // Условный ключ: документ без деклараций ставит джобу байт-в-байт прежней.
+      ...(overflowOwnership === undefined ? {} : { overflowOwnership }) });
     return {jobId,expected,components:capturePins};
   }
 
@@ -869,6 +1065,8 @@ export class ScreenshotService {
       theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
       /** Поле paint-режима, CSS px; игнорируется в прочих режимах (W3). */
       paintMargin?: number;
+      /** BR-02: поле paint-режима **по сторонам**, CSS px; сильнее скалярного `paintMargin`. */
+      paintPadding?: { top: number; right: number; bottom: number; left: number };
       /** Поверхность съёмки (W5): `"viewport"` даёт сцену размера вьюпорта со stage host'ом. */
       surface?: "viewport";
       geometryDetailKeys?: string[];
@@ -878,6 +1076,10 @@ export class ScreenshotService {
       slotBindings?: CaptureSlotBinding[];
       /** sha256 разрешённого слот-кортежа (§A3) — часть handshake'а кандидатного кадра. */
       slotsHash?: string;
+      /** BR-03: hint предзагрузки случая (`cases[].preloadAssets`, report-only) — до барьера. */
+      preloadAssets?: string[];
+      /** BR-05: декларации владения геометрией случая (`cases[].geometryOwnership`). */
+      geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
     },
   ): Promise<FrozenEnqueue> {
     this.requireAvailable();
@@ -915,11 +1117,21 @@ export class ScreenshotService {
     opts: {
       props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean;
       probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; surface?: "viewport"; geometryDetailKeys?: string[];
+      /** BR-05: декларации владения геометрией случая — вход интерпретации замера. */
+      geometryOwnership?: Record<string, { role: string; participatesIn: readonly string[] }>;
+      /** BR-02: поле paint-режима по сторонам (нормализуется здесь же, вместе со скалярным). */
+      paintPadding?: { top: number; right: number; bottom: number; left: number };
       readinessPolicy?: ReadinessPolicy;
       slotBindings?: CaptureSlotBinding[];
       slotsHash?: string;
       /** Ассеты исходников overlay-кандидатов (§W3), по `componentId` — вход allowlist'а. */
       overlayAssetIds?: Record<string, string[]>;
+      /**
+       * BR-03: hint предзагрузки случая (`cases[].preloadAssets`, слой `report-only`). Он не
+       * освобождает сервер от обнаружения (§3 плана) — только пополняет **ожидаемый** манифест,
+       * поэтому необнаружённые id остаются report-only записями и кадра не валят.
+       */
+      preloadAssets?: string[];
     },
   ): FrozenEnqueue {
     const repo = new ComponentRepo(this.deps.db);
@@ -940,6 +1152,11 @@ export class ScreenshotService {
     const expected: CaptureExpected = { kind: "component-draft", componentId: id, rev: draft.rev, sourceHash: draft.sourceHash, bundleHash: draft.entry.bundleHash!, propsHash, dsMetaVersion: themeContent.latestMetaVersion, rendererBuild: this.rendererBuild, ...(opts.slotsHash === undefined ? {} : { slotsHash: opts.slotsHash }) };
     const bundleUrl = `/api/components/${encodeURIComponent(id)}/draft/${draft.sourceHash}/bundle.js`;
     const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem, slots?.children, opts.overlayAssetIds);
+    const draftResources = resourceExpectationsOf(opts.readinessPolicy, themeContent, [
+      ...draft.assetIds,
+      ...Object.values(opts.overlayAssetIds ?? {}).flat(),
+      ...(opts.preloadAssets ?? []),
+    ]);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/draft?${query}`;
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
@@ -951,16 +1168,38 @@ export class ScreenshotService {
     const paintMargin = opts.probe === "paint"
       ? Math.min(Math.max(Math.round(opts.paintMargin ?? defaultPaintMargin), 0), MAX_PAINT_MARGIN_PX)
       : undefined;
+    // BR-02: поле по сторонам нормализуется **здесь же** и по тем же правилам, что скаляр — клэмп
+    // per side к `MAX_PAINT_MARGIN_PX`. Requested сохраняется отдельно: receipt обязан показывать
+    // и запрошенное, и эффективное, иначе «поле обрезали» неотличимо от «поля столько и просили».
+    const paintPaddingRequested = opts.probe === "paint" && opts.paintPadding !== undefined
+      ? { ...opts.paintPadding }
+      : undefined;
+    const paintPadding = paintPaddingRequested === undefined
+      ? undefined
+      : clampPaintPadding(paintPaddingRequested);
+    // Бюджет площади кадра (BR-02): `(w+left+right) × (h+top+bottom) × dsf² ≤ 20 Мпикс`.
+    // `validateViewport` считает только сам вьюпорт, поэтому поле проезжало мимо бюджета и роняло
+    // рендерер уже на кадре. Проверка стоит и на PUT манифеста (декларативно), и здесь — постановка
+    // джобы возможна и мимо case-set-пути.
+    if (paintPadding !== undefined) assertFrameBudget(viewport, dsf, paintPadding);
     const { jobId } = this.push({
       kind: "component", owner: { kind: "component", id }, expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
       draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },
       // Драфт и кандидат приёмки: компонент не пинует тему, поэтому манифест — от последней версии
       // темы его ДС, той же, что уже дала `dsMetaVersion` handshake'а.
       fonts: fontManifestOf(themeContent),
+      // BR-03: ожидаемый манифест кандидата — его собственные ассеты плюс ассеты overlay-детей
+      // (тот же список, что питает allowlist). Наблюдённые доказываются наравне с остальными,
+      // необнаружённые остаются report-only записями: кадр мог не рендерить эту ветку.
+      ...(draftResources === undefined ? {} : { resources: draftResources }),
       ...(slots === undefined ? {} : { slotChildren: slots.children, slotTree: slots.tree }),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
       ...(opts.surface === undefined ? {} : { captureSurface: opts.surface }),
       ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
+      // BR-02: поле по сторонам — условные ключи; джоба без него остаётся скалярной байт-в-байт.
+      ...(paintPadding === undefined ? {} : { paintPadding, paintPaddingRequested }),
+      // BR-05: декларация владения — условный ключ; джоба без неё остаётся прежней байт-в-байт.
+      ...(opts.geometryOwnership === undefined ? {} : { geometryOwnership: opts.geometryOwnership }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
     });
@@ -1232,9 +1471,22 @@ export class ScreenshotService {
         determinismArgs: buildDeterminismArgs(),
         ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT, ...(job.geometryRoleKeys ? { geometryRoleKeys: job.geometryRoleKeys } : {}) } : {}),
         ...(job.probe === "paint" ? { geometryDetailKeys: job.geometryDetailKeys ?? [] } : {}),
+        // BR-05: семантика владения геометрией — решение **сервера** (kill-switch), а не страницы.
+        // Отсутствие ключей оставляет сбор доволновым байт-в-байт.
+        ...(geometryOwnershipEnabled() ? { geometryDecorationOwnership: true as const } : {}),
+        ...(job.geometryOwnership === undefined || !geometryOwnershipEnabled()
+          ? {}
+          : { geometryOwnership: job.geometryOwnership }),
+        // BR-09: тот же тумблер — под свитчем декларации до страницы не доезжают вовсе.
+        ...(job.overflowOwnership === undefined || !geometryOwnershipEnabled()
+          ? {}
+          : { overflowOwnership: job.overflowOwnership }),
       };
       // Поле paint-режима едет поверхности через bootstrap: она и решает, рисовать ли фон.
-      if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
+      // BR-02: per-side форма едет вместо скалярной — union протокола (`CapturePaintField`).
+      // Джоба без объявленного поля по сторонам присылает **ровно прежний** `{marginPx}`.
+      if (job.paintPadding !== undefined) workerJob.bootstrap.paint = { paddingPx: job.paintPadding };
+      else if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
       // W5 (§T5c.6): поверхность съёмки — bootstrap-поле, как и `paint.marginPx`, и **не** входит
       // ни в `expected`, ни в `readyToExpected`: рукопожатие уже снятых кадров обязано остаться
       // тем же пре-образом, иначе старые кадры перестали бы сходиться сами с собой.
@@ -1246,6 +1498,9 @@ export class ScreenshotService {
       // R4: манифест шрифтов темы — вход правила required-faces (T-M10). Пустой манифест уезжает
       // тоже: «тема есть, шрифтов в ней нет» и «манифест не приехал» — разные факты.
       if (job.fonts !== undefined) workerJob.bootstrap.fonts = job.fonts;
+      // BR-03: ожидания барьера — тем же каналом и с тем же инвариантом отсутствия, что манифест
+      // шрифтов. Без них фаза `registry` не умеет отличить «реестр ещё едет» от «темы нет».
+      if (job.resources !== undefined) workerJob.bootstrap.resources = job.resources;
       // W9 (§1.6): аварийный kill-switch runtime-дефолтов доезжает до страницы полем bootstrap'а —
       // другого канала у серверного env к браузеру нет. Поле кладётся **только** при поднятом
       // флаге: штатный bootstrap обязан остаться байт-в-байт прежним (в отпечатки оно не входит,
@@ -1310,6 +1565,9 @@ export class ScreenshotService {
           viewport: job.viewport,
           dpr: job.dsf,
           paintMargin: job.paintMargin ?? DEFAULT_PAINT_MARGIN_PX,
+          // BR-02: поле по сторонам — условный ключ. Кадр без него несёт доволновой результат
+          // байт-в-байт, а гейт геометрии по наличию ключа и отличает «поле объявлено» от «скаляр».
+          ...(job.paintPadding === undefined ? {} : { paintPadding: job.paintPadding }),
           bytes: new Uint8Array(bytes),
           width: result.width, height: result.height,
           imageProduced: true,
@@ -1505,6 +1763,10 @@ export class ScreenshotService {
           pngSha256: result.pngSha256 ?? null,
           surfaceRect: result.surfaceRect ?? null,
           ...(job.paintMargin === undefined ? {} : { paintMargin: job.paintMargin }),
+          // BR-02: requested/effective поля по сторонам и стороны, на которых краска упёрлась в
+          // край кадра. Условные ключи — receipt доволновой джобы остаётся прежним байт-в-байт.
+          ...(job.paintPadding === undefined ? {} : { paintPadding: job.paintPadding }),
+          ...(job.paintPaddingRequested === undefined ? {} : { paintPaddingRequested: job.paintPaddingRequested }),
         }
         : null;
       const receipt = buildCaptureReceipt({

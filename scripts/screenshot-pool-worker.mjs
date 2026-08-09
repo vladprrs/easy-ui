@@ -208,7 +208,13 @@ async function captureWithContext(browser, job) {
     };
 
     if (job.probe === "geometry") {
-      const measurements = await page.evaluate(collectGeometry, { limit: job.geometryLimit, roleKeys: job.geometryRoleKeys ?? {} });
+      const measurements = await page.evaluate(collectGeometry, {
+        limit: job.geometryLimit, roleKeys: job.geometryRoleKeys ?? {},
+        // BR-05: авто-правило decoration включает **сервер** (kill-switch), страница его не знает.
+        decorationOwnership: job.geometryDecorationOwnership === true,
+        // BR-09: владение переливом экрана — из документа, через джобу.
+        overflowOwnership: job.overflowOwnership ?? null,
+      });
       const geometry = { ...measurements, ...analyzeGeometry(measurements) };
       timings.totalMs = elapsedSince(startedAt);
       return { ok: true, geometry, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), timings, ...readinessFields };
@@ -219,6 +225,10 @@ async function captureWithContext(browser, job) {
         limit: job.geometryLimit,
         roleKeys: job.geometryRoleKeys ?? {},
         detailKeys: job.geometryDetailKeys ?? [],
+        // BR-05: семантика владения геометрией — авто-правило и декларации случая.
+        decorationOwnership: job.geometryDecorationOwnership === true,
+        geometryOwnership: job.geometryOwnership ?? null,
+        overflowOwnership: job.overflowOwnership ?? null,
         // Эхо поверхности джобы (план 2026-08-06 §W5 T5c.6): на viewport-поверхности layout-корнем
         // становится контентная обёртка оверлея. Отсутствие поля — hug, то есть доволновой сбор.
         overlayAwareRoot: job.bootstrap?.surface?.mode === "viewport",
@@ -320,8 +330,12 @@ class Pool {
     return { browser, recycled, launched: true };
   }
 
-  async run(job) {
+  async run(job, onAllocated) {
     const { browser, recycled, launched } = await this.acquire(job);
+    // Веха шва `allocate-renderer` (BR-06): браузер этой джобе достался. У тёплого пула она
+    // приходит мгновенно (`launched: false`), у холодного — после `chromium.launch`; клиент
+    // (`worker-runner.ts`) именно по ней переключается с дедлайна аллокации на дедлайн джобы.
+    onAllocated?.(launched);
     let result;
     try {
       result = await captureWithContext(browser, job);
@@ -385,7 +399,7 @@ export async function serve(input = process.stdin, limits = poolLimits()) {
     const { id, job } = message;
     chain = chain.then(async () => {
       try {
-        const { result, pool: stats } = await pool.run(job);
+        const { result, pool: stats } = await pool.run(job, (launched) => emit({ type: "allocated", id, launched }));
         emit({ type: "result", id, result, pool: stats });
       } catch (error) {
         emit({ type: "result", id, result: { ok: false, error: `pool worker failed: ${error?.message ?? String(error)}` }, pool: null });

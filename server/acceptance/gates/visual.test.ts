@@ -83,6 +83,8 @@ interface ContextOptions {
   expectedGeometry?: { width: number; height: number };
   /** Факты кадра, которые в бою кладёт гейт `geometry` (W5-фолбэк канвы). */
   geometryFacts?: GeometryFacts;
+  /** BR-02: поле краски случая по сторонам (кадровый слой; на канву сравнения не влияет). */
+  paintPaddingPx?: { top: number; right: number; bottom: number; left: number };
   dsf?: number;
   /** W5 T5c: режим поверхности съёмки (`"viewport"` — сцена размера вьюпорта с оверлеем). */
   surfaceMode?: "viewport";
@@ -122,6 +124,7 @@ async function context(options: ContextOptions = {}) {
       ...(options.expectedGeometry ? { expectedGeometry: options.expectedGeometry } : {}),
       ...(options.comparison ? { comparison: options.comparison } : {}),
       ...(options.textAaBudget ? { textAaBudget: options.textAaBudget } : {}),
+      ...(options.paintPaddingPx ? { paintPaddingPx: options.paintPaddingPx } : {}),
     },
     surface: {
       viewport: options.viewport ?? { width: 390, height: 844 }, dsf: options.dsf ?? 2, theme: "light",
@@ -560,4 +563,115 @@ test("§W4: edge-сигнал приезжает в метрики каждог�
   // Кадры совпали побайтно: остатка нет, и доли у пустого множества тоже нет.
   expect(result.metrics!.edgeResidual).toMatchObject({ residualPixels: 0, insidePct: null });
   db.close();
+});
+
+// ------------------------------------------- BR-02: поле краски по сторонам (план 2026-08-08 §2)
+
+/**
+ * **AC волны**: случай с per-side полем краски даёт визуальные метрики **байт-в-байт** такие же,
+ * как тот же случай без поля.
+ *
+ * Это и есть блокер B3 раунда 2 в виде теста: канва сравнения comparison-owned и от поля краски не
+ * зависит вовсе; к канве приводится **кандидат** (окно `candidateWindow`), а не эталон и не канва.
+ * Иначе асимметричное поле уводило бы эталон на разницу сторон — то есть волна, задуманная как
+ * «померить всю краску», молча испортила бы каждый визуальный вердикт объявившего случая.
+ */
+const ROOT_PX = 16;
+const MARGIN_PX = 64;
+/** Скалярный кадр: `(16 + 2×64) = 144` device px при dsf 1, компонент в (64, 64). */
+const HUG_FRAME = framePng(144, 144, { x: MARGIN_PX, y: MARGIN_PX, width: ROOT_PX, height: ROOT_PX, color: INK });
+/** Тот же компонент, снятый полем `right: 128`: кадр шире на 64 px, компонент — на прежнем месте. */
+const PADDED_FRAME = framePng(208, 144, { x: MARGIN_PX, y: MARGIN_PX, width: ROOT_PX, height: ROOT_PX, color: INK });
+/** Content-hug эталон 16×16 при dsf 1 — ровно контентный бокс компонента. */
+const BR02_HUG_REFERENCE = framePng(ROOT_PX, ROOT_PX, { x: 0, y: 0, width: ROOT_PX, height: ROOT_PX, color: INK });
+
+const factsOf = (padding?: { top: number; right: number; bottom: number; left: number }): GeometryFacts => ({
+  layoutBounds: { x: MARGIN_PX, y: MARGIN_PX, width: ROOT_PX, height: ROOT_PX },
+  paintMargin: MARGIN_PX,
+  ...(padding === undefined ? {} : { paintPadding: padding }),
+  deviceScaleFactor: 1,
+});
+
+test("BR-02: кейс с per-side padding даёт визуальные метрики байт-в-байт как без padding", async () => {
+  const plain = await context({
+    dsf: 1, candidate: HUG_FRAME, referenceSurface: "content-hug", geometryFacts: factsOf(),
+  });
+  plain.ctx.case.referenceAssetId = await putAsset(plain.db, plain.dir, BR02_HUG_REFERENCE);
+  const plainResult = await visualGate.run(plain.ctx);
+  expect(plainResult.status).toBe("pass");
+  plain.db.close();
+
+  const padding = { top: 64, right: 128, bottom: 64, left: 64 };
+  const padded = await context({
+    dsf: 1, candidate: PADDED_FRAME, referenceSurface: "content-hug",
+    geometryFacts: factsOf(padding), paintPaddingPx: padding,
+  });
+  padded.ctx.case.referenceAssetId = await putAsset(padded.db, padded.dir, BR02_HUG_REFERENCE);
+  const paddedResult = await visualGate.run(padded.ctx);
+  expect(paddedResult.status).toBe("pass");
+
+  // Кадр приведён к канве сравнения окном — и это единственное отличие метрик.
+  expect(paddedResult.metrics!.candidateNormalization).toMatchObject({
+    sourceDims: { width: 208, height: 144 },
+    window: { x: 0, y: 0, width: 144, height: 144 },
+    dims: { width: 144, height: 144 },
+  });
+
+  // Всё остальное — байт-в-байт. `candidateSha256` различен по построению (кадры физически разные),
+  // поэтому сверяются **измерения**, а не адрес кадра.
+  const measured = (metrics: Record<string, unknown>): Record<string, unknown> => {
+    const copy = { ...metrics };
+    delete copy.candidateSha256;
+    delete copy.candidateNormalization;
+    return copy;
+  };
+  expect(measured(paddedResult.metrics!)).toEqual(measured(plainResult.metrics!));
+  expect(paddedResult.metrics!.canvas).toEqual({ width: 144, height: 144 });
+  expect(paddedResult.metrics!.rawDiffPct).toBe(0);
+  padded.db.close();
+});
+
+test("BR-02: узкое поле стороны дополняется прозрачным — окно уходит в минус, а канва не двигается", async () => {
+  // Поле слева 16 px вместо 64: кадр начинается ближе к компоненту, поэтому окно канвы выходит
+  // за левый край растра. Недостающие пиксели прозрачны — ровно то, что было бы в скалярном кадре
+  // (за контуром компонента там пусто по построению paint-поверхности).
+  const padding = { top: 64, right: 64, bottom: 64, left: 16 };
+  const narrow = framePng(144 - 48, 144, { x: 16, y: MARGIN_PX, width: ROOT_PX, height: ROOT_PX, color: INK });
+  const { ctx, db, dir } = await context({
+    dsf: 1, candidate: narrow, referenceSurface: "content-hug",
+    geometryFacts: {
+      layoutBounds: { x: 16, y: MARGIN_PX, width: ROOT_PX, height: ROOT_PX },
+      paintMargin: MARGIN_PX, paintPadding: padding, deviceScaleFactor: 1,
+    },
+    paintPaddingPx: padding,
+  });
+  ctx.case.referenceAssetId = await putAsset(db, dir, BR02_HUG_REFERENCE);
+
+  const result = await visualGate.run(ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics!.candidateNormalization).toMatchObject({
+    window: { x: -48, y: 0, width: 144, height: 144 }, dims: { width: 144, height: 144 },
+  });
+  expect(result.metrics!.canvas).toEqual({ width: 144, height: 144 });
+  expect(result.metrics!.rawDiffPct).toBe(0);
+  db.close();
+});
+
+test("BR-02 legacy (kill-switch): поле по сторонам не приводится к канве, и кадр не сводится", async () => {
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const padding = { top: 64, right: 128, bottom: 64, left: 64 };
+    const { ctx, db, dir } = await context({
+      dsf: 1, candidate: PADDED_FRAME, referenceSurface: "content-hug",
+      geometryFacts: factsOf(padding), paintPaddingPx: padding,
+    });
+    ctx.case.referenceAssetId = await putAsset(db, dir, BR02_HUG_REFERENCE);
+
+    const result = await visualGate.run(ctx);
+    // Доволновая ветка окна не знает вовсе: кадр 208×144 против канвы 144×144 несводим допуском 8.
+    expect(result.status).toBe("indeterminate");
+    expect(result.metrics).toMatchObject({ reason: "dimensions_irreconcilable" });
+    expect(result.metrics!.candidateNormalization).toBeUndefined();
+    db.close();
+  } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
 });

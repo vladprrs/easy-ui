@@ -13,6 +13,8 @@ declare module "*/screenshot-worker.mjs" {
   export const WORKER_FAILURE_CODES: Readonly<{ navigation: string; runtime: string; surfaceMissing: string }>;
   /** W2: потолок ожидания handshake'а, производный от `bootstrap.readiness.timeoutMs`. */
   export function handshakeTimeoutMs(job: { bootstrap?: { readiness?: { timeoutMs?: number } } } | undefined): number;
+  /** BR-06: одна строка NDJSON-вехи протокола (`{"type":"allocated"}`), без выхода из процесса. */
+  export function emitMilestone(message: Record<string, unknown>): void;
 }
 
 declare module "*/geometry.mjs" {

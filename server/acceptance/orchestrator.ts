@@ -24,18 +24,21 @@ import { ComponentRepo } from "../repos/components";
 import { getCandidateForRev } from "../components/validate";
 import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
 import { buildCasesFromManifest, casesOfRun, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
-import { evidenceSlotsOf, writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
+import { evidenceSlotsOf, evidenceVisualReceiptOf, writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
 import type { RunInkBbox } from "./inkBbox";
 import type { RunNormalizedDiff } from "../visual/diff-runner";
 import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import { CASE_POLICY_HASH_V0, readinessPolicyHashOf, verdictPolicySnapshotOf, type CaseSurface, type VerdictPolicySnapshot } from "./ids";
 import { rendererFingerprint } from "../capture/renderer";
-import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
+import type { AcceptanceCaptureService, CandidateSubject, GateContext, GateResult } from "./gates/types";
+import type { GateName } from "./policies";
 import {
   bySeverity, carryBaselineCase, caseFingerprintsFor, causesOfGates, executeCase, fingerprintOf, foldRunVerdict,
-  progressOf, reuseReceiptOf,
-  type CaseExecution, type CaseRunnerDeps,
+  progressOf, resumableGatesOf, reuseReceiptOf,
+  type CaseExecution, type CaseRunnerDeps, type GateEnvelope,
 } from "./runner";
+import { GATE_ORDER, phaseOfGate, phaseRank, RUN_PHASES, type RunPhase } from "./gates";
+import { isAllocateJobOutcome } from "../screenshot/service";
 import { baselineCaseIndex, computeImpact, type ImpactReport } from "./impact";
 import { groupRemediations, type RemediationGroup } from "./grouping";
 import {
@@ -45,6 +48,71 @@ import {
 import { AcceptanceRepo, isTerminalRunStatus, type AcceptanceRunRow, type CandidateRow } from "./repo";
 
 const sleepDefault = (ms: number): Promise<void> => Bun.sleep(ms);
+
+/**
+ * Kill-switch возобновляемой приёмки (BR-06): `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` гасит
+ * `POST /api/acceptance-runs/:id/resume` (типизированный 409) и флаг `features.acceptanceResumeV1`.
+ *
+ * Читается **по месту вызова**, а не один раз на процесс: тумблер обязан флипаться без рестарта,
+ * и discovery обязан отвечать то же, что ручка. Под опущенным флагом наблюдаемость волны
+ * (`error_json`, шов аллокации, circuit breaker) работает по-прежнему — это фиксы дефектов, а не
+ * фича: они не создают новых сущностей и не меняют формы отпечатков.
+ */
+export const acceptanceResumeEnabled = (): boolean => process.env.EASYUI_ACCEPTANCE_RESUME_DISABLED !== "1";
+
+/**
+ * Сколько подряд случаев с исходом класса аллокации терминализуют ран (BR-06, circuit breaker).
+ *
+ * Три, а не один: единичный `queue_full` или неудачный запуск браузера — обычный шум, ради
+ * которого и существуют ретраи. Три подряд означают, что не достаётся рендерер **как таковой**, и
+ * дальше матрица из 20 случаев потратит 20×`maxInfraRetries`×дедлайн и не оставит ни одного кадра.
+ */
+export const ALLOCATE_BREAKER_THRESHOLD = 3;
+
+/** Причина терминализации по классу исхода, которым breaker сработал. */
+const BREAKER_STATUS_REASON: Record<string, string> = {
+  renderer_unavailable: "renderer_unavailable",
+  allocate_timeout: "capture_budget_exhausted",
+  queue_full: "queue_starvation",
+};
+
+/**
+ * Фаза, до которой случай дошёл (BR-06): последняя фаза, чей гейт **завершён**.
+ *
+ * Читается из `gates_json` строки случая, а не из его статуса: статус `running` у пережившей
+ * рестарт строки не значит ничего (её никто не закрывал), а завершённые гейты — значат.
+ * Незавершённый случай без единого гейта стоит на `resolve`.
+ */
+export function lastCompletedPhaseOfGates(gates: readonly GateEnvelope[]): RunPhase {
+  let phase: RunPhase = "resolve";
+  for (const name of GATE_ORDER) {
+    const gate = gates.find((item) => item.gate === name);
+    if (gate === undefined || typeof gate.finishedAt !== "string") break;
+    phase = phaseOfGate(name);
+  }
+  return phase;
+}
+
+/**
+ * Run-level `lastCompletedPhase` — **минимум** по незавершённым случаям (документированный
+ * контракт: фаза наблюдается покейсово). Все случаи завершены ⇒ `verdict`.
+ */
+/**
+ * jobId капчура случая, если он попал в метрики гейта (BR-06): typed timeout обязан называть
+ * ресурс, а единственный ресурс, которым приёмка распоряжается снаружи, — это джоба капчура.
+ */
+export function jobIdOfGates(gates: readonly GateResult[]): string | null {
+  for (const gate of gates) {
+    const jobId = gate.metrics?.jobId;
+    if (typeof jobId === "string" && jobId.length > 0) return jobId;
+  }
+  return null;
+}
+
+export function runLastCompletedPhase(pending: readonly RunPhase[]): RunPhase {
+  if (pending.length === 0) return "verdict";
+  return pending.reduce((worst, phase) => (phaseRank(phase) < phaseRank(worst) ? phase : worst), RUN_PHASES.at(-1)!);
+}
 
 export interface AcceptanceOrchestratorDeps {
   db: Database;
@@ -198,6 +266,13 @@ export interface StartRunInput {
    * никогда не «экономит» молча.
    */
   baselineRunId?: string;
+  /**
+   * Продолжение рана (BR-06): id предка, номер попытки и lineage-отчёт. Заполняет их только
+   * {@link AcceptanceOrchestrator.resumeRun} — постановка «руками» продолжением не бывает.
+   */
+  resumedFromRunId?: string;
+  attempt?: number;
+  resumeLineage?: Record<string, unknown>;
 }
 
 const normalizeRefresh = (refresh: StartRunInput["refresh"]): RefreshSpec => {
@@ -372,6 +447,11 @@ export class AcceptanceOrchestrator {
       idempotencyKey: input.idempotencyKey ?? null,
       caseSetId: caseSet?.case_set_id ?? null,
       createdBy: input.createdBy,
+      // v37 (BR-06): происхождение продолжения — условным спредом, чтобы обычная постановка
+      // осталась побайтово прежней (NULL в колонке = «ран самостоятельный»).
+      ...(input.resumedFromRunId === undefined ? {} : { resumedFromRunId: input.resumedFromRunId }),
+      ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
+      ...(input.resumeLineage === undefined ? {} : { resume: input.resumeLineage }),
       // v30 (W7): объявленный рендерер рана персистится на постановке — тем же значением, что
       // входит в `frame_fingerprint` случаев. Multi-run promote сверяет его у всех ранов набора:
       // покрытие, снятое разными рендерерами, склеивать в одну доказательную базу нельзя.
@@ -417,6 +497,78 @@ export class AcceptanceOrchestrator {
       if (this.autoDrain) void this.drain();
     }
     return { run: created.run, cases, cached: created.cached, refresh: algebra, ...(impact ? { impact } : {}) };
+  }
+
+  /**
+   * Продолжение остановленного рана (BR-06, план 2026-08-08 §6).
+   *
+   * **Resume — новый ран, а не воскрешение.** Терминальный ран неизменяем: на него ссылаются
+   * receipts публикаций, `evidence_manifest_hash` и promote-инварианты, и дописать в него новые
+   * вердикты значило бы задним числом изменить доказательство. Поэтому создаётся новая строка с
+   * тем же кандидатом, набором и профилем, но с `resumed_from_run_id`, `attempt` и lineage.
+   *
+   * Что переезжает: завершённые structural-гейты (`contract`/`defaults`/`audit`) тех случаев, чьи
+   * per-gate отпечатки совпали. Всё от `capture` и дальше снимается заново — кадр предка мог не
+   * существовать вовсе (именно этим resume и отличается от reuse-каскада, который живёт на
+   * доказанных артефактах в CAS).
+   *
+   * Отказы, и все три — доменные:
+   * - ран ещё не терминален ⇒ `409 run_not_resumable` (продолжать нечего, он идёт);
+   * - ран не объявлял себя продолжаемым (успех, cancel, `refresh_scope_empty`) ⇒ то же
+   *   `409 run_not_resumable`: «переснять» — это `POST /acceptance-runs` с `refresh`, а не resume;
+   * - продолжение уже создано ⇒ `409 run_already_resumed` с id последнего продолжения.
+   *
+   * Конкуренцию арбитрирует существующий `one_in_flight` (partial unique index): второй resume
+   * того же кандидата получает `409 acceptance_run_in_flight` из `createRun`, а детерминированный
+   * `idempotency_key = "resume:<sourceRunId>:<attempt>"` делает повторный POST идемпотентным
+   * (NULL-ключи в SQLite различны — без формулы дедупликации не существует).
+   */
+  async resumeRun(sourceRunId: string, input: { createdBy: string }): Promise<StartRunResult & { sourceRun: AcceptanceRunRow }> {
+    const source = this.repo.requireRun(sourceRunId);
+    if (!isTerminalRunStatus(source.status)) {
+      throw new ApiError(409, "run_not_resumable", `Acceptance run is ${source.status}; only a stopped terminal run can be resumed`,
+        { runId: source.run_id });
+    }
+    const resume = this.repo.runResume(source);
+    if (resume?.resumable !== true) {
+      throw new ApiError(409, "run_not_resumable",
+        `Acceptance run ${source.run_id} is ${source.status}${source.status_reason ? ` (${source.status_reason})` : ""}`
+        + " and did not stop in a resumable state; queue a new run instead",
+        { runId: source.run_id });
+    }
+    const existing = this.repo.resumptionsOf(source.run_id).at(-1);
+    if (existing) {
+      // `runId` в деталях — **живое/последнее продолжение** (тот же контракт, что у
+      // `acceptance_run_in_flight`: деталь называет ран, из-за которого отказано).
+      throw new ApiError(409, "run_already_resumed",
+        `Acceptance run ${source.run_id} has already been resumed by ${existing.run_id} (attempt ${existing.attempt})`,
+        { runId: existing.run_id });
+    }
+    const attempt = source.attempt + 1;
+    const started = await this.startRun({
+      candidateId: source.candidate_id,
+      createdBy: input.createdBy,
+      policyId: source.policy_profile_id,
+      idempotencyKey: `resume:${source.run_id}:${attempt}`,
+      ...(source.case_set_id === null ? {} : { caseSetId: source.case_set_id }),
+      resumedFromRunId: source.run_id,
+      attempt,
+      // Lineage несёт **прежние** причину и фазу: «предыдущая ошибка» из §9 фидбэка обязана
+      // читаться из нового рана, а не требовать отдельного запроса к предку.
+      resumeLineage: {
+        resumable: true,
+        resumedFrom: {
+          runId: source.run_id,
+          attempt: source.attempt,
+          status: source.status,
+          statusReason: source.status_reason,
+          phase: resume.phase ?? null,
+          lastCompletedPhase: resume.lastCompletedPhase ?? null,
+          jobIds: Array.isArray(resume.jobIds) ? resume.jobIds : [],
+        },
+      },
+    });
+    return { ...started, sourceRun: source };
   }
 
   /** Cancel допустим только из `queued` (триаж A6): бегущий ран не отменяется. */
@@ -585,6 +737,43 @@ export class AcceptanceOrchestrator {
     const byCaseId = new Map<string, CaseExecution>();
     let ema: number | null = null;
 
+    // BR-06, прекондиция рендерера: спрашивается **один раз до цикла**. «Браузера в образе нет» —
+    // свойство процесса, а не случая, и узнавать его 20 раз по три 501-х ретрая означало бы
+    // потратить минуты, чтобы в конце всё равно не иметь ни одного кадра и ни одной причины.
+    if (this.deps.service.available?.() === false) {
+      for (const item of cases) {
+        this.repo.updateCase(run.run_id, item.caseId, {
+          status: "skipped",
+          error: { outcome: "renderer_unavailable", message: "renderer is not available in this process", attempts: 0, elapsedMs: 0, phase: "allocate-renderer" },
+          finishedAt: new Date(this.now()).toISOString(),
+        });
+      }
+      return this.repo.terminalizeRun(run.run_id, {
+        status: "error",
+        statusReason: "renderer_unavailable",
+        gates: { error: "renderer is not available: acceptance requires SERVE_DIST and an installed chromium" },
+        resume: {
+          resumable: true, phase: "allocate-renderer", lastCompletedPhase: "resolve",
+          elapsedMs: 0, resumeFrom: "allocate-renderer", jobIds: [],
+        },
+      });
+    }
+
+    // Продолжение (BR-06): завершённые structural-гейты рана-предка, по случаям. Карта строится
+    // один раз — она читает `gates_json` строк предка и отсеивает всё, что не имеет права
+    // переехать (не фаза `validate`, не завершено, отпечаток не сошёлся).
+    const inherited = this.inheritedGates(run, cases, deps);
+
+    /** Circuit breaker (BR-06): счётчик подряд идущих исходов класса аллокации и последний из них. */
+    let allocateStreak = 0;
+    let allocateOutcome: string | null = null;
+    /** jobId'ы, названные упавшими случаями, — часть typed timeout'а. */
+    const failedJobIds: string[] = [];
+    /** Фазы незавершённых случаев — вход run-level `lastCompletedPhase`. */
+    const pendingPhases = new Map<string, RunPhase>(cases.map((item) => [item.caseId, "resolve" as RunPhase]));
+    let timeoutPhase: RunPhase | null = null;
+    let timeoutElapsedMs = 0;
+
     for (const item of targets) {
       // Cancel/watchdog могли терминализовать ран, пока шла съёмка предыдущего случая.
       const current = this.repo.run(run.run_id);
@@ -608,18 +797,66 @@ export class AcceptanceOrchestrator {
           impact!.basis,
           { baselinePolicy: baselinePolicies.get(item.caseId) ?? null },
         );
+      const resumeGates = inherited.get(item.caseId);
       const execution = carried ?? await executeCase(deps, item, {
         determinismSampled: sampled.has(item.caseId),
         ...(force === null ? {} : { scope: force.scope, refreshReason: force.reason }),
+        ...(resumeGates === undefined || resumeGates.size === 0 ? {} : { resumeGates }),
+        // BR-06: персист по фазам. Дешёвая тройка уезжает одной записью, дорогие гейты — каждый
+        // своей: строка случая обязана переживать рестарт процесса на той фазе, до которой дошла.
+        onGateProgress: (gates) => { this.repo.updateCase(run.run_id, item.caseId, { gates }); },
       });
       this.persistCase(run.run_id, execution);
       executions.push(execution);
       byCaseId.set(item.caseId, execution);
+      pendingPhases.delete(item.caseId);
+      // Circuit breaker: считаются подряд идущие исходы класса аллокации. Любой другой исход
+      // (включая успешный кадр) обнуляет счётчик — рендерер доказал, что он есть.
+      const outcome = execution.error?.outcome;
+      if (outcome !== undefined && isAllocateJobOutcome(outcome as never)) {
+        allocateStreak += 1;
+        allocateOutcome = outcome;
+      } else {
+        allocateStreak = 0;
+        allocateOutcome = null;
+      }
+      if (execution.error !== undefined) {
+        if (execution.error.phase !== undefined) {
+          timeoutPhase = execution.error.phase;
+          timeoutElapsedMs = execution.error.elapsedMs ?? execution.durationMs;
+        }
+        const jobId = jobIdOfGates(execution.gates);
+        if (jobId !== null) failedJobIds.push(jobId);
+      }
       // EMA считает **оплаченную** работу (D9): съёмка и re-diff стоят времени, полный reuse и
       // чистый пересчёт по метрикам — нет, и включать их значило бы занижать ETA остатка.
       const paid = !execution.reused && (execution.rediffed === true || execution.frameReused !== true);
       if (paid) ema = ema === null ? execution.durationMs : Math.round(ema * 0.7 + execution.durationMs * 0.3);
       this.repo.updateRunProgress(run.run_id, progressOf(executions, cases.length, ema));
+      // Срабатывание breaker'а: оставшиеся случаи закрываются `skipped` (они не исполнялись — и
+      // не должны выглядеть ни провалом компонента, ни вечным `pending`), ран терминализуется
+      // с названной причиной класса.
+      if (allocateStreak >= ALLOCATE_BREAKER_THRESHOLD && allocateOutcome !== null) {
+        const finishedAt = new Date(this.now()).toISOString();
+        for (const [caseId] of pendingPhases) {
+          this.repo.updateCase(run.run_id, caseId, { status: "skipped", finishedAt });
+        }
+        return this.repo.terminalizeRun(run.run_id, {
+          status: "error",
+          statusReason: BREAKER_STATUS_REASON[allocateOutcome] ?? "renderer_unavailable",
+          gates: this.gatesSummary(executions),
+          progress: progressOf(executions, cases.length, ema, 0),
+          resume: {
+            resumable: true,
+            phase: "allocate-renderer",
+            lastCompletedPhase: runLastCompletedPhase([...pendingPhases.values()]),
+            elapsedMs: timeoutElapsedMs,
+            resumeFrom: "allocate-renderer",
+            jobIds: [...new Set(failedJobIds)],
+            breaker: { outcome: allocateOutcome, consecutive: allocateStreak },
+          },
+        });
+      }
     }
 
     for (const item of aliases) {
@@ -630,6 +867,9 @@ export class AcceptanceOrchestrator {
         : { caseId: item.caseId, caseKey: item.caseKey, caseFingerprint: fingerprintOf(deps, item), status: "error", verdict: null, gates: [], severity: null, captureQuality: null, artifacts: [], aliasOfCaseId: item.aliasOfCaseId, reused: false, reuseReason: null, durationMs: 0, error: { outcome: "subprocess_error", message: "alias target was not executed" } };
       this.persistCase(run.run_id, execution);
       executions.push(execution);
+      // Алиас завершается вместе со своей целью: незавершённым он остаться не может, и держать
+      // его в `pendingPhases` значило бы вечно занижать run-level `lastCompletedPhase`.
+      pendingPhases.delete(item.caseId);
       this.repo.updateRunProgress(run.run_id, progressOf(executions, cases.length, ema));
     }
 
@@ -651,9 +891,27 @@ export class AcceptanceOrchestrator {
     }));
     const manifest = this.manifestOf(run, subject, verdict, executions, verdictPolicies, cases);
     const { manifestHash } = await writeRunManifest(this.deps.dataDir, run.run_id, manifest);
+    // BR-06, typed timeout: инфраструктурный отказ обязан называть **фазу**, а не прятаться за
+    // общим `error`. Причина ставится только когда ран действительно упал инфраструктурно
+    // (`verdict === "error"`) и хотя бы один случай назвал свою фазу; `refresh_scope_empty`
+    // сильнее — это осознанный отчёт о бесполезном форсе, а не отказ инфраструктуры.
+    const phaseTimeout = !scopeEmpty && verdict === "error" && timeoutPhase !== null;
     return this.repo.terminalizeRun(run.run_id, {
       status: verdict,
       ...(scopeEmpty ? { statusReason: "refresh_scope_empty" } : {}),
+      ...(phaseTimeout ? { statusReason: "phase_timeout" } : {}),
+      ...(phaseTimeout
+        ? {
+          resume: {
+            resumable: true,
+            phase: timeoutPhase,
+            lastCompletedPhase: runLastCompletedPhase([...pendingPhases.values()]),
+            elapsedMs: timeoutElapsedMs,
+            resumeFrom: timeoutPhase,
+            jobIds: [...new Set(failedJobIds)],
+          },
+        }
+        : {}),
       gates: this.gatesSummary(executions),
       // Группы ремедиаций живут в `progress_json` рядом с прогрессом: это run-level **отчёт**, а
       // `gates_json` — сводка статусов по гейтам, и смешивать в ней счётчики с диагностикой значило
@@ -756,8 +1014,41 @@ export class AcceptanceOrchestrator {
       // Квитанция reuse (W8-форма): собирается уже сейчас — данные, которых не собрали во время
       // рана, задним числом не появятся, а выдача в evidence приезжает волной W8.
       reuseReceipt: reuseReceiptOf(execution),
+      // BR-06: причина инфраструктурного падения персистится **вместе** с исходом случая. `null`
+      // у успешного случая не косметика: строка, переснятая после отказа, обязана перестать
+      // нести прошлую причину — иначе resume принял бы её за текущую.
+      error: execution.error ?? null,
       finishedAt: new Date(this.now()).toISOString(),
     });
+  }
+
+  /**
+   * Завершённые гейты рана-предка по случаям (BR-06, resume). Пустая карта у обычного рана —
+   * ни одного лишнего чтения БД: `resumed_from_run_id` у него NULL.
+   */
+  private inheritedGates(
+    run: AcceptanceRunRow,
+    cases: readonly AcceptanceCase[],
+    deps: Pick<CaseRunnerDeps, "candidate" | "surface" | "policy">,
+  ): Map<string, ReadonlyMap<GateName, GateEnvelope>> {
+    const out = new Map<string, ReadonlyMap<GateName, GateEnvelope>>();
+    if (run.resumed_from_run_id === null) return out;
+    const byCaseId = new Map(this.repo.cases(run.resumed_from_run_id).map((row) => [row.case_id, row] as const));
+    for (const item of cases) {
+      const row = byCaseId.get(item.caseId);
+      if (!row || row.gates_json === null) continue;
+      let stored: GateResult[];
+      try { stored = JSON.parse(row.gates_json) as GateResult[]; }
+      catch { continue; }
+      if (!Array.isArray(stored)) continue;
+      // Отпечатки считаются по **сегодняшним** входам: несовпадение и означает «переисполнить».
+      const carried = resumableGatesOf(stored, caseFingerprintsFor(deps, item));
+      if (carried.size > 0) {
+        for (const gate of carried.values()) gate.reusedFromRunId = run.resumed_from_run_id;
+        out.set(item.caseId, carried);
+      }
+    }
+    return out;
   }
 
   /** Run-level агрегат `gates_json`: по каждому гейту — сколько случаев в каком статусе. */
@@ -801,6 +1092,9 @@ export class AcceptanceOrchestrator {
       // Слот-поля — условным спредом: у slot-free случая (и у всего examples-пути) их нет вовсе,
       // и его запись остаётся побайтово прежней (golden §A7).
       ...evidenceSlotsOf(bySlotCase.get(execution.caseId)),
+      // BR-07/BR-08: квитанция сравнения и сводка атрибуции — часть доказательства случая.
+      // Условные ключи: доволновой случай остаётся побайтово прежним.
+      ...evidenceVisualReceiptOf(execution.gates),
       artifacts: execution.artifacts.map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
     }));
     return {

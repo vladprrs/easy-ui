@@ -53,6 +53,17 @@ export interface ReadinessBarrierPolicy {
   maxResources: number;
   /** Сколько подряд стабильных rAF-кадров считать доказательством покоя **после** декода. */
   stableFrames: number;
+  /**
+   * **Под-дедлайн фазы `registry`** (BR-03, план 2026-08-08 §3, решение (г) замера V0-D5): сколько
+   * барьер имеет права ждать применения темы (`__easyUiShared.icons`) **до** первого манифеста.
+   *
+   * Присутствие этого ключа — и есть маркер политики v4: барьер спрашивает не «какая версия
+   * политики приехала» (число можно подделать испорченным bootstrap'ом), а «объявлена ли фаза»,
+   * и ровно по нему включает все каналы волны (srcset, псевдоэлементы, шрифты, icon-registry,
+   * ожидаемые ассеты) и пер-ресурсные записи. У политики v3 ключа нет вовсе — её пре-образ и
+   * `readinessPolicyHash` обязаны остаться байт-в-байт доволновыми (K-инвариант).
+   */
+  registryDeadlineMs?: number;
 }
 
 /** Потолок суммарного бюджета барьера (§1.5): больше — не политика, а испорченный bootstrap. */
@@ -60,6 +71,15 @@ export const RESOURCE_BARRIER_MAX_BUDGET_MS = 8_000;
 
 /** Потолок манифеста ресурсов одной страницы (§W2, риск R4). */
 export const RESOURCE_BARRIER_MAX_RESOURCES = 256;
+
+/**
+ * Под-дедлайн фазы `registry` политики v4 (BR-03, решение (г) замера V0-D5): 500 мс внутри
+ * бюджета барьера. Не отдельная ручка постановки: фаза либо завершается мгновенно (тема иконок не
+ * объявляла), либо ждёт ровно применения реестра — а «ждать реестра дольше половины секунды»
+ * означает, что тема не доехала вовсе, и это `resource_barrier_timeout` с `ref:"registry:…"`,
+ * а не более долгое молчание.
+ */
+export const RESOURCE_BARRIER_REGISTRY_DEADLINE_MS = 500;
 
 /**
  * Пер-ресурсный таймаут — **производная** суммарного бюджета (§1.5), а не отдельная ручка:
@@ -75,10 +95,12 @@ export interface ReadinessPolicy {
   /**
    * `1` — доволновая политика (см. `DEFAULT_READINESS_POLICY`), `2` — строгая (R4,
    * `STRICT_READINESS_POLICY`), `3` — строгая + resource barrier (W2,
-   * `BARRIER_READINESS_POLICY`). Версия — не украшение: она выбирает семантику каждого поля ниже,
+   * `BARRIER_READINESS_POLICY_V3`), `4` — барьер волны BR-03 (`BARRIER_READINESS_POLICY_V4`: фаза
+   * `registry` до первого манифеста, полный набор каналов и пер-ресурсные записи).
+   * Версия — не украшение: она выбирает семантику каждого поля ниже,
    * и её валидирует `isReadinessPolicy`, потому что политика приезжает поверхности из bootstrap'а.
    */
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   /**
    * `used-faces` — ждать только те `@font-face`, которые реально применились к поверхности
    * (перечисление семейств через `getComputedStyle` выборки + `document.fonts`);
@@ -151,7 +173,7 @@ export const STRICT_READINESS_POLICY: ReadinessPolicy = Object.freeze({
  * (его собственный бюджет — 8 с), поэтому страница не начинает ждать дольше, чем ждала до волны,
  * и типизированный отказ гарантированно успевает до `JOB_DEADLINE_MS`.
  */
-export const BARRIER_READINESS_POLICY: ReadinessPolicy = Object.freeze({
+export const BARRIER_READINESS_POLICY_V3: ReadinessPolicy = Object.freeze({
   version: 3,
   fonts: "required-faces",
   images: "decoded-strict",
@@ -166,6 +188,50 @@ export const BARRIER_READINESS_POLICY: ReadinessPolicy = Object.freeze({
     stableFrames: 2,
   }) as ReadinessBarrierPolicy,
 }) as ReadinessPolicy;
+
+/**
+ * Доволновой алиас: до BR-03 политика барьера была одна, и половина продукта импортирует её под
+ * этим именем. Значение — **v3** (byte-for-byte), а выбор между v3 и v4 делает единственная точка
+ * включения `server/capture/resourceBarrier.ts`: сам факт «какая политика активна» — свойство
+ * kill-switch-иерархии, а не импорта.
+ */
+export const BARRIER_READINESS_POLICY = BARRIER_READINESS_POLICY_V3;
+
+/**
+ * Политика v4 (план 2026-08-08 §3, EUI-BR-03): та же строгая readiness и тот же бюджет барьера,
+ * плюс объявленный под-дедлайн фазы `registry`. Ни `timeoutMs`, ни `budgetMs`, ни `maxResources`
+ * волна не трогает (решение (д) замера V0-D5): цена расширенного обхода — +7…32 мс/кейс, то есть
+ * два-три порядка запаса до бюджета, и «подождать подольше» волна не покупает.
+ *
+ * Смена политики меняет `readinessPolicyHash` — и это и есть объявленная инвалидация кадров при
+ * включении волны (тот же механизм, что у v2→v3): кадр, снятый доволновым барьером, не
+ * переиспользуется под политикой, которая обязана была дождаться реестра иконок.
+ */
+export const BARRIER_READINESS_POLICY_V4: ReadinessPolicy = Object.freeze({
+  version: 4,
+  fonts: "required-faces",
+  images: "decoded-strict",
+  network: Object.freeze({ quietMs: 200, scope: "component-owned" }) as ReadinessNetworkPolicy,
+  frames: 2,
+  animations: "disabled",
+  timeoutMs: 15_000,
+  layout: Object.freeze({ stabilize: true, attempts: 3 }) as ReadinessLayoutPolicy,
+  resourceBarrier: Object.freeze({
+    budgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
+    maxResources: RESOURCE_BARRIER_MAX_RESOURCES,
+    stableFrames: 2,
+    registryDeadlineMs: RESOURCE_BARRIER_REGISTRY_DEADLINE_MS,
+  }) as ReadinessBarrierPolicy,
+}) as ReadinessPolicy;
+
+/**
+ * Барьер исполняется по правилам волны BR-03 (фаза `registry`, полный набор каналов, пер-ресурсные
+ * записи). Спрашивается **у политики**, а не у env: страница знает только то, что приехало в
+ * bootstrap'е, и «версия сказала 4, а под-дедлайна нет» обязано вести себя как v3, а не как
+ * наполовину включённая волна.
+ */
+export const barrierPolicyIsV4 = (barrier: ReadinessBarrierPolicy | undefined): boolean =>
+  barrier !== undefined && typeof barrier.registryDeadlineMs === "number" && barrier.registryDeadlineMs > 0;
 
 /** Канонизованная форма политики — единственный вход хэша (порядок ключей не значим). */
 export function canonicalReadinessPolicy(policy: ReadinessPolicy): string {
@@ -214,15 +280,23 @@ export function isReadinessPolicy(value: unknown): value is ReadinessPolicy {
   // v3 (W2): те же строгие условия плюс барьер ресурсов. Отдельная ветка обязательна: без неё
   // политика волны не проходит валидацию и поверхность **молча** сваливается в v1-дефолт
   // (триаж C-M6) — то есть барьер не исполняется, а расхождение видно только по хешу политики.
-  if (policy.version === 3) {
+  // v4 (BR-03) отличается от v3 ровно объявленным под-дедлайном фазы `registry`, поэтому общее
+  // тело валидации одно, а версия решает, обязан ли ключ присутствовать: «v3 с под-дедлайном» и
+  // «v4 без него» — обе испорченный bootstrap, и обе обязаны свалиться в дефолт, а не гадать.
+  if (policy.version === 3 || policy.version === 4) {
     const barrier = policy.resourceBarrier as Partial<ReadinessBarrierPolicy> | undefined;
+    const registryOk = policy.version === 4
+      ? typeof barrier?.registryDeadlineMs === "number" && Number.isFinite(barrier.registryDeadlineMs)
+        && barrier.registryDeadlineMs > 0 && barrier.registryDeadlineMs <= RESOURCE_BARRIER_MAX_BUDGET_MS
+      : barrier?.registryDeadlineMs === undefined;
     return isStrictConditions(policy)
       && barrier !== undefined
       && typeof barrier.budgetMs === "number" && Number.isFinite(barrier.budgetMs)
       && barrier.budgetMs > 0 && barrier.budgetMs <= RESOURCE_BARRIER_MAX_BUDGET_MS
       && typeof barrier.maxResources === "number" && Number.isInteger(barrier.maxResources)
       && barrier.maxResources > 0 && barrier.maxResources <= RESOURCE_BARRIER_MAX_RESOURCES
-      && typeof barrier.stableFrames === "number" && Number.isInteger(barrier.stableFrames) && barrier.stableFrames >= 0;
+      && typeof barrier.stableFrames === "number" && Number.isInteger(barrier.stableFrames) && barrier.stableFrames >= 0
+      && registryOk;
   }
   return false;
 }

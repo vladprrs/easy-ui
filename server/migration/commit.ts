@@ -36,7 +36,7 @@ import { ApiError } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { PrototypeRepo } from "../repos/prototypes";
 import { requireActiveDesignSystem } from "../designSystems";
-import { promoteComponent } from "../components/promote";
+import { promoteComponent, type SubjectPromotionReceipt } from "../components/promote";
 import { updatePrototypeFromDoc, surfacesWriteEnabled } from "../routes/prototypes";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
 import { buildSnapPlan, impactedSnapEnabled, SNAP_PLAN_MAX_SCREENS, type SnapPlan } from "../prototypes/screenFrames";
@@ -162,6 +162,12 @@ export interface MigrationCommitResult {
   promote?: {
     version: number; rev: number; catalogRevision: string; superseded: number[];
     candidateId: string | null; acceptanceRunIds: string[]; cached: boolean; warnings: string[];
+    /**
+     * BR-08 (план 2026-08-08 §8, п.4): версия опубликована при **провальном** интеграционном
+     * вердикте по субъектному владению. Поле пишется только в этом случае — «subject promoted,
+     * integration fail признан» обязано лежать в durable-квитанции саги, а не только в ответе.
+     */
+    subjectPromotion?: SubjectPromotionReceipt[];
   };
   gallery?: { prototypeId: string; beforeRev: number; afterRev: number; changed: boolean; warnings: unknown[] };
   verify?: {
@@ -432,6 +438,7 @@ async function runPromote(context: MigrationCommitContext, request: MigrationCom
     version: promoted.version, rev: promoted.rev, catalogRevision: promoted.catalogRevision,
     superseded: promoted.superseded, candidateId: promoted.candidateId, acceptanceRunIds: promoted.acceptanceRunIds,
     cached: promoted.cached, warnings: promoted.warnings,
+    ...(promoted.subjectPromotion === null ? {} : { subjectPromotion: promoted.subjectPromotion }),
   };
   writeAuditEvent(context.db, {
     actorId: context.actor.userId, action: "component.promoted", subjectType: "component", subjectId: request.componentId,

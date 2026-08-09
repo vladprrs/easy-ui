@@ -38,6 +38,13 @@ const REACHABILITY: Record<CaptureFailureCode, { kind: "unit"; codes: () => stri
   resource_manifest_overflow: { kind: "fixture", where: "src/capture/readiness.ts#collectResourceManifest → src/capture/readiness.test.ts" },
   // W9 (план 2026-08-07 §W9): эмитент — адаптер рантайма, сток дренируется сборкой readiness.
   runtime_props_parse_failed: { kind: "fixture", where: "src/player/easyUiRuntime.tsx → src/player/__tests__/runtimeDefaults.test.tsx + src/capture/readiness.test.ts" },
+  // BR-02 (план 2026-08-08 §2): эмитент — гейт геометрии по названному ink clamp'у политики.
+  paint_capture_clipped: { kind: "fixture", where: "server/acceptance/gates/geometry2.ts#paintClippedCodes → server/acceptance/gates/geometry2.test.ts" },
+  // BR-03 (план 2026-08-08 §3): эмитент — гейт readiness, сужающий вердикт на барьерных причинах.
+  resource_barrier_incomplete: { kind: "fixture", where: "server/acceptance/gates/readiness.ts (barrier-only met:false) → server/acceptance/gates/readiness.test.ts" },
+  // BR-05 (план 2026-08-08 §5): эмитент — гейт геометрии по фактам замера
+  // (`detail.ownershipViolations` → `gates/audit.ts#geometryOwnershipViolationCodes`).
+  geometry_ownership_invalid: { kind: "fixture", where: "server/acceptance/gates/audit.ts#geometryOwnershipViolationCodes → server/acceptance/gates/geometry2.test.ts" },
 };
 
 describe("capture failure codes", () => {
@@ -56,7 +63,7 @@ describe("capture failure codes", () => {
       } else if (plan.kind === "fixture") {
         expect(plan.where.length, `${code} обязан называть файл с фикстурой`).toBeGreaterThan(0);
         // Волна происхождения — R3 (typed codes) либо R4 (строгая readiness посадила эмитент).
-        expect(["R3", "R4", "W1a", "W1b", "W2", "W9"]).toContain(origin.wave);
+        expect(["R3", "R4", "W1a", "W1b", "W2", "W9", "BR-02", "BR-03", "BR-05"]).toContain(origin.wave);
       } else {
         // Отложенный код обязан согласовываться с реестром: волна в одном месте, а не в двух.
         expect(origin.wave).toBe(plan.wave);

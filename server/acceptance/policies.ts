@@ -12,6 +12,7 @@
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
+import { rendererPolicyProfilesEnabled } from "./rendererProfiles";
 
 /**
  * Роль гейта в вердикте (свёртка D10):
@@ -139,9 +140,29 @@ const PIXEL_STRICT_V1: AcceptancePolicy = {
   readiness: barrierAwareReadinessPolicy("acceptance-strict"),
 };
 
+/**
+ * **Третий профиль — с исключениями** (EUI-BR-07, план 2026-08-08 §7, ревью M8).
+ *
+ * До волны `pass_with_exceptions` был недостижим: `exceptions[]` не писал никто, а `allowExceptions`
+ * выключен в обоих профилях. Волна заводит первого продюсера исключений (профили политики
+ * рендерера, `rendererProfiles.ts`) — и вместе с ним обязана завести профиль, под которым такой
+ * ран что-то значит. Трогать существующие профили нельзя: их `policyProfileHash` — идентичность
+ * политики, по которой сверяются уже полученные вердикты, и `allowExceptions: true` в `default-v1`
+ * задним числом переопределил бы смысл всего накопленного корпуса.
+ *
+ * Дельта к `default-v1` ровно одна (`allowExceptions`) — намеренно: профиль отвечает на вопрос
+ * «допускаются ли объяснённые исключения», а не «насколько строго мерить».
+ */
+const DEFAULT_V1_EXCEPTIONS: AcceptancePolicy = {
+  ...DEFAULT_V1,
+  id: "default-v1-exceptions",
+  allowExceptions: true,
+};
+
 export const ACCEPTANCE_POLICIES = {
   "default-v1": DEFAULT_V1,
   "pixel-strict-v1": PIXEL_STRICT_V1,
+  "default-v1-exceptions": DEFAULT_V1_EXCEPTIONS,
 } as const satisfies Record<string, AcceptancePolicy>;
 
 export type AcceptancePolicyId = keyof typeof ACCEPTANCE_POLICIES;
@@ -160,11 +181,61 @@ export const DEFAULT_ACCEPTANCE_POLICY_ID: AcceptancePolicyId = "default-v1";
  * чужие (`422 unknown_policy_profile`). Он оставлен осознанно (триаж C3): это AC фидбэка и задел
  * под per-DS конфигурацию, а ветка отказа проверяется тестом через инъекцию профиля мимо роута.
  */
-export const PROMOTION_POLICY_PROFILES: readonly AcceptancePolicyId[] = ["default-v1", "pixel-strict-v1"];
+export const PROMOTION_POLICY_PROFILES: readonly AcceptancePolicyId[] =
+  ["default-v1", "pixel-strict-v1", "default-v1-exceptions"];
 
-/** Профиль рана допускает публикацию под ним (см. `PROMOTION_POLICY_PROFILES`). */
-export const isPromotionPolicyProfile = (id: string): boolean =>
-  (PROMOTION_POLICY_PROFILES as readonly string[]).includes(id);
+/**
+ * Профиль рана допускает публикацию под ним (см. `PROMOTION_POLICY_PROFILES`).
+ *
+ * BR-07: `default-v1-exceptions` промоутабелен **только при включённых профилях политики
+ * рендерера**. Тумблер `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1` — своя ось именно потому, что
+ * он меняет promote-eligibility: под ним исключений никто не производит, и профиль, чей
+ * единственный смысл — их допускать, обязан перестать допускать публикацию, а не молча
+ * превращаться во второй `default-v1`.
+ */
+export const isPromotionPolicyProfile = (id: string): boolean => {
+  if (!(PROMOTION_POLICY_PROFILES as readonly string[]).includes(id)) return false;
+  return id !== "default-v1-exceptions" || rendererPolicyProfilesEnabled();
+};
+
+/**
+ * **Субъектная промоутабельность** (EUI-BR-08, план §8): предикат, который читает promote-гейт,
+ * когда набор объявил `comparison.ownership: "subject-and-integration"`.
+ *
+ * Врезка в сагу promote этой волной **не делается** (зона пересекается с BR-01) — здесь живёт
+ * готовый предикат и его тесты, чтобы врезка была одной строкой и не переизобретала правило.
+ *
+ * Правило: субъект промоутабелен, когда его собственный вердикт чист **и** ни один гейт вне
+ * визуального не провален. Провальный интеграционный вердикт при этом сохраняется в квитанции и
+ * не «прощается»: он остаётся вердиктом случая (`foldRunVerdict` не меняется вовсе).
+ */
+export interface SubjectPromotionInput {
+  /** Случаи рана: вердикт случая + субъектный вердикт визуального гейта, если он посчитан. */
+  cases: readonly {
+    verdict: string | null;
+    subjectFailed?: boolean | null;
+    /** Провалы **не**визуальных гейтов случая: их субъектный вердикт не прощает никогда. */
+    nonVisualFailed?: boolean;
+  }[];
+  /** Объявил ли набор владение (без объявления предикат не применим вовсе). */
+  ownershipDeclared: boolean;
+}
+
+export function subjectPromotionEligible(input: SubjectPromotionInput): boolean {
+  if (!input.ownershipDeclared) return false;
+  if (input.cases.length === 0) return false;
+  for (const item of input.cases) {
+    if (item.nonVisualFailed === true) return false;
+    // Субъектный вердикт не посчитан (кейс без карты элементов, re-diff без свежих фактов) —
+    // «не измерено» не бывает «в допуске»: тогда решает обычный вердикт случая.
+    if (item.subjectFailed === undefined || item.subjectFailed === null) {
+      if (item.verdict !== "pass" && item.verdict !== "skipped") return false;
+      continue;
+    }
+    if (item.subjectFailed) return false;
+  }
+  return true;
+}
 
 /**
  * Терминальные вердикты, с которыми ран допускает публикацию (RFC §4.3: `pass_with_exceptions` —

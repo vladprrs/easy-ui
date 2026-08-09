@@ -264,3 +264,27 @@ test("атрибуция: виновник — источник эффекта �
   }));
   expect(key).toBe("near");
 });
+
+test("BR-07: владелец из атрибуции сильнее ближайшего источника эффекта", () => {
+  // Атрибуция посчитана по **той же маске**, что и сам кластер (пиксельно), поэтому «ближайший
+  // источник эффекта» рядом с ней — догадка по коробкам, и решать должна не она.
+  const bbox = { x: 100, y: 100, width: 40, height: 40 };
+  const withOwners = dominantElementKey(bbox, input({
+    elementOwners: [{ elementKey: "s0//span.title", rect: bbox }],
+    geometry: {
+      layoutBounds: { x: 0, y: 0, width: 100, height: 100 },
+      paintBounds: { x: 0, y: 0, width: 100, height: 100 },
+      effectSources: [{ elementKey: "near", cause: "box-shadow:0 2px 8px", rect: { x: 45, y: 45, width: 40, height: 40 } }],
+    },
+  }));
+  expect(withOwners).toBe("s0//span.title");
+  // Владельца без пересечения не бывает: непересёкшаяся запись не отменяет прежнюю атрибуцию.
+  expect(dominantElementKey(bbox, input({
+    elementOwners: [{ elementKey: "elsewhere", rect: { x: 0, y: 0, width: 4, height: 4 } }],
+    geometry: {
+      layoutBounds: { x: 0, y: 0, width: 100, height: 100 },
+      paintBounds: { x: 0, y: 0, width: 100, height: 100 },
+      effectSources: [{ elementKey: "near", cause: "box-shadow:0 2px 8px", rect: { x: 45, y: 45, width: 40, height: 40 } }],
+    },
+  }))).toBe("near");
+});

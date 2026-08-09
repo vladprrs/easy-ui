@@ -26,9 +26,10 @@ import { codesFromReadinessReasons, READINESS_REASON_CODES, type CaptureCode } f
 import {
   CAPTURE_BOOTSTRAP_KEY, CAPTURE_READY_KEY,
   type CaptureBootstrap, type CaptureFontFaceDeclaration, type CaptureFontManifest, type CaptureReady,
+  type CaptureResourceExpectations,
 } from "./protocol";
 import {
-  DEFAULT_READINESS_POLICY, isReadinessPolicy, perResourceTimeoutMs, readinessPolicyHash,
+  barrierPolicyIsV4, DEFAULT_READINESS_POLICY, isReadinessPolicy, perResourceTimeoutMs, readinessPolicyHash,
   type ReadinessBarrierPolicy, type ReadinessPolicy,
 } from "./readinessPolicy";
 import { rectSignature, settleLayout } from "./stability";
@@ -57,6 +58,17 @@ export function bootstrapFontManifest(): CaptureFontManifest | undefined {
   const manifest = readBootstrap()?.fonts;
   if (manifest === undefined || manifest === null || typeof manifest !== "object") return undefined;
   return Array.isArray(manifest.declared) && typeof manifest.manifestHash === "string" ? manifest : undefined;
+}
+
+/**
+ * Ожидания барьера, замороженные сервером на постановке (BR-03). Отсутствуют у джобы доволнового
+ * барьера и у интерактивных путей — тогда фаза `registry` завершается мгновенно, а ожидаемого
+ * манифеста нет.
+ */
+export function bootstrapResourceExpectations(): CaptureResourceExpectations | undefined {
+  const resources = readBootstrap()?.resources;
+  if (resources === undefined || resources === null || typeof resources !== "object") return undefined;
+  return typeof resources.themeIcons === "number" ? resources : undefined;
 }
 
 export interface ReadinessFontFace {
@@ -528,8 +540,63 @@ export function collectThemeAssets(root: ParentNode, elements: Element[]): { ico
 export interface ReadinessResourceEntry {
   /** Стабильный идентификатор ресурса внутри кадра (он же `resourceId` в `ref` кодов). */
   id: string;
-  kind: "img" | "css" | "svg-image";
+  kind: "img" | "css" | "svg-image" | "font" | "icon";
   url: string;
+  /**
+   * Канал обнаружения (BR-03, только политика v4): чем именно страница тянет этот ресурс. `kind`
+   * рядом сохраняется доволновым — по нему уже написаны evidence-артефакты и `detail` кодов.
+   */
+  channel?: ResourceChannel;
+  /** Где ресурс замечен (BR-03, v4). */
+  discoveredAt?: ResourceDiscoveredAt;
+  /** `asset_<sha256>` из URL `/api/assets/...`; внешний URL — `null` (BR-03, v4). */
+  assetId?: string | null;
+  /** Ближайший `data-eui-key` владельца (BR-03, v4); `null` — владелец без ключа. */
+  ownerElementKey?: string | null;
+  /**
+   * **Не цель декода** (BR-03, v4): srcset-кандидат (решение (в) замера V0-D5 — decode-цель только
+   * `currentSrc`, иначе фаза декода утраивается), шрифт (его уже ждёт фаза `fonts`) и объявленный
+   * исходником ассет, которого в кадре не оказалось. Такие записи едут в доказательство, но в
+   * `expected` не попадают: барьер не вправе требовать декода того, чего страница не запрашивала.
+   */
+  reportOnly?: boolean;
+  /**
+   * Только канал `font` (BR-03, v4): статус face'а на момент манифеста. Хранится в записи, потому
+   * что декодом его не выяснить — `document.fonts` единственный источник этого факта.
+   */
+  loaded?: boolean;
+}
+
+/** Каналы манифеста (контракт фидбэка §6, BR-03). */
+export type ResourceChannel =
+  | "img" | "img-srcset" | "css-background" | "css-mask" | "css-content" | "icon-registry" | "font";
+
+/** Как ресурс попал в манифест (контракт фидбэка §6, BR-03). */
+export type ResourceDiscoveredAt = "bundle" | "resolved-tree" | "dom" | "computed-style" | "request";
+
+/**
+ * Пер-ресурсная запись барьера (контракт фидбэка §6, BR-03). Отвечает на вопрос, на который
+ * доволновое `{expected, decoded}` ответить не могло: **что именно** не доехало и чьё оно —
+ * недогруженный ассет называет `assetId`, владельца, канал и фазу отказа.
+ *
+ * `ownerComponentId` на странице всегда `null`: слот-привязки случая живут на сервере, и он
+ * дозаполняет поле при формировании receipt'а, если знает их. Врать здесь ключом слота нельзя —
+ * страница видит DOM, а не состав случая.
+ */
+export interface ReadinessResourceRecord {
+  assetId: string | null;
+  ownerElementKey: string | null;
+  ownerComponentId: string | null;
+  channel: ResourceChannel;
+  discoveredAt: ResourceDiscoveredAt;
+  url: string;
+  requested: boolean;
+  loaded: boolean;
+  decoded: boolean;
+  /** Ресурс доказан **до** отстаивания стабильных кадров (то есть кадр его уже содержал). */
+  completedBeforeStableFrame: boolean;
+  /** Фаза, на которой ресурс остался недоказанным; `null` — доказан либо report-only. */
+  phase: ResourceBarrierPhase | null;
 }
 
 /** Доказательство исполнения барьера — то самое «эхо», без которого гейт при v3 отказывает (§1.5). */
@@ -544,22 +611,53 @@ export interface ReadinessResourceBarrier {
   /** Ресурсы, появившиеся **после** барьера (диф второго снятия манифеста). */
   lateAfterBarrier: string[];
   durationMs: number;
+  /**
+   * Только политика v4 (BR-03): `4`. Блок доказательства аддитивен, и «поля нет» означает ровно
+   * «кадр снят доволновым барьером», а не «волна отработала и ничего не нашла».
+   */
+  policyVersion?: 4;
+  /** Только v4: исход фазы `registry` (ожидание применения реестра иконок темы). */
+  registry?: ReadinessRegistryPhase;
+  /** Только v4: пер-ресурсные записи (контракт фидбэка §6). */
+  resources?: ReadinessResourceRecord[];
+}
+
+/**
+ * Фаза `registry` (BR-03, решение (г) замера V0-D5): ожидание применения темы **до** первого
+ * манифеста. `iconsExpected` объявляет сервер (`bootstrap.resources.themeIcons`) — страница не
+ * умеет отличить «реестр ещё пуст» от «реестра не будет» без гонки, и именно из этой гонки
+ * рождались поздние registry-`<img>`.
+ */
+export interface ReadinessRegistryPhase {
+  iconsExpected: number;
+  iconsObserved: number;
+  waitedMs: number;
+  timedOut: boolean;
 }
 
 export type ResourceDecodeOutcome = "decoded" | "failed" | "timeout";
 
 /** Фазы барьера — первая половина `ref` кодов (`"<phase>:<resourceId>"`). */
-export type ResourceBarrierPhase = "manifest" | "decode" | "fonts" | "frames" | "rediff";
+export type ResourceBarrierPhase = "registry" | "manifest" | "decode" | "fonts" | "frames" | "rediff";
 
 export interface ResourceBarrierOptions {
   barrier: ReadinessBarrierPolicy;
   /** Дедлайн политики целиком: барьер не вправе его пережить, даже если бюджет ещё есть. */
   deadline: number;
+  /**
+   * Ожидания сервера (BR-03, только v4): реестр иконок темы и объявленные исходником ассеты.
+   * Отсутствуют — фаза `registry` завершается мгновенно, а ожидаемого манифеста нет.
+   */
+  expectations?: CaptureResourceExpectations;
   /** Инъекции для тестов; по умолчанию — реальные браузерные механизмы. */
   decode?: (url: string, timeoutMs: number) => Promise<ResourceDecodeOutcome>;
   fontsReady?: () => Promise<unknown> | undefined;
   frame?: () => Promise<void>;
   now?: () => number;
+  /** Сколько иконок в реестре темы прямо сейчас (BR-03, v4); по умолчанию — `__easyUiShared.icons`. */
+  icons?: () => number;
+  /** Шрифты кадра (BR-03, v4, канал `font`); по умолчанию — `document.fonts`. */
+  fontEntries?: () => readonly { family: string; weight: string; style: string; status: string }[];
 }
 
 export interface ResourceBarrierOutcome {
@@ -572,11 +670,94 @@ const CSS_URL_PATTERN = /url\((["']?)([^"')]+)\1\)/g;
 /** Свойства computed style, через которые страница тянет растр помимо `<img>`. */
 const CSS_IMAGE_PROPERTIES = ["backgroundImage", "maskImage", "webkitMaskImage", "borderImageSource", "listStyleImage", "content"] as const;
 
+/**
+ * Канал CSS-свойства (BR-03). `borderImageSource`/`listStyleImage` — тот же фон по природе
+ * (растр, нарисованный коробкой элемента), поэтому отдельного канала не заводят: контракт §6
+ * перечисляет три css-канала, и придумывать четвёртый ради двух редких свойств значило бы
+ * разойтись с объявленным словарём.
+ */
+const CSS_PROPERTY_CHANNELS: Readonly<Record<(typeof CSS_IMAGE_PROPERTIES)[number], ResourceChannel>> = {
+  backgroundImage: "css-background",
+  maskImage: "css-mask",
+  webkitMaskImage: "css-mask",
+  borderImageSource: "css-background",
+  listStyleImage: "css-background",
+  content: "css-content",
+};
+
+/** Псевдоэлементы, чьи ресурсы страница объявляет мимо DOM-узлов (BR-03, решение (б)). */
+const PSEUDO_ELEMENTS = ["::before", "::after"] as const;
+
 const resourceUrlsOfDeclaration = (value: string): string[] => {
   if (!value || !value.includes("url(")) return [];
   CSS_URL_PATTERN.lastIndex = 0;
   return [...value.matchAll(CSS_URL_PATTERN)].map((match) => match[2]!).filter((url) => url.length > 0);
 };
+
+/** Ближайший `data-eui-key` — владелец ресурса в терминах контракта §6. */
+const ownerKeyOf = (element: Element): string | null => {
+  try { return element.closest("[data-eui-key]")?.getAttribute("data-eui-key") ?? null; }
+  catch { return null; }
+};
+
+/**
+ * **Документный предикат псевдо-канала** (решение (б) замера V0-D5): один скан
+ * `document.styleSheets` вместо поэлементного `getComputedStyle(el, pseudo)` по всей выборке.
+ * Нет ни одного правила `::before/::after` с `content|background-image|mask-image` — канал
+ * пропускается целиком (поэлементный предикат некорректен: правило живёт в таблице стилей, а не
+ * на элементе, и при этом экономит всего ~15 %).
+ *
+ * Недоступная таблица (cross-origin) — консервативное `true`: «мы не смогли прочитать» обязано
+ * значить «может быть», иначе чужой стиль-лист молча выключал бы целый канал доказательства.
+ */
+export function documentDeclaresPseudoResources(): boolean {
+  if (typeof document === "undefined") return false;
+  let scanned = 0;
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules: CSSRuleList | undefined;
+    try { rules = (sheet as CSSStyleSheet).cssRules; } catch { return true; }
+    if (rules === undefined) return true;
+    for (const rule of Array.from(rules)) {
+      if (scanned++ > RULE_SCAN_LIMIT) return true;
+      const style = rule as CSSStyleRule;
+      if (typeof style.selectorText !== "string") continue;
+      if (!/::?(before|after)\b/.test(style.selectorText)) continue;
+      const text = style.cssText ?? "";
+      if (/(?:^|[;{\s])(?:content|background-image|mask-image|-webkit-mask-image)\s*:/.test(text)) return true;
+    }
+  }
+  return false;
+}
+
+/** Кандидаты `srcset` одного `<img>` (report-only канал, решение (в)). */
+export function srcsetCandidates(value: string | null): string[] {
+  if (!value) return [];
+  return value.split(",")
+    .map((part) => part.trim().split(/\s+/, 1)[0] ?? "")
+    .filter((url) => url.length > 0);
+}
+
+/** Опции манифеста волны BR-03; отсутствие объекта — доволновое поведение байт-в-байт. */
+export interface ResourceManifestOptions {
+  /** Каналы и пер-ресурсные поля волны (политика v4). */
+  channels: boolean;
+  /** Ожидаемые ассеты кандидата/overlay (`bootstrap.resources.expectedAssets`). */
+  expectedAssets?: readonly string[];
+  /** Шрифты кадра; по умолчанию — `document.fonts`. */
+  fontEntries?: readonly { family: string; weight: string; style: string; status: string }[];
+}
+
+/** Шрифты кадра из `document.fonts` — канал `font` (декода не требует: его ждёт фаза `fonts`). */
+function documentFontEntries(): { family: string; weight: string; style: string; status: string }[] {
+  if (typeof document === "undefined" || !document.fonts) return [];
+  const faces: { family: string; weight: string; style: string; status: string }[] = [];
+  try {
+    document.fonts.forEach((face) => {
+      faces.push({ family: face.family, weight: face.weight, style: face.style, status: face.status });
+    });
+  } catch { return []; }
+  return faces;
+}
 
 /**
  * Манифест ресурсов кадра: computed-стили выборки элементов (фон, маска, border-image, list-style,
@@ -590,29 +771,131 @@ export function collectResourceManifest(
   root: ParentNode,
   elements: Element[],
   limit: number,
-): { entries: ReadinessResourceEntry[]; total: number; overflow: boolean } {
+  options?: ResourceManifestOptions,
+): { entries: ReadinessResourceEntry[]; total: number; overflow: boolean; pseudoOverflow: boolean } {
+  const channels = options?.channels === true;
   const seen = new Map<string, ReadinessResourceEntry>();
-  const add = (kind: ReadinessResourceEntry["kind"], url: string): void => {
+  const add = (
+    kind: ReadinessResourceEntry["kind"],
+    url: string,
+    extra?: Omit<ReadinessResourceEntry, "id" | "kind" | "url">,
+  ): void => {
     const trimmed = url.trim();
     if (trimmed.length === 0 || trimmed === "none" || trimmed.startsWith("#")) return;
-    if (!seen.has(trimmed)) seen.set(trimmed, { id: trimmed, kind, url: trimmed });
+    if (seen.has(trimmed)) return;
+    // Доволновая форма записи обязана остаться прежней: при выключенных каналах ни одного
+    // дополнительного ключа в объекте нет (evidence сравнивают побайтово).
+    seen.set(trimmed, channels
+      ? { id: trimmed, kind, url: trimmed, ...(extra ?? {}) }
+      : { id: trimmed, kind, url: trimmed });
+  };
+  const iconUrls = channels ? themeIconUrls() : new Set<string>();
+  const iconAssetIds = new Set([...iconUrls].map((url) => assetIdOf(url) ?? url));
+  /** Канал ресурса с поправкой на реестр темы: registry-иконка — это `icon-registry`, а не `img`. */
+  const channelOf = (url: string, fallback: ResourceChannel): ResourceChannel => {
+    if (!channels) return fallback;
+    const id = assetIdOf(url);
+    return iconUrls.has(url) || (id !== null && iconAssetIds.has(id)) ? "icon-registry" : fallback;
   };
   for (const element of elements) {
     let computed: CSSStyleDeclaration | null = null;
     try { computed = getComputedStyle(element); } catch { computed = null; }
     if (!computed) continue;
     for (const property of CSS_IMAGE_PROPERTIES) {
-      for (const url of resourceUrlsOfDeclaration((computed as unknown as Record<string, string>)[property] ?? "")) add("css", url);
+      for (const url of resourceUrlsOfDeclaration((computed as unknown as Record<string, string>)[property] ?? "")) {
+        add("css", url, {
+          channel: channelOf(url, CSS_PROPERTY_CHANNELS[property]),
+          discoveredAt: "computed-style",
+          assetId: assetIdOf(url),
+          ownerElementKey: ownerKeyOf(element),
+        });
+      }
     }
   }
-  for (const image of root.querySelectorAll("img")) add("img", image.currentSrc || image.src || image.getAttribute("src") || "");
+  for (const image of root.querySelectorAll("img")) {
+    const url = image.currentSrc || image.src || image.getAttribute("src") || "";
+    add("img", url, {
+      channel: channelOf(url, "img"),
+      discoveredAt: "dom",
+      assetId: assetIdOf(url),
+      ownerElementKey: ownerKeyOf(image),
+    });
+  }
   // Inline-SVG `<image>`: `href`/`xlink:href` мимо `querySelectorAll("img")` — именно этот класс
   // ресурсов доволновая readiness не видела вовсе.
   for (const image of root.querySelectorAll("image")) {
-    add("svg-image", image.getAttribute("href") ?? image.getAttribute("xlink:href") ?? "");
+    const url = image.getAttribute("href") ?? image.getAttribute("xlink:href") ?? "";
+    add("svg-image", url, {
+      channel: channelOf(url, "img"),
+      discoveredAt: "dom",
+      assetId: assetIdOf(url),
+      ownerElementKey: ownerKeyOf(image),
+    });
   }
+
+  // ---- каналы волны BR-03 (только политика v4) ----
+  let pseudoOverflow = false;
+  if (channels) {
+    // srcset — **report-only** (решение (в)): decode-цель только `currentSrc`, иначе фаза декода
+    // утраивается на каждом responsive-изображении при пер-ресурсном потолке до 1000 мс.
+    for (const image of root.querySelectorAll("img")) {
+      for (const url of srcsetCandidates(image.getAttribute("srcset"))) {
+        add("img", url, {
+          channel: "img-srcset", discoveredAt: "dom",
+          assetId: assetIdOf(url), ownerElementKey: ownerKeyOf(image), reportOnly: true,
+        });
+      }
+    }
+    // Псевдоэлементы — под документным предикатом (решение (б)) и под общим потолком выборки
+    // (решение (а)): переполнение честно фиксируется, а не режется молча.
+    if (documentDeclaresPseudoResources() && typeof getComputedStyle === "function") {
+      const total = root.querySelectorAll("*").length;
+      pseudoOverflow = total > ELEMENT_SAMPLE_LIMIT;
+      for (const element of elements.slice(0, ELEMENT_SAMPLE_LIMIT)) {
+        for (const pseudo of PSEUDO_ELEMENTS) {
+          let computed: CSSStyleDeclaration | null = null;
+          try { computed = getComputedStyle(element, pseudo); } catch { computed = null; }
+          if (!computed) continue;
+          for (const property of CSS_IMAGE_PROPERTIES) {
+            for (const url of resourceUrlsOfDeclaration((computed as unknown as Record<string, string>)[property] ?? "")) {
+              add("css", url, {
+                channel: channelOf(url, CSS_PROPERTY_CHANNELS[property]),
+                discoveredAt: "computed-style",
+                assetId: assetIdOf(url),
+                ownerElementKey: ownerKeyOf(element),
+              });
+            }
+          }
+        }
+      }
+    }
+    // Шрифты — report-only: декодировать их картинкой нельзя, а ждать уже ждёт фаза `fonts`.
+    // Записи нужны за тем же, за чем весь контракт §6: «шрифт кадра не доехал» обязано быть
+    // видно поимённо, а не только счётчиком `fontsReady:false`.
+    for (const face of options?.fontEntries ?? documentFontEntries()) {
+      add("font", `font:${face.family}|${face.weight}|${face.style}`, {
+        channel: "font", discoveredAt: "dom", assetId: null, ownerElementKey: null,
+        reportOnly: true, loaded: face.status === "loaded",
+      });
+    }
+    // Ожидаемый манифест: ассеты кандидата/overlay, объявленные исходником. Наблюдённые уже в
+    // манифесте (`seen` по URL), необнаружённые едут report-only записью — «объявлено, но кадр
+    // этого не рендерил» обязано быть видно, но обвинять кадр за неотрендеренную ветку нельзя.
+    // Уже наблюдённый ассет второй записью не дублируется: браузер резолвит `img.src` в абсолютный
+    // URL, поэтому ключ `seen` (по URL) сам по себе от дубля не спасает — сверка идёт по `assetId`.
+    const observedAssetIds = new Set([...seen.values()].map((entry) => entry.assetId).filter((id): id is string => id !== null && id !== undefined));
+    for (const assetId of options?.expectedAssets ?? []) {
+      if (observedAssetIds.has(assetId)) continue;
+      const url = `/api/assets/${assetId}`;
+      add("icon", url, {
+        channel: iconAssetIds.has(assetId) ? "icon-registry" : "img",
+        discoveredAt: "bundle", assetId, ownerElementKey: null, reportOnly: true,
+      });
+    }
+  }
+
   const entries = [...seen.values()];
-  return { entries: entries.slice(0, limit), total: entries.length, overflow: entries.length > limit };
+  return { entries: entries.slice(0, limit), total: entries.length, overflow: entries.length > limit, pseudoOverflow };
 }
 
 /** Декод одного ресурса вне DOM поверхности: растр либо есть, либо назван виновником. */
@@ -632,6 +915,15 @@ async function decodeResourceDefault(url: string, timeoutMs: number): Promise<Re
   try { return await Promise.race([decoded, timeout]); }
   finally { if (timer !== undefined) clearTimeout(timer); }
 }
+
+/** Сколько иконок сейчас в реестре темы (`__easyUiShared.icons`, его наполняет `applyActiveTheme`). */
+const sharedIconCount = (): number => {
+  const shared = (globalThis as { __easyUiShared?: { icons?: Record<string, unknown> } }).__easyUiShared;
+  return shared?.icons === undefined || shared.icons === null ? 0 : Object.keys(shared.icons).length;
+};
+
+/** Шаг опроса реестра: кадр анимации по порядку величины, без завязки на rAF (его гоняют тесты). */
+const REGISTRY_POLL_MS = 16;
 
 const nextAnimationFrame = (): Promise<void> =>
   typeof requestAnimationFrame === "function"
@@ -671,9 +963,50 @@ export async function settleResourceBarrier(
     addReason("resource_barrier_timeout");
   };
   const expired = (): boolean => clock() >= barrierDeadline;
+  // BR-03: маркер волны — объявленный под-дедлайн фазы `registry` в самой политике, а не число
+  // версии: испорченный bootstrap с `version:4` без фазы обязан вести себя как v3.
+  const v4 = barrierPolicyIsV4(options.barrier);
+
+  /**
+   * **Фаза `registry`** (BR-03, решение (г)): барьер ждёт применения темы **до** первого манифеста —
+   * иначе registry-`<img>` появляется уже после снятия манифеста и ловится в лучшем случае дифом
+   * (`resource_late_after_barrier`), а в худшем уезжает в кадр недогруженным.
+   *
+   * Ожидание конечно тремя потолками сразу: числом иконок, объявленным сервером (0 ⇒ мгновенный
+   * выход, дедлока без темы нет by construction), собственным под-дедлайном фазы и общим дедлайном
+   * барьера. Исчерпание — типизированный `resource_barrier_timeout` с `ref:"registry:<observed>/<expected>"`.
+   */
+  let registry: ReadinessRegistryPhase | undefined;
+  if (v4) {
+    const iconsExpected = Math.max(0, Math.trunc(options.expectations?.themeIcons ?? 0));
+    const iconsOf = options.icons ?? sharedIconCount;
+    const registryStartedAt = clock();
+    const registryDeadline = Math.min(barrierDeadline, registryStartedAt + (options.barrier.registryDeadlineMs ?? 0));
+    let iconsObserved = iconsOf();
+    let timedOutRegistry = false;
+    while (iconsExpected > 0 && iconsObserved <= 0) {
+      if (clock() >= registryDeadline) { timedOutRegistry = true; break; }
+      await sleep(REGISTRY_POLL_MS);
+      iconsObserved = iconsOf();
+    }
+    registry = {
+      iconsExpected,
+      iconsObserved,
+      waitedMs: Math.round(clock() - registryStartedAt),
+      timedOut: timedOutRegistry,
+    };
+    if (timedOutRegistry) timedOut("registry", `${iconsObserved}/${iconsExpected}`);
+  }
 
   const elements = elementsOf(root);
-  const manifest = collectResourceManifest(root, elements, options.barrier.maxResources);
+  const manifestOptions: ResourceManifestOptions | undefined = v4
+    ? {
+      channels: true,
+      ...(options.expectations?.expectedAssets === undefined ? {} : { expectedAssets: options.expectations.expectedAssets }),
+      ...(options.fontEntries === undefined ? {} : { fontEntries: options.fontEntries() }),
+    }
+    : undefined;
+  const manifest = collectResourceManifest(root, elements, options.barrier.maxResources, manifestOptions);
   if (manifest.overflow) {
     codes.push({
       code: "resource_manifest_overflow", severity: "warning",
@@ -681,14 +1014,31 @@ export async function settleResourceBarrier(
       ref: String(manifest.total),
     });
   }
+  // Переполнение выборки элементов псевдо-канала (решение (а)): тот же класс факта, что и
+  // переполнение манифеста — предел **нашего** доказательства, а не дефект страницы, поэтому тот
+  // же код и та же `warning`. `ref` отличает предмет: `pseudo:<число элементов документа>`.
+  if (manifest.pseudoOverflow) {
+    codes.push({
+      code: "resource_manifest_overflow", severity: "warning",
+      detail: `page renders more than ${ELEMENT_SAMPLE_LIMIT} elements, pseudo-element channel proves the first ${ELEMENT_SAMPLE_LIMIT}`,
+      ref: `pseudo:${root.querySelectorAll("*").length}`,
+    });
+  }
 
+  /** Исход декода по ресурсу — материал пер-ресурсных записей (контракт §6). */
+  const outcomes = new Map<string, { decoded: boolean; phase: ResourceBarrierPhase | null }>();
+  // `expected` — только цели декода: report-only записи (srcset-кандидаты, шрифты, объявленные, но
+  // не отрендеренные ассеты) в предмет доказательства не входят, иначе `expected=decoded` было бы
+  // недостижимо by construction (AC §6). У политики v3 report-only записей нет вовсе.
+  const decodeTargets = manifest.entries.filter((entry) => entry.reportOnly !== true);
   let decoded = 0;
   if (expired() && manifest.entries.length > 0) timedOut("manifest", String(manifest.entries.length));
-  for (const entry of manifest.entries) {
-    if (expired()) { timedOut("decode", entry.id); break; }
+  for (const entry of decodeTargets) {
+    if (expired()) { timedOut("decode", entry.id); outcomes.set(entry.id, { decoded: false, phase: "decode" }); break; }
     const remaining = Math.max(0, barrierDeadline - clock());
     const outcome = await decode(entry.url, Math.min(perResource, remaining));
-    if (outcome === "decoded") { decoded += 1; continue; }
+    if (outcome === "decoded") { decoded += 1; outcomes.set(entry.id, { decoded: true, phase: null }); continue; }
+    outcomes.set(entry.id, { decoded: false, phase: "decode" });
     if (outcome === "timeout") {
       // Пер-ресурсный потолок — производная бюджета, поэтому его исчерпание и есть исчерпание
       // бюджета на этом ресурсе: он назван поимённо, а фаза продолжается для остальных.
@@ -724,23 +1074,71 @@ export async function settleResourceBarrier(
   }
 
   // Повторный диф — единственное доказательство того, что страница **перестала** тянуть ресурсы.
-  const after = collectResourceManifest(root, elementsOf(root), options.barrier.maxResources);
+  const after = collectResourceManifest(root, elementsOf(root), options.barrier.maxResources, manifestOptions);
   const known = new Set(manifest.entries.map((entry) => entry.id));
-  const lateAfterBarrier = after.entries.filter((entry) => !known.has(entry.id)).map((entry) => entry.url);
+  const lateEntries = after.entries.filter((entry) => !known.has(entry.id));
+  const lateAfterBarrier = lateEntries.map((entry) => entry.url);
   for (const url of lateAfterBarrier.slice(0, 10)) {
     codes.push({ code: "resource_late_after_barrier", severity: "error", detail: "resource appeared after the barrier settled", ref: url });
   }
   if (lateAfterBarrier.length > 0) addReason("resource_late_after_barrier");
   if (expired() && lateAfterBarrier.length === 0 && reasons.length === 0) timedOut("rediff", String(after.entries.length));
 
+  /**
+   * Пер-ресурсные записи (контракт фидбэка §6). Строятся **после** всех фаз: только здесь известно
+   * и то, что декодировано, и то, что приехало поздно. `completedBeforeStableFrame` буквален —
+   * ресурс доказан до отстаивания кадров; поздний ресурс его по определению не проходил.
+   */
+  const afterById = new Map(after.entries.map((entry) => [entry.id, entry]));
+  const recordOf = (
+    entry: ReadinessResourceEntry,
+    late: boolean,
+  ): ReadinessResourceRecord => {
+    const outcome = outcomes.get(entry.id);
+    const isFont = entry.channel === "font";
+    // Статус шрифта берётся из **второго** манифеста: он снят после фазы `fonts`, и face, который
+    // догрузился внутри барьера, обязан числиться загруженным, а не по снимку первой миллисекунды.
+    const settledFont = afterById.get(entry.id)?.loaded ?? entry.loaded;
+    const proven = isFont ? settledFont === true : outcome?.decoded === true;
+    return {
+      assetId: entry.assetId ?? null,
+      ownerElementKey: entry.ownerElementKey ?? null,
+      // Слот-привязки живут на сервере: страница видит DOM, а не состав случая (см. тип записи).
+      ownerComponentId: null,
+      channel: entry.channel ?? "img",
+      discoveredAt: late ? "request" : (entry.discoveredAt ?? "dom"),
+      url: entry.url,
+      // Report-only запись «объявлено исходником, но не отрендерено» ничего не запрашивала —
+      // и врать `requested: true` про неё нельзя.
+      requested: !late && (entry.discoveredAt !== "bundle"),
+      loaded: proven,
+      decoded: proven,
+      completedBeforeStableFrame: proven && !late,
+      phase: late ? "rediff" : (outcome?.phase ?? (isFont && !proven ? "fonts" : null)),
+    };
+  };
+  const resources = v4
+    ? [
+      ...manifest.entries.map((entry) => recordOf(entry, false)),
+      ...lateEntries.map((entry) => recordOf(entry, true)),
+    ].slice(0, options.barrier.maxResources)
+    : undefined;
+
   return {
     evidence: {
-      expected: manifest.entries.length,
+      // BR-03: предмет доказательства — цели декода. У политики v3 report-only записей нет, и
+      // `decodeTargets.length === manifest.entries.length` байт-в-байт как до волны.
+      expected: decodeTargets.length,
       decoded,
       fontsReady,
       stableFrames,
       lateAfterBarrier: lateAfterBarrier.slice(0, 20),
       durationMs: Math.round(clock() - startedAt),
+      // Блоки волны — условными спредами: доказательство доволнового барьера обязано остаться
+      // байт-в-байт прежним (его сравнивают побайтово в receipt и в артефакте гейта).
+      ...(v4 ? { policyVersion: 4 as const } : {}),
+      ...(registry === undefined ? {} : { registry }),
+      ...(resources === undefined ? {} : { resources }),
     },
     codes,
     reasons,
@@ -832,9 +1230,15 @@ export async function collectReadiness(
   // видела), и доказывает повторным дифом манифеста, что после него ничего не приехало.
   let resourceBarrier: ReadinessResourceBarrier | undefined;
   if (policy.resourceBarrier !== undefined) {
+    // BR-03: ожидания приезжают из bootstrap'а джобы (реестр иконок темы, ассеты кандидата), но
+    // явно переданные тестом/вызывающим сильнее — иначе фикстуру барьера было бы нечем описать.
+    const bootstrapExpectations = barrierPolicyIsV4(policy.resourceBarrier)
+      ? bootstrapResourceExpectations()
+      : undefined;
     const outcome = await settleResourceBarrier(root, {
       barrier: policy.resourceBarrier,
       deadline,
+      ...(bootstrapExpectations === undefined ? {} : { expectations: bootstrapExpectations }),
       ...(options.barrier ?? {}),
     });
     resourceBarrier = outcome.evidence;

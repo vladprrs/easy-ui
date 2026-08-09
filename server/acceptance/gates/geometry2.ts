@@ -17,14 +17,20 @@
  */
 import {
   evaluateGeometryPolicy, geometryVerdictBlocks,
-  type GeometryOverflowSides, type GeometryPolicyRect, type GeometryPolicyResult, type GeometryPolicyVerdict,
-  type GeometryTolerancesInput,
+  type GeometryDecorationSource, type GeometryOverflowSides, type GeometryPolicyRect,
+  type GeometryPolicyResult, type GeometryPolicyVerdict, type GeometryTolerancesInput,
 } from "../../../src/capture/geometryPolicy";
 import { declaresSurfaces, type GeometrySurface, type SurfaceDims } from "../../../src/acceptance/surfaces";
 import type { CaptureCode } from "../../../src/capture/failureCodes";
-import type { GeometryDetail } from "../../../src/capture/geometry.mjs";
+import type { GeometryDetail, GeometryOutOfFlowNode } from "../../../src/capture/geometry.mjs";
 import { putArtifact } from "../evidence";
 import { spawnInkBboxWorker, type RunInkBbox } from "../inkBbox";
+import { captureV4Enabled } from "../../capture/captureV4";
+import { geometryOwnershipEnabled } from "../../capture/geometryOwnership";
+import {
+  caseElementMapOf, markerComponentMap, visualAttributionV2Enabled, type CaseElementMap,
+} from "../../visual/attribution";
+import { geometryOwnershipViolationCodes, type GeometryOwnershipViolation } from "./audit";
 import { captureCase } from "./capture";
 import type { Gate, GateContext, GateResult } from "./types";
 
@@ -38,6 +44,53 @@ export const paintShaKey = (caseId: string): string => `geometry.paint.sha:${cas
  * кадр. Пересчитывать margin из константы вместо факта съёмки нельзя — они обязаны совпадать.
  */
 export const geometryFactsKey = (caseId: string): string => `geometry.facts:${caseId}`;
+
+/**
+ * Ключ мемо: **карта элементов** случая (BR-07 S1). Её читает гейт `visual`, когда переводит узлы
+ * в координаты канвы и просит воркер атрибутировать diff-маску. Мемо, а не чтение артефакта из
+ * CAS: карта уже посчитана этой же съёмкой, и второй источник (артефакт) мог бы разойтись с ней на
+ * re-diff'е — а «атрибуция по чужой карте» хуже отсутствующей атрибуции.
+ */
+export const elementMapKey = (caseId: string): string => `geometry.elementMap:${caseId}`;
+
+/**
+ * Карта элементов случая: факт замера + разметка владения по slot-дереву.
+ *
+ * `subjectComponentId` — объявленный случаем (`comparison.subjectComponentId`, BR-08) либо
+ * компонент-субъект рана. Объявление сильнее: набор, снимающий обёртку с детьми, вправе назвать
+ * субъектом ровно тот компонент, приёмку которого он проводит.
+ */
+export function caseElementMapFor(ctx: GateContext, detail: GeometryDetail | null): CaseElementMap {
+  const subjectComponentId = ctx.case.comparison?.subjectComponentId ?? ctx.candidate.componentId;
+  return caseElementMapOf({
+    elementMap: detail?.elementMap ?? null,
+    subjectComponentId,
+    markers: markerComponentMap(ctx.candidate.componentId, ctx.case.slotBindings),
+  });
+}
+
+/**
+ * `geometry.json` без карты элементов (BR-07 S1).
+ *
+ * Карта живёт **своим** артефактом (`element-map.json`), а не внутри общего замера, по двум
+ * причинам: она на порядок объёмнее всего остального `geometry.json` (до 512 записей на маркер), и
+ * её появление не должно двигать байты артефакта, на котором стоят доволновые потребители. Сбор
+ * при этом ведётся безусловно — опция сбора потребовала бы менять контракт капчур-джобы ради
+ * факта, который на пиксели не влияет.
+ */
+function geometryWithoutElementMap(geometry: Record<string, unknown>): Record<string, unknown> {
+  const details = geometry.details;
+  if (!Array.isArray(details)) return geometry;
+  return {
+    ...geometry,
+    details: details.map((item) => {
+      if (item === null || typeof item !== "object" || !("elementMap" in item)) return item;
+      const rest = { ...(item as Record<string, unknown>) };
+      delete rest.elementMap;
+      return rest;
+    }),
+  };
+}
 export interface GeometryFacts {
   /**
    * Бокс layout-корня в CSS px **относительно внешнего `#eui-capture-surface`**, то есть вместе с
@@ -53,6 +106,16 @@ export interface GeometryFacts {
    */
   rootBounds?: { x: number; y: number; width: number; height: number } | null;
   paintMargin: number | null;
+  /**
+   * **Поле краски кадра по сторонам**, CSS px (BR-02, план 2026-08-08 §2). Присутствует ровно у
+   * кадра, чей случай объявил `paintPaddingPx`.
+   *
+   * Держится **отдельно** от `paintMargin` намеренно (блокер B3 раунда 2): `paintMargin` — это
+   * comparison-owned поле канвы сравнения, и канва обязана оставаться прежней независимо от того,
+   * каким полем снят кадр. Асимметричное поле кадра приводится к канве сравнения кропом/подстановкой
+   * кандидатского растра в гейте `visual`, а не сдвигом самой канвы.
+   */
+  paintPadding?: { top: number; right: number; bottom: number; left: number } | null;
   deviceScaleFactor: number;
 }
 
@@ -228,6 +291,60 @@ export function referenceExportCodes(measurement: ReferenceExportMeasurement, ct
   }];
 }
 
+/**
+ * Поле кадра по сторонам для политики (BR-02): объявленное per-side либо скаляр, растянутый на все
+ * четыре стороны. `null`-маргин (кадр, чьего поля мы не знаем) даёт `undefined` — политика тогда
+ * остаётся на доволновой безликой причине, а не выдумывает числа.
+ */
+export function paintFieldOf(
+  padding: { top: number; right: number; bottom: number; left: number } | null,
+  margin: number | null,
+): { top: number; right: number; bottom: number; left: number } | undefined {
+  if (padding !== null) return { ...padding };
+  return margin === null ? undefined : { top: margin, right: margin, bottom: margin, left: margin };
+}
+
+/**
+ * Ink clamp типизированным кодом (BR-02). Раньше этот исход был безликим `indeterminate`-reason'ом:
+ * гейт возвращал `indeterminate` **без единого кода**, и отчёт не мог сказать, какой стороне не
+ * хватило поля. `severity: "error"` — кадр непригоден для вердикта краски по названным сторонам.
+ */
+export function paintClippedCodes(policy: GeometryPolicyResult): CaptureCode[] {
+  const clipped = policy.paintClipped;
+  if (clipped === undefined || clipped.sides.length === 0) return [];
+  return [{
+    code: "paint_capture_clipped",
+    severity: "error",
+    detail: `ink touches the ${clipped.sides.join("/")} edge of the capture field`
+      + ` (${clipped.sides.map((side) => `${side} ${clipped.requestedPx[side]}px`).join(", ")});`
+      + ` declare cases[].paintPaddingPx with at least`
+      + ` ${clipped.sides.map((side) => `${side} ${clipped.minimumPx[side]}`).join(", ")} and recapture`,
+    ref: clipped.sides.join("/"),
+  }];
+}
+
+/**
+ * Decoration-источники случая (BR-05): узлы вне потока, признанные декорацией — авто-правилом
+ * замера (pre-transform коробка вложена в контур) либо декларацией `cases[].geometryOwnership`.
+ *
+ * Пустой список при выключенной группе — единственный способ оставить вердикт доволновым
+ * байт-в-байт: `evaluateGeometryPolicy` без `decorationSources` исполняет прежний код целиком.
+ */
+export function decorationSourcesOf(detail: GeometryDetail | null): GeometryDecorationSource[] {
+  const nodes: readonly GeometryOutOfFlowNode[] = detail?.outOfFlowNodes ?? [];
+  return nodes
+    .filter((node) => node.role === "decoration")
+    .map((node) => ({
+      ...(node.elementKey ? { elementKey: node.elementKey } : {}),
+      ...(node.elementPath ? { elementPath: node.elementPath } : {}),
+      causes: [...node.causes],
+      bounds: node.postTransformPaintBounds,
+      preTransformBounds: node.preTransformBounds,
+      transform: node.transform,
+      roleSource: node.roleSource ?? "auto",
+    }));
+}
+
 export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWorker): Gate {
   return {
     name: "geometry",
@@ -235,7 +352,21 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
       // Ink-воркер — шов: продакшн спавнит node-подпроцесс, тесты подсовывают чистую функцию,
       // поэтому вердикт политики проверяется без chromium и без pngjs-подпроцесса.
       const runInkBbox = ctx.inkBbox ?? fallbackInkBbox;
-      const capture = await captureCase(ctx, { probe: "paint", geometryDetailKeys: ctx.case.geometryDetailKeys ?? [] });
+      // BR-02: поле краски случая доезжает до съёмки. До волны гейт звал `captureCase` вовсе без
+      // поля, поэтому объявленный per-case `paintPaddingPx` не мог повлиять ни на один пиксель —
+      // случай снимался скалярным дефолтом. Условный спред: случай без декларации (и любой случай
+      // при выключенной группе) ставит джобу байт-в-байт прежней.
+      const paintPadding = captureV4Enabled() ? ctx.case.paintPaddingPx : undefined;
+      // BR-05: декларация владения доезжает до браузера — она меняет **интерпретацию замера**
+      // (объявленный узел перестаёт быть кандидатом в корень), поэтому её место рядом с полем
+      // краски, а не в вердикте. Условный спред: случай без декларации ставит джобу как раньше.
+      const geometryOwnership = geometryOwnershipEnabled() ? ctx.case.geometryOwnership : undefined;
+      const capture = await captureCase(ctx, {
+        probe: "paint",
+        ...(paintPadding === undefined ? {} : { paintPadding }),
+        ...(geometryOwnership === undefined ? {} : { geometryOwnership }),
+        geometryDetailKeys: ctx.case.geometryDetailKeys ?? [],
+      });
       const geometry = capture.geometry ?? {};
       const detail = rootDetail(geometry);
       const image = capture.image;
@@ -264,6 +395,13 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
       const rootBounds = isRect(rootBoundsFact) ? rootBoundsFact : null;
       const rootClip = detail?.rootClip ?? null;
       const referenceExport = referenceExportDimsOf(ctx);
+      const decorationSources = geometryOwnershipEnabled() ? decorationSourcesOf(detail) : [];
+      // BR-05: злоупотребление декларацией — отказ по фактам замера (правило и код живут в
+      // `gates/audit.ts`, см. там же объяснение, почему точка применения здесь).
+      const ownershipViolations = (geometryOwnershipEnabled()
+        ? (detail as (GeometryDetail & { ownershipViolations?: GeometryOwnershipViolation[] }) | null)?.ownershipViolations
+        : undefined) ?? [];
+      const ownershipCodes = geometryOwnershipViolationCodes(ownershipViolations);
       const policy = evaluateGeometryPolicy({
         layoutBounds: detail?.layoutBounds ?? null,
         paintBounds,
@@ -274,6 +412,13 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         rootBounds,
         rootClip,
         referenceExportDims: referenceExport.dims,
+        // BR-02: поле кадра по сторонам — вход **называния** ink clamp'а. У скалярного кадра это
+        // четыре равные стороны фактического маргина съёмки; поля нет вовсе, когда группа
+        // выключена, и тогда вердикт остаётся доволновым байт-в-байт.
+        ...(captureV4Enabled() ? { paintField: paintFieldOf(capture.paintPadding ?? null, capture.paintMargin ?? null) } : {}),
+        // BR-05: decoration-источники — условный вход. При выключенной группе список пуст и ключ
+        // не кладётся вовсе, поэтому вердикт остаётся доволновым байт-в-байт.
+        ...(decorationSources.length === 0 ? {} : { decorationSources }),
         tolerances,
       });
 
@@ -294,6 +439,13 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         paintBoundsSource: paintBounds ? "alpha" : null,
         paintBoundsPixels: ink.ok ? ink.pixelBounds : null,
         paintClamped: ink.ok ? ink.clamped : null,
+        // BR-02: чем кадр снят (условный ключ — скалярный кадр остаётся доволновым байт-в-байт).
+        ...(capture.paintPadding === undefined ? {} : { paintPadding: capture.paintPadding }),
+        ...(policy.paintClipped === undefined ? {} : { paintClipped: policy.paintClipped }),
+        // BR-05: владение геометрией — условные ключи; доволновой кадр их не несёт.
+        ...(decorationSources.length === 0 ? {} : { decorationSources }),
+        ...(policy.paintOwnership === undefined ? {} : { paintOwnership: policy.paintOwnership }),
+        ...(ownershipViolations.length === 0 ? {} : { geometryOwnershipViolations: ownershipViolations }),
         ...(ink.ok ? {} : { inkError: ink.error }),
         policyVerdict: policy.policyVerdict,
         overflow: policy.overflow,
@@ -304,8 +456,16 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         ...surfaceFacts(policy),
         effectSources: detail?.effectSources ?? [],
         clipChain: detail?.clipChain ?? [],
-        geometry,
+        geometry: geometryWithoutElementMap(geometry),
       };
+      // BR-07 S1: карта элементов — отдельный артефакт и мемо для гейта `visual`. Под опущенным
+      // kill-switch'ем не пишется вовсе: evidence случая остаётся доволновым byte-for-byte.
+      if (visualAttributionV2Enabled()) {
+        const elementMap = caseElementMapFor(ctx, detail);
+        ctx.shared.set(elementMapKey(ctx.case.caseId), elementMap);
+        const mapArtifact = await putArtifact(ctx.dataDir, elementMap as unknown as Record<string, unknown>);
+        artifacts.push({ name: "element-map.json", sha256: mapArtifact.sha256, bytes: mapArtifact.bytes });
+      }
       // W5: факты кадра — вход канонической канвы визуального сравнения (см. `geometryFactsKey`).
       ctx.shared.set(geometryFactsKey(ctx.case.caseId), {
         layoutBounds: isRect(record.layoutBounds)
@@ -313,6 +473,8 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           : null,
         rootBounds,
         paintMargin: record.paintMargin,
+        // BR-02: capture-поле едет рядом с comparison-margin, не вместо него.
+        ...(capture.paintPadding === undefined ? {} : { paintPadding: capture.paintPadding }),
         deviceScaleFactor: ctx.surface.dsf,
       } satisfies GeometryFacts);
 
@@ -330,11 +492,15 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         .filter(([, verdict]) => verdict.verdict === "not-measured").map(([name]) => name);
       // Инвариант: провал обязан назвать виновника. Иначе — `indeterminate` (D10 всё равно не даст
       // такому случаю `pass`, но вердикт не будет ложно обвинять компонент).
-      const status = policy.policyVerdict === "indeterminate" ? "indeterminate"
+      // BR-05: злоупотребление декларацией — **названный** провал, и он сильнее любого вердикта
+      // краски: декларация, выкидывающая из union in-flow контейнер, делает сам замер неверным.
+      const status = ownershipCodes.length > 0 ? "fail"
+        : policy.policyVerdict === "indeterminate" ? "indeterminate"
         : blocks ? (named ? "fail" : "indeterminate")
         : unmeasuredSurfaces.length > 0 ? "indeterminate"
         : "pass";
       const detailMessage = status === "pass" ? undefined
+        : ownershipCodes.length > 0 ? ownershipCodes.map((code) => code.detail).join("; ")
         : named || policy.reasons.length > 0
           ? policy.reasons.join("; ")
           : `paint overflow (${policy.policyVerdict}) without an attributable descendant effect`;
@@ -350,6 +516,8 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           // кадра, если поверхность их принесла: paint-джоба несёт доказательство).
           codes: [
             ...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons, policy.divergingSurfaces ?? []),
+            ...paintClippedCodes(policy),
+            ...ownershipCodes,
             ...referenceExportCodes(referenceExport, ctx),
             ...(capture.readiness?.readinessCodes ?? []),
           ],
@@ -362,6 +530,13 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           paintBoundsSource: record.paintBoundsSource,
           paintClamped: record.paintClamped,
           paintMargin: record.paintMargin,
+          // BR-02: поле кадра и названный ink clamp — условные ключи; доволновой кадр их не несёт.
+          ...(capture.paintPadding === undefined ? {} : { paintPadding: capture.paintPadding }),
+          ...(policy.paintClipped === undefined ? {} : { paintClipped: policy.paintClipped }),
+          // BR-05: те же условные ключи — вход пересчёта вердикта без пересъёмки.
+          ...(decorationSources.length === 0 ? {} : { decorationSources }),
+          ...(policy.paintOwnership === undefined ? {} : { paintOwnership: policy.paintOwnership }),
+          ...(ownershipViolations.length === 0 ? {} : { geometryOwnershipViolations: ownershipViolations }),
           deviceScaleFactor: ctx.surface.dsf,
           overflow: policy.overflow,
           expectedGeometryDelta: policy.expectedGeometryDelta,

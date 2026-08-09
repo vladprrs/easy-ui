@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeGeometry, collectGeometry, GEOMETRY_CONTRACT_VERSION, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
+import { analyzeGeometry, collectGeometry, ELEMENT_MAP_NODE_LIMIT, GEOMETRY_CONTRACT_VERSION, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
 
 type Box = { left:number; top:number; right:number; bottom:number; width:number; height:number; x:number; y:number; toJSON():unknown };
 const box = (left:number, top:number, width:number, height:number):Box => ({ left, top, right:left+width, bottom:top+height, width, height, x:left, y:top, toJSON(){ return this; } });
@@ -392,6 +392,152 @@ describe("layout bounds and attribution", () => {
       expect(plain.details).toBeUndefined();
       expect(plain.detailKeys).toBeUndefined();
       expect(collectGeometry({ detailKeys: [] }).details).toHaveLength(1);
+    } finally { restore(); }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// BR-09 — владение переливом FlowRoot (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §9).
+// Фикстура фидбэка §12: экран 390 px и два горизонтальных rail'а с контентом 552 px.
+// ---------------------------------------------------------------------------------------------
+
+describe("BR-09 · overflow ownership", () => {
+  const FLOW = box(0, 0, 390, 844);
+  /** Каждый rail — маркер `display:contents` со своим scrollport'ом (`overflow-x:auto`). */
+  const RAIL_HTML = `<div id="eui-capture-surface" data-rect="flow">`
+    + `<span data-eui-key="rail-a" style="display:contents"><div data-rect="port-a" style="overflow-x:auto"><div data-rect="strip-a"></div></div></span>`
+    + `<span data-eui-key="rail-b" style="display:contents"><div data-rect="port-b" style="overflow-x:auto"><div data-rect="strip-b"></div></div></span>`
+    + `</div>`;
+  const RECTS = {
+    flow: FLOW,
+    "port-a": box(0, 100, 390, 120), "strip-a": box(0, 100, 552, 120),
+    "port-b": box(0, 300, 390, 120), "strip-b": box(0, 300, 552, 120),
+  };
+  const DECLARED = {
+    "rail-a": { axis: "x" as const, mode: "scroll" as const, expectedContentOverflow: true },
+    "rail-b": { axis: "x" as const, mode: "scroll" as const },
+  };
+  const measure = (options: Parameters<typeof collectGeometry>[0] = {}) => {
+    document.body.innerHTML = RAIL_HTML;
+    const restore = installRects(RECTS);
+    try { return collectGeometry(options); }
+    finally { restore(); }
+  };
+
+  it("без деклараций перелив rail'ов раздувает габарит экрана и даёт top-level warning", () => {
+    const geometry = measure();
+    expect(geometry.content).toMatchObject({ width: 552 });
+    expect("overflowOwners" in geometry).toBe(false);
+    const analysis = analyzeGeometry(geometry);
+    expect(analysis.issues.map((issue) => issue.code)).toEqual(["content-clipped-by-frame"]);
+    expect(analysis.issues[0]!.detail).toMatchObject({ overflowRight: 162 });
+  });
+
+  it("с декларациями warning исчезает, а rail'ы сохраняют свои content bounds 552", () => {
+    const geometry = measure({ overflowOwnership: DECLARED });
+    // Габарит экрана — окно, а не лента: вклад поддерева ограничен границей scrollport'а по x.
+    expect(geometry.content).toMatchObject({ x: 0, width: 390 });
+    // …и при этом перелив никуда не делся из замера — он получил владельца.
+    expect(geometry.overflowOwners).toHaveLength(2);
+    expect(geometry.overflowOwners![0]).toMatchObject({
+      key: "rail-a", axis: "x", mode: "scroll",
+      scrollportBounds: { x: 0, y: 100, width: 390, height: 120 },
+      scrollContentBounds: { x: 0, y: 100, width: 552, height: 120 },
+      ownedOverflowPx: 162, crossAxisOverflowPx: 0,
+      expectedContentOverflow: true, contentOverflowObserved: true,
+    });
+    // Клип объявлен самим scrollport'ом — он и есть звено цепочки внутри маркера.
+    expect(analyzeGeometry(geometry).issues).toEqual([]);
+    // `rects[]` не тронут: на нём стоят существующие потребители probe'а.
+    expect(geometry.rects.map((rect) => rect.width)).toEqual([552, 552]);
+  });
+
+  it("незаявленный перелив продолжает предупреждать — своим кодом unowned-overflow", () => {
+    const geometry = measure({ overflowOwnership: { "rail-a": DECLARED["rail-a"] } });
+    const analysis = analyzeGeometry(geometry);
+    expect(analysis.issues.map((issue) => issue.code)).toEqual(["unowned-overflow"]);
+    expect(analysis.issues[0]!.detail).toMatchObject({ overflowRight: 162 });
+  });
+
+  it("владелец объявлен по x, а поддерево переливается по y — owned-overflow-exceeds-axis", () => {
+    document.body.innerHTML = RAIL_HTML;
+    const restore = installRects({ ...RECTS, "strip-a": box(0, 100, 552, 200) });
+    try {
+      const geometry = collectGeometry({ overflowOwnership: DECLARED });
+      expect(geometry.overflowOwners![0]).toMatchObject({ axis: "x", ownedOverflowPx: 162, crossAxisOverflowPx: 80 });
+      const analysis = analyzeGeometry(geometry);
+      expect(analysis.issues.map((issue) => issue.code)).toEqual(["owned-overflow-exceeds-axis"]);
+      expect(analysis.issues[0]!.detail).toMatchObject({ key: "rail-a", axis: "x", crossAxisOverflowPx: 80 });
+    } finally { restore(); }
+  });
+
+  it("viewportOwner переносит границу окна на названный маркер", () => {
+    const geometry = measure({
+      overflowOwnership: { "rail-a": { axis: "x", mode: "scroll", viewportOwner: "rail-b" } },
+    });
+    // Окно взято у `rail-b` (та же ширина 390) — вклад `rail-a` обрезан по нему.
+    expect(geometry.overflowOwners![0]).toMatchObject({ key: "rail-a", scrollportBounds: { x: 0, y: 300, width: 390 } });
+  });
+});
+
+// --- BR-07 S1 (план 2026-08-08 §7): карта узлов поддерева маркера ---------------------------
+
+describe("element map (BR-07 S1)", () => {
+  const surface = box(0, 0, 400, 400);
+
+  it("заводит запись на узел с путём, боксом, собственным текстом, маркером-владельцем и глубиной", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface">`
+      + `<span data-eui-key="c" style="display:contents">`
+      + `<div data-rect="card" class="card"><span data-rect="title" class="title">Купить</span>`
+      + `<span data-eui-key="s0" style="display:contents"><i data-rect="icon" class="icon"></i></span>`
+      + `</div></span></div>`;
+    const restore = installRects({
+      surface, card: box(10, 10, 200, 60), title: box(20, 20, 80, 20), icon: box(150, 25, 24, 24),
+    });
+    const restoreText = installTextRects({ "Купить": box(20, 20, 80, 20) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["c"] }).details![0]!;
+      const map = detail.elementMap;
+      expect(map.truncated).toBe(false);
+      expect(map.total).toBe(map.nodes.length);
+      const byPath = Object.fromEntries(map.nodes.map((node) => [node.path, node]));
+      expect(byPath["span>div.card"]).toMatchObject({ bbox: { x: 10, y: 10, width: 200, height: 60 }, hasText: false, markerKey: "c", depth: 1 });
+      // Собственная строка — только у узла, в котором она лежит; предок её не наследует.
+      expect(byPath["span>div.card>span.title"]).toMatchObject({ hasText: true, markerKey: "c", depth: 2 });
+      // Узел под вложенным маркером принадлежит **ему**, а не корню: это и есть ownership по слотам.
+      expect(byPath["span>div.card>span>i.icon"]).toMatchObject({ markerKey: "s0", depth: 3, hasText: false });
+    } finally { restoreText(); restore(); }
+  });
+
+  it("вырожденный узел записи не получает, а переполнение потолка видимо флагом truncated", () => {
+    const children = Array.from({ length: ELEMENT_MAP_NODE_LIMIT + 8 }, (_, index) => `<div data-rect="n${index}"></div>`).join("");
+    const zero = `<div data-rect="zero"></div>`;
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface">`
+      + `<span data-eui-key="c" style="display:contents"><div data-rect="card">${zero}${children}</div></span></div>`;
+    const rects: Record<string, ReturnType<typeof box>> = { surface, card: box(0, 0, 400, 400), zero: box(5, 5, 0, 0) };
+    for (let index = 0; index < ELEMENT_MAP_NODE_LIMIT + 8; index += 1) rects[`n${index}`] = box(1, 1, 2, 2);
+    const restore = installRects(rects);
+    try {
+      const map = collectGeometry({ detailKeys: ["c"] }).details![0]!.elementMap;
+      expect(map.nodes).toHaveLength(ELEMENT_MAP_NODE_LIMIT);
+      expect(map.truncated).toBe(true);
+      expect(map.total).toBeGreaterThan(ELEMENT_MAP_NODE_LIMIT);
+      // 0×0 — не факт владения: такой узел не может владеть ни одним пикселем.
+      expect(map.nodes.some((node) => node.path.endsWith("div") && node.bbox.width === 0)).toBe(false);
+    } finally { restore(); }
+  });
+
+  it("карта аддитивна: контракт измерения и существующие поля детали не двигаются", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface">`
+      + `<span data-eui-key="c" style="display:contents"><div data-rect="card"></div></span></div>`;
+    const restore = installRects({ surface, card: box(10, 10, 100, 50) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["c"] }).details![0]!;
+      expect(GEOMETRY_CONTRACT_VERSION).toBe(2);
+      expect(detail.layoutBounds).toEqual({ x: 10, y: 10, width: 100, height: 50 });
+      expect(detail.rootBounds).toEqual({ x: 10, y: 10, width: 100, height: 50 });
+      expect(detail.effectSources).toEqual([]);
+      expect(detail.outOfFlowNodes).toEqual([]);
     } finally { restore(); }
   });
 });

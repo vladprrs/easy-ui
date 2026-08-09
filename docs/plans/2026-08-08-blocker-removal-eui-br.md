@@ -1,6 +1,15 @@
 # План: снятие блокеров EUI-BR-01…10 (фидбэк YP v2 от 2026-08-09)
 
-Статус: **v3 — Stage 2 пройден: два адверсариальных ревью (раунд 1) + контрольное ревью (раунд 2), полный триаж в §15; блокирующих возражений не осталось. Готов к Stage 3 по команде.**
+Статус: **Stage 3 выполнена (волны V0–V5) — см. коммиты ветки `wave/eui-br`. Деплой не производился: merge в `main` (=автодеплой) — после закрытия rollback-window v32–v36 по §13 либо по явной команде. Порядок включения kill-switch'ей, окна инвалидации и go/no-go — `.claude/skills/deploy/SKILL.md` (секция «Wave EUI-BR»); deliverable для координатора миграции — `docs/EASYUI_BLOCKER_REMOVAL_RELEASE_PACKAGE.md`; changelog capability — `docs/server-api.md`.**
+
+Отклонения реализации от плана, зафиксированные по итогам Stage 3 (подробности — в release package и в deploy-скилле):
+
+- **`CASE_FINGERPRINT_ALGO_VERSION` не поднимался** (остался `7`). Планировавшийся bump 7→8 (§0/§13) заменён двумя **условными** входами — `comparisonPolicyVersion` (BR-04, слой сравнения) и `geometryOwnershipPolicyVersion` (BR-05, вердиктный слой): они двигают ровно те случаи, которые теперь судятся по новым правилам, а не обесценивают reuse всего корпуса.
+- **BR-01a и BR-01b гасятся одним тумблером** `EASYUI_SCHEMA_RESOLVER_V2_DISABLED` — «включить только 01a» средствами env невозможно (только сборкой).
+- **V0 опроверг две формулировки блокеров**: клэмпа канвы 24 px не существует (BR-04 — реальные дефекты: недостижимый fail мелких hug-кейсов и слепота к масштабу эталона), tail не расширяет layout union (BR-05 — ломается `rootBoxOf`). Гипотеза H3 (BR-01) ложна, m18 (BR-06) разрешена как путь B — рестарт процесса.
+- **§16 фидбэка закрыт частично**: corpus handoff не получен, before/after — репродукции на синтетических фикстурах; вторая фаза на стороне мигратора (§11 release package).
+
+Исходный статус: v3 — Stage 2 пройден: два адверсариальных ревью (раунд 1) + контрольное ревью (раунд 2), полный триаж в §15; блокирующих возражений не осталось.
 Источник требований: `docs/EASYUI_BLOCKER_REMOVAL_REQUIREMENTS_20260809.md` (далее — «фидбэк»).
 Дата плана: 2026-08-08. Привязки file:line — по `main@3ccc74e` (проверены ревью выборочно, расхождений нет).
 
@@ -25,10 +34,12 @@
 
 Схема компонента добывается четырьмя путями: save — live-import TSX через `snapshotDefinitions` (`server/validation.ts:184-226`); render/status/snap — `pins()`/`headPin()` (`server/repos/prototypes.ts:145-163`); каталог — `definition_meta.propsJsonSchema`; preview-tree — `definition_meta` (схем props не резолвит). Гипотезы root cause 422:
 
-- **H1 (подтверждена чтением кода)**: composition-пины применяются по **имени ко всему документу** (`server/validation.ts:57,152,199-204`) — exact-версия из manifest'а опубликованной композиции перекрывает active для авторских элементов вне композиции;
-- **H2**: readiness зовёт `snapshotDefinitions` по **нераскрытому** документу (`server/readiness.ts:174`);
-- **H3 (вероятно ложная)**: кэш `imported` с ключом `id@rev` (`server/components/pipeline.ts:120-128`) не инвалидируется при promote — но `rev` иммутабелен по содержимому (`Materialized source collision`, `pipeline.ts:38-42`), promote новой версии = новый rev, промаха может и не быть. Red-тест H3 **блокирует** пункт «инвалидация в promote»: не подтвердится — инвалидацию в транзакцию promote не добавляем;
-- **H4**: save-SQL фильтрует по `cr.design_system`, `headPin` — нет.
+**Итоги V0-D1** (тесты `server/schema-resolver-diagnosis.test.ts`, 6 pass):
+
+- **H1 — ПОДТВЕРЖДЕНА, точная репродукция симптома**: composition-пины применяются по имени ко всему документу (`server/validation.ts:57,152,199-204`); авторский элемент вне композиции получает 422 `Unrecognized key` от exact-схемы пина; тот же документ без композиции — 201;
+- **H2 — ПОДТВЕРЖДЕНА, но как слепота, не ложный fail**: readiness по нераскрытому документу (`server/readiness.ts:174`) не падает (`@eui/Composition` — host-примитив), а **не видит** компоненты внутри раскрытия вовсе (`pins=[]`) — структурно не способен поймать prop-ошибку/расхождение версий;
+- **H3 — ЛОЖНАЯ**: `(id, rev)` контентно-иммутабельны через все API-пути (включая re-stage failed-строки); промах кэша `imported` недостижим. **Инвалидация в транзакции promote из дизайна ИСКЛЮЧЕНА**;
+- **H4 — ПОДТВЕРЖДЕНА**: перенос компонента в другую DS + publish v2 ⇒ save видит v1 (фильтр DS), `headPin` — v2 (без фильтра, пин перескакивает в чужую DS).
 
 ### Дизайн — два этапа
 
@@ -89,7 +100,7 @@ AC (фидбэк §5): фикстура «root 343×88, декор вправо 
 - `preloadAssets?: string[]` — **per-case** поле в `caseSetCaseSchema` (optional; слой `perCase.preloadAssets: ["report-only"]`), не в `CaseSurface` — любой ключ `surface` автоматически стал бы кадровым входом вопреки декларации слоя (ревью M2 раунда 2); hint не освобождает сервер от обнаружения.
 - Фикс шимов abi-v2/3/4: `React`, `tokens` и `shared` читаются в call-time; тест «шим импортирован до `ensureEasyUiShared`».
 - Kill-switch-иерархия (ревью C6): `EASYUI_RESOURCE_BARRIER_DISABLED=1` (существующий) — барьер выключен целиком (доволновая политика), приоритетнее; `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1` — барьер работает по v3-политике byte-for-byte. Оба **restart required** (политика читается раз на процесс и питает три отпечатка); смоук-ключ — `acceptance.readinessPolicyVersion`.
-- **Go/no-go по стоимости (ревью C5)**: V0-замер расширенного манифеста (обход pseudo по поддереву, fonts, registry-фаза) на репрезентативной фикстуре; порог прошлой волны — ≤2 с/кейс при 64 кейсах в `runDeadlineMs` 30 мин; при превышении — пересчёт `resourceBarrierBudgetMs`/`resourceBarrierMaxResources` до включения.
+- **Go/no-go по стоимости — GO (V0-D5, реальный chromium-замер)**: расширенный обход стоит +7…32 мс/кейс против порога 2000 мс (запас 2-3 порядка; пессимистичная верхняя оценка 0.12 с/кейс при сохранённом cap 400). Обязательные решения из замера: (а) pseudo-канал под существующим `ELEMENT_SAMPLE_LIMIT=400` (или отдельный `pseudoSampleLimit`), переполнение типизировано; (б) **документный предикат** — один скан `document.styleSheets`: нет правил `::before/::after` с `content|background-image|mask-image` ⇒ pseudo-канал пропускается целиком (поэлементный предикат некорректен и экономит ~15 %); (в) srcset-кандидаты — report-only записи канала, decode-цель только `currentSrc` (иначе фаза decode ×3 при `perResourceTimeoutMs` до 1000 мс); (г) фаза `registry` — под-дедлайн ≤500 мс, мгновенный выход без темы, исчерпание = `resource_barrier_timeout` с `ref:"registry:…"`; (д) `resourceBarrierBudgetMs`/`maxResources` не трогаем; подтверждающий end-to-end замер `settleResourceBarrier` — на фикстуре барьера в V2 (реальный каскад, фаза registry).
 
 AC (фидбэк §6): на фикстуре с registry-иконками через тему форсированный recapture обнаруживает все direct registry images до первого evidence frame, `expected=decoded`, `lateAfterBarrier=[]`; no-image кейсы без лишних deps; повторный recapture не воспроизводит `missing-late-asset`; недогруженный asset называет assetId/owner/channel/phase. Инвариант-тест (ревью minor раунда 2): barrier-код ⇒ `readinessMet=false` **и** сравнивающие гейты пропущены (`readinessBlocksVisual` — «capture не становится visual evidence» держится именно на этом, не на статусе гейта).
 
@@ -101,11 +112,18 @@ AC (фидбэк §6): на фикстуре с registry-иконками чер
 
 Литерала «минимум 24 px» в коде нет. Кандидаты в источники симптома: **(наиболее вероятный, ревью m19)** пара `padTo = root + 2·64` (`gates/visual.ts:~228`) × допуск `maxDimensionDeltaPx=8` (`scripts/visual-diff-worker.mjs:511-521`) — для 16 px корня канва 144 px против «голого» экспорта даёт `indeterminate` по дельте размеров, что снаружи читается как «нормализовано»; минимальный вьюпорт 64×64; минимум браузера. V0-диагностика обязана развести «минимум канвы» и «допуск сводимости».
 
-### Дизайн (`exactContentHugCanvasV1`) — развилка по итогам V0
+### Дизайн (`exactContentHugCanvasV1`) — по итогам V0-D2 (тесты `server/acceptance/gates/hug-canvas-diagnosis.test.ts`, 10 pass)
 
-- **(a) клэмп найден в нашем коде** → правка: crop/comparison canvas exact до 1 CSS px, единый normalization path для reference и candidate; receipt: `rootBounds`, `comparisonCanvasCssPx`, `deviceScaleFactor`, `comparisonCanvasDevicePx`, отсутствие hidden padding. Смена канвы — **comparison-слой ⇒ re-diff корпуса** (не recompute; ревью m22) — сворачивается в то же окно включения, что BR-02.
-- **(b) не воспроизводится сервер-сайд** → evidence-ответ в release package (receipt'ы полного пути со всеми фактическими размерами канв), blocker переадресуется стороне мигратора с element-level evidence — это легитимный исход по §1 фидбэка (п. 4).
-- Тест «16 px кейс проходит без per-case допусков» (`sizeDeltaPx` не используется как обход).
+Развилка разрешена: **клэмпа/минимума канвы нет ни на одном шаге** (проверена сетка вплоть до 1×1). «24» = верхняя граница окна сводимости `16 + maxDimensionDeltaPx(8)` с **молчаливым zero-pad** меньшей картинки до `max(refDims,candDims)` (`visual-diff-worker.mjs:527-528`). Попутно найдены два дефекта хуже заявленного: (а) `rawDiffPct` меряется по всей канве с margin — полностью перекрашенный 16 px компонент даёт 1.23 % < бюджета 2 % ⇒ **fail физически недостижим** для мелких hug-кейсов; (б) эталон не проверяется на масштаб — 1×-экспорт при dsf 2 проходит даже `pixel-strict-v1`. Legacy-ветка без канвы даёт `dimensions_irreconcilable delta 272` — то, что потребитель и читал как «нормализацию».
+
+Правки V2 (все — comparison-слой ⇒ re-diff, покрыты ALGO-bump):
+
+1. при объявленной канве (`padTo !== null`) — **точное** совпадение размеров (delta 0): канва построена сервером по объявленным числам, любая дельта = ошибка декларации;
+2. запрет неявного zero-pad до `max(ref,cand)` при непустом `padTo` (legacy `padTo === null` — как есть);
+3. `rawDiffPct` — по поверхности сравнения (`layoutRoot × dsf`), не по канве с margin (корневой фикс AC «16 px кейс проходит без per-case допусков»);
+4. проверка масштаба эталона: `sourceDims` vs `layoutRoot × dsf` ⇒ типизированный `indeterminate reference_scale_mismatch` (чистая диагностика, вердикт не двигает).
+
+Receipt: `rootBounds`, `comparisonCanvasCssPx`, `deviceScaleFactor`, `comparisonCanvasDevicePx`, отсутствие hidden padding.
 
 Kill-switch — общий `EASYUI_CAPTURE_V4_DISABLED`. AC: шесть синтетических 16 px кейсов без canvas-size indeterminate; остальные visual residuals — re-diff, не подмена вердикта.
 
@@ -119,11 +137,14 @@ Kill-switch — общий `EASYUI_CAPTURE_V4_DISABLED`. AC: шесть синт
 
 ### Дизайн (`geometryDecorationOwnershipV1`) — без source mutation (ревью B1)
 
-Три механизма, по убыванию приоритета:
+**Итоги V0-D3** (тесты `src/capture/decoration-symptom-diagnosis.test.ts`, 8 pass): буквальный симптом «tail расширяет layoutUnion» опровергнут; реальных маршрутов блокера **четыре**: (1) probe-уровень `rects[]`/`content` без фильтра потока включает tail (391×112) — единственное, что видит автор, отсюда неверные `expectedGeometry` → безусловный `layout-overflow`; (2) при честном `expectedGeometry` — `paint-overflow-not-clipped` fail, снимаемый только отключением контроля краски; (3) `expectedSurfaces` по макету → `surface-mismatch` на `paint`, блокирует безусловно; (4) **tail-сиблинг ломает `rootBoxOf`** (`boxedGeneration` считает боксовых детей без учёта потока, `geometry.mjs:397-421`) → `root: not-measured` → вечный indeterminate — ближайшее к «24/36 roots». Фикс `effectReachPx` **исключён из дизайна** — атрибуция уже работает через пост-transform distance; связка с канвой визуала (`visual.ts:225` строит канву без tail, эталон — с tail) — зона BR-02/04.
 
-1. **Автоматическое правило (работает на existing candidates)**: transform/out-of-flow узел, чья pre-transform коробка вложена в layout-union остального поддерева, классифицируется decoration автоматически — не расширяет union, его post-transform rect становится валидным объяснением paint overflow (фикс `effectReachPx`). Это снимает Tooltip-класс без правки TSX.
-2. **Per-case metadata (existing candidates, неоднозначный DOM)**: `geometryOwnership?: Record<selector, {role:"decoration", participatesIn:["paint"]}>` в `caseSetCaseSchema`, адресация `elementKey`+`elementPath` (форматы уже есть в `effectSources`); строгая валидация.
-3. **`data-eui-part` в TSX + definition meta** — усиление для новых ревизий, не условие снятия blocker'а.
+Механизмы, по убыванию приоритета:
+
+1. **Автоматическое правило (existing candidates, без правки TSX)**: transform/out-of-flow узел, чья pre-transform коробка вложена в union остального поддерева, — decoration: (а) **прозрачен для `boxedGeneration`/`rootBoxOf`** (снимает маршрут 4); (б) его post-transform вклад в paint — **легитимный, неблокирующий** overflow (снимает маршрут 2 без `allowPaintOverflow`).
+2. **Per-case metadata (неоднозначный DOM + маршруты 3/5)**: `geometryOwnership?: Record<selector, {role:"decoration", participatesIn:["paint"]}>` в `caseSetCaseSchema`, адресация `elementKey`+`elementPath`; главный потребитель — `expectedSurfaces.paint`/канва визуала: декларация «tail участвует только в paint» позволяет объявить surfaces по макету без `surface-mismatch`.
+3. **Probe-вывод разделяет габариты (маршрут 1)**: `probe:"geometry"`/driver-вывод обязаны различать «paint-габарит» (union post-transform) и «layout-габарит» — иначе авторы продолжат писать декорированные числа в `expectedGeometry`.
+4. **`data-eui-part` в TSX + definition meta** — усиление для новых ревизий, не условие снятия blocker'а.
 
 Измерение (аддитивные факты): для каждого transform/out-of-flow узла — `preTransformBounds` (offset-геометрия), transform matrix, `postTransformPaintBounds`, clip chain, причина включения/исключения из каждой surface.
 
@@ -150,14 +171,18 @@ AC (фидбэк §8): фикстура «tooltip с transform-tail 8×24» — 
 
 ### Диагноз
 
-Фаз уровня run нет — только per-case `GATE_ORDER`. Per-case арифметика 180.5 s подтверждена (3×`JOB_DEADLINE_MS=60_000`+2×250), но **почему терминировался весь 20-кейсовый ран, а не один кейс** — не установлено (ревью m18): V0-диагностика обязана дожать причину (кандидаты: последовательное исчерпание очереди, `CAPTURE_POLL_TIMEOUT_MS`, поведение помпы при недоступном браузере) — от неё зависит, где шов `allocate-renderer`. Durable-фаз нет; на рестарте раны сносятся в `error`; готовый паттерн саги — migration-commit.
+Фаз уровня run нет — только per-case `GATE_ORDER`. **Итоги V0-D4 (m18 разрешена)**: пути «первый кейс упал → весь ран error» в коде нет — цикл кейсов не прерывается, 180.5 s это стоимость одного кейса; наблюдение мигратора почти наверняка **путь B — рестарт процесса**: `sweepNonTerminalRuns` сносит ран в `error`, кейсы залипают `running`/`pending` навсегда, манифест не пишется, in-memory `caseSets`/`surfaces` теряются. Дополнительно установлено: `contract/defaults/audit` «прошли для всех 20» честно — они первые три per-case и капчур не трогают; причина падения кейса (`execution.error`) **не персистится нигде**; у пула `ensure()` нет таймаута; недоступный браузер (501 `screenshot_unavailable`) не считается продуктовым отказом и ретраится, мёртвый рендерер жжёт N×3×60 s без circuit breaker'а; `queue_full` может съесть все попытки всех кейсов за ~15 s без различимого `statusReason`.
 
 ### Дизайн (`acceptanceResumeV1`, миграция v37)
 
 - **Под-этап 1 — phase↔gate mapping + per-gate fingerprints (собственные AC до resume).** Публичные фазы фидбэка §9 мапятся на реальность: `resolve`=resolveCandidateSubject, `validate/compile`=contract/defaults/audit, `allocate-renderer`=спавн/ensure воркера (получает **отдельный таймаут**, отличимый от capture), далее гейты. Run-level `lastCompletedPhase` = минимальная фаза по незавершённым кейсам (документируется). Per-gate fingerprints определяются и пишутся в `gates_json` (без них reuse гейтов был бы «молчаливым reuse», запрещённым §3); замер write-амплификации `persistCase`-после-каждого-гейта на 64-кейсовом ране — go/no-go под-этапа.
 - **Resume = новый run, не воскрешение (ревью B3/B5 обоих пакетов).** Терминальный ран неизменяем (receipts, `evidence_manifest_hash`, promote-инварианты). `POST /api/acceptance-runs/:id/resume` создаёт новую строку с `resumed_from_run_id`, `attempt`, тем же candidate/case-set/policy; идемпотентность — **детерминированный** `idempotency_key = "resume:<sourceRunId>:<attempt>"` (колонка nullable, NULL-ы в SQLite различны — без формулы дедупликации нет; ревью M3); resume уже-resumed рана → `409` с указанием живого/последнего продолжения; lineage несёт также прежние `statusReason`/`phase` («предыдущая ошибка» из §9 фидбэка); конкуренция — существующий `one_in_flight` (SQLITE_CONSTRAINT маппится в типизированный `409 run_in_flight`); CAS-переходы по образцу `server/migration/commit.ts:540-554`. Completed gates переиспользуются только при совпавших per-gate fingerprints; при несовместимости — `409` с указанием нового рана с `supersedesRunId` (reuse компиляции кандидата и non-render гейтов). Это соответствует §9 фидбэка: lineage `resumedFromRunId` и есть ссылка на прежний ран.
+- **Шов `allocate-renderer` — в screenshot-сервисе, не в оркестраторе (V0-D4)**: воркер эмитит веху `{"type":"allocated"}` после `chromium.launch`; до вехи — `ALLOCATE_DEADLINE_MS` (~10-15 s), после — capture-дедлайн (`service.ts:1254` получает оба); у пула — `ensure`-хендшейк с собственным дедлайном, job-дедлайн стартует после подтверждения аллокации. Новые исходы: `renderer_unavailable` (терминальный) и `allocate_timeout`; 501 `screenshot_unavailable` перестаёт ретраиться (`isProductRefusal`); прекондиция `service.available()` один раз до цикла кейсов.
+- **Персист причины**: `error_json` (`{outcome, message, attempts, elapsedMs}`) на строке кейса — без него resume не отличит инфраструктурное падение от продуктового (сегодня причина не пишется нигде).
+- **Circuit breaker**: N подряд кейсов с исходом класса allocate (`renderer_unavailable`/`allocate_timeout`/`queue_full`) ⇒ терминализация рана со `statusReason` (`renderer_unavailable`|`capture_budget_exhausted`|`queue_starvation`) вместо N×3×60 s без evidence.
 - Typed timeout: `CaptureInfraError` несёт `phase`; терминализация — `status:"error", statusReason:"phase_timeout", phase, elapsedMs, lastCompletedPhase, resumable:true, resumeFrom, jobIds`.
-- Restart: sweep помечает `error` + `status_reason:"interrupted", resumable:true` (реконструкция набора уже даёт тот же `frame_fingerprint` — `orchestrator.test.ts:687`).
+- Restart: sweep помечает `error` + `status_reason:"interrupted", resumable:true`; **дизайн resume обязан учитывать путь B**: залипшие `running`/`pending` кейсы считаются незавершёнными по определению (их никто не закрывал), `lastCompletedPhase` не доверяет строкам слепо; реконструкция набора даёт тот же `frame_fingerprint` (`orchestrator.test.ts:687`).
+- Write-амплификация per-gate персиста: три дешёвых гейта — одной записью (group-commit), дорогие — по одному.
 - Driver: verb `accept-resume <runId>`; `accept-status` показывает lineage/attempt.
 
 Kill-switch `EASYUI_ACCEPTANCE_RESUME_DISABLED`. Capability matrix-зависимая (роуты acceptance живут под `EASYUI_ACCEPTANCE_MATRIX=1`).

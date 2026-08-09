@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 import type { RunJob, WorkerJob, WorkerResult } from "./service";
+import { ALLOCATE_DEADLINE_MS } from "./sessions";
 
 const WORKER_PATH = resolve(import.meta.dir, "../../scripts/screenshot-worker.mjs");
 const POOL_WORKER_PATH = resolve(import.meta.dir, "../../scripts/screenshot-pool-worker.mjs");
@@ -10,23 +11,80 @@ const POOL_WORKER_PATH = resolve(import.meta.dir, "../../scripts/screenshot-pool
 function nodeBinary(): string { return process.execPath.includes("bun") ? "node" : process.execPath; }
 
 /**
+ * Веха аллокации в NDJSON-потоке воркера (BR-06). Отличается от результата по построению:
+ * результат всегда несёт булев `ok`, веха — только `type`.
+ */
+export const isAllocatedMilestone = (line: string): boolean => {
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; ok?: unknown };
+    return parsed !== null && typeof parsed === "object" && parsed.type === "allocated" && parsed.ok === undefined;
+  } catch { return false; }
+};
+
+/**
+ * Последняя строка потока, которая **является результатом** (BR-06). До волны бралась просто
+ * последняя непустая строка; с появлением вехи это уже неверно у воркера, умершего после
+ * аллокации: последней строкой стала бы веха, и `{"type":"allocated"}` разобрался бы как «результат
+ * без `ok`». Отбор по наличию `ok` — тот же контракт, что у `WorkerResult`.
+ */
+export function resultLineOf(stdout: string): string | undefined {
+  const lines = stdout.trim().split("\n").filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!;
+    if (isAllocatedMilestone(line)) continue;
+    return line;
+  }
+  return undefined;
+}
+
+/**
  * Production {@link RunJob}: spawns the node screenshot worker in its own
  * process group, streams the job as JSON over stdin, parses the single JSON
  * result from stdout, and kills the whole group on the hard deadline.
+ *
+ * **Шов `allocate-renderer` (BR-06, план 2026-08-08 §6).** Дедлайн делится надвое: до вехи
+ * `{"type":"allocated"}` действует {@link ALLOCATE_DEADLINE_MS}, после — переданный `deadlineMs`,
+ * отсчитываемый заново. Смысл раскола в том, что «браузер не достался» и «съёмка не уложилась» —
+ * разные отказы с разной ценой: первый терминален и виден приёмке как `allocate_timeout`, второй
+ * ретраится как обычный `timeout`. Сообщения обеих ветвей дословно распознаёт `classifyJobFailure`.
  */
 export const spawnPerJobWorker: RunJob = (job: WorkerJob, deadlineMs: number): Promise<WorkerResult> => {
   return new Promise<WorkerResult>((resolvePromise) => {
     const child = spawn(nodeBinary(), [WORKER_PATH], { stdio: ["pipe", "pipe", "pipe"], detached: true });
-    let stdout = ""; let stderr = ""; let settled = false;
+    let stdout = ""; let stderr = ""; let settled = false; let allocated = false; let pending = "";
+    let timer: ReturnType<typeof setTimeout>;
     const finish = (result: WorkerResult) => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise(result); };
     const killGroup = () => { try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ } };
-    const timer = setTimeout(() => { killGroup(); finish({ ok: false, error: `capture timed out after ${deadlineMs}ms` }); }, deadlineMs);
+    timer = setTimeout(
+      () => { killGroup(); finish({ ok: false, error: `renderer allocation timed out after ${ALLOCATE_DEADLINE_MS}ms` }); },
+      ALLOCATE_DEADLINE_MS,
+    );
+    /** Веха увидена: дедлайн аллокации снимается, job-дедлайн стартует с нуля. */
+    const onAllocated = (): void => {
+      if (allocated || settled) return;
+      allocated = true;
+      clearTimeout(timer);
+      timer = setTimeout(() => { killGroup(); finish({ ok: false, error: `capture timed out after ${deadlineMs}ms` }); }, deadlineMs);
+    };
 
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (allocated) return;
+      // Веха ищется построчно и только до её прихода: результат может быть в мегабайты base64,
+      // и сканировать их на каждом чанке было бы дороже самой съёмки.
+      pending += chunk;
+      for (;;) {
+        const index = pending.indexOf("\n");
+        if (index === -1) break;
+        const line = pending.slice(0, index).trim();
+        pending = pending.slice(index + 1);
+        if (line.length > 0 && isAllocatedMilestone(line)) { onAllocated(); return; }
+      }
+    });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", (error) => finish({ ok: false, error: `worker spawn failed: ${error.message}` }));
     child.on("close", () => {
-      const line = stdout.trim().split("\n").filter(Boolean).at(-1);
+      const line = resultLineOf(stdout);
       if (!line) { finish({ ok: false, error: `worker produced no result${stderr ? `: ${stderr.slice(0, 500)}` : ""}` }); return; }
       try { finish(JSON.parse(line) as WorkerResult); }
       catch { finish({ ok: false, error: `worker result was not JSON: ${line.slice(0, 300)}` }); }
@@ -57,7 +115,11 @@ class PoolClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private buffer = "";
   private seq = 0;
-  private readonly pending = new Map<string, { settle: (result: WorkerResult, stats: PoolJobStats | null) => void }>();
+  private readonly pending = new Map<string, {
+    settle: (result: WorkerResult, stats: PoolJobStats | null) => void;
+    /** BR-06: пул подтвердил аллокацию браузера под эту джобу. */
+    allocated: () => void;
+  }>();
   /** Статистика последней завершённой джобы — читается замером, в результат джобы не течёт. */
   lastStats: PoolJobStats | null = null;
 
@@ -89,6 +151,12 @@ class PoolClient {
       let message: { type?: string; id?: string; result?: WorkerResult; pool?: PoolJobStats | null; error?: string };
       try { message = JSON.parse(line); }
       catch { process.stderr.write(`[pool] non-JSON line: ${line.slice(0, 200)}\n`); continue; }
+      // BR-06: веха аллокации адресная (`id` джобы) — у пула ожидающих может быть несколько,
+      // и «браузер достался» относится ровно к той джобе, которую пул взял в работу.
+      if (message.type === "allocated" && typeof message.id === "string") {
+        this.pending.get(message.id)?.allocated();
+        continue;
+      }
       if (message.type === "result" && typeof message.id === "string") {
         const waiter = this.pending.get(message.id);
         this.pending.delete(message.id);
@@ -107,6 +175,9 @@ class PoolClient {
     for (const waiter of waiters) waiter.settle({ ok: false, error: reason }, null);
   }
 
+  /** Есть ли живой процесс пула (BR-06: спавн — часть фазы аллокации). */
+  alive(): boolean { return this.child !== null; }
+
   private killGroup(): void {
     const child = this.child;
     if (child === null) return;
@@ -119,12 +190,20 @@ class PoolClient {
    * пула. При конкуренции capture = 1 (сегодняшний сервис) это эквивалентно per-job семантике;
    * при появлении ручки конкуренции таймаут джобы из очереди убьёт killGroup'ом ВЕСЬ пул вместе
    * с чужим идущим капчуром — дедлайн тогда обязан стартовать при фактическом начале исполнения.
+   *
+   * **Шов `allocate-renderer` (BR-06).** У пула фаза аллокации — это `ensure()` (спавн процесса,
+   * если он умер) плюс `acquire()` внутри воркера (ресайкл/`chromium.launch`), и у неё свой
+   * дедлайн {@link ALLOCATE_DEADLINE_MS}. Job-дедлайн стартует только после адресной вехи
+   * `{"type":"allocated", id}`: до волны холодный старт пула съедал минуту капчура, и «браузер
+   * поднимался 40 s» выглядело как «съёмка не уложилась».
    */
   run(job: WorkerJob, deadlineMs: number): Promise<WorkerResult> {
     return new Promise<WorkerResult>((resolvePromise) => {
       const child = this.ensure();
       const id = `job-${(this.seq += 1)}`;
       let settled = false;
+      let allocated = false;
+      let timer: ReturnType<typeof setTimeout>;
       const settle = (result: WorkerResult, stats: PoolJobStats | null) => {
         if (settled) return;
         settled = true;
@@ -132,15 +211,22 @@ class PoolClient {
         if (stats !== null) this.lastStats = stats;
         resolvePromise(result);
       };
-      const timer = setTimeout(() => {
+      const expire = (message: string) => {
         this.pending.delete(id);
         // Дедлайн в пуле — событие процесса, а не джобы: браузер остался в неизвестном
         // состоянии, поэтому убивается вся группа, а следующая джоба поднимает пул заново.
         this.killGroup();
-        this.fail(`capture timed out after ${deadlineMs}ms`);
-        settle({ ok: false, error: `capture timed out after ${deadlineMs}ms` }, null);
-      }, deadlineMs);
-      this.pending.set(id, { settle });
+        this.fail(message);
+        settle({ ok: false, error: message }, null);
+      };
+      timer = setTimeout(() => expire(`renderer allocation timed out after ${ALLOCATE_DEADLINE_MS}ms`), ALLOCATE_DEADLINE_MS);
+      const onAllocated = () => {
+        if (allocated || settled) return;
+        allocated = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => expire(`capture timed out after ${deadlineMs}ms`), deadlineMs);
+      };
+      this.pending.set(id, { settle, allocated: onAllocated });
       child.stdin.write(`${JSON.stringify({ type: "job", id, job })}\n`);
     });
   }

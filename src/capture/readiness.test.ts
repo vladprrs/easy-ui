@@ -2,14 +2,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { collectCaptureEnv, observedCaptureEnvFingerprint, type CaptureEnvInput } from "./env";
 import { codesFromReadinessReasons, READINESS_REASON_CODES } from "./failureCodes";
 import {
-  collectReadiness, collectResourceManifest, collectThemeAssets, collectThemeTokens, fontFaceShorthand,
-  fontShorthandWeight, requiredFontFaces, settleResourceBarrier, usedFontFamilies,
+  collectReadiness, collectResourceManifest, collectThemeAssets, collectThemeTokens,
+  documentDeclaresPseudoResources, fontFaceShorthand,
+  fontShorthandWeight, requiredFontFaces, settleResourceBarrier, srcsetCandidates, usedFontFamilies,
   type ResourceDecodeOutcome,
 } from "./readiness";
 import type { CaptureFontFaceDeclaration } from "./protocol";
 import { clearRuntimePropsWarningsForTests, recordRuntimePropsWarning } from "../catalog/runtimeDefaults";
 import {
-  BARRIER_READINESS_POLICY, canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy,
+  BARRIER_READINESS_POLICY, BARRIER_READINESS_POLICY_V3, BARRIER_READINESS_POLICY_V4,
+  barrierPolicyIsV4, canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy,
   perResourceTimeoutMs, readinessPolicyHash, STRICT_READINESS_POLICY, type ReadinessPolicy,
 } from "./readinessPolicy";
 
@@ -554,5 +556,236 @@ describe("resource barrier (W2)", () => {
     // Пер-ресурсный потолок — производная бюджета, а не отдельная ручка политики.
     expect(perResourceTimeoutMs(barrier)).toBe(1_000);
     expect(perResourceTimeoutMs({ ...barrier, budgetMs: 800 })).toBe(500);
+  });
+});
+
+// ------------------------------------------------------------------ BR-03 (план 2026-08-08 §3)
+
+/**
+ * Полный registry-resource barrier. Предмет тестов — AC §3 плана: registry-иконки, приезжающие
+ * темой, обнаруживаются **до** первого evidence frame; `expected=decoded`; `lateAfterBarrier=[]`;
+ * кейс без картинок не обзаводится лишними зависимостями; недогруженный ассет назван поимённо
+ * (assetId/owner/channel/phase). Плюс инвариант байтовой совместимости: политика v3 — прежняя.
+ */
+describe("resource barrier v4 (BR-03)", () => {
+  const surface = (html: string): HTMLElement => {
+    const root = document.createElement("div");
+    root.id = "eui-capture-surface";
+    root.innerHTML = html;
+    document.body.append(root);
+    return root;
+  };
+  const barrier4 = BARRIER_READINESS_POLICY_V4.resourceBarrier!;
+  const barrier3 = BARRIER_READINESS_POLICY_V3.resourceBarrier!;
+  const decodeAll = async (): Promise<ResourceDecodeOutcome> => "decoded";
+  const options = { decode: decodeAll, fontsReady: () => Promise.resolve(), frame: () => Promise.resolve() };
+  /** Реестр темы: тот же объект, что наполняет `applyActiveTheme`. */
+  const installRegistry = (icons: Record<string, { assetUrl: string }>): void => {
+    (globalThis as { __easyUiShared?: Record<string, unknown> }).__easyUiShared = { icons };
+  };
+  const clearRegistry = (): void => {
+    delete (globalThis as { __easyUiShared?: unknown }).__easyUiShared;
+  };
+  afterEach(() => { clearRegistry(); for (const style of document.querySelectorAll("style[data-test]")) style.remove(); });
+
+  it("фаза registry дожидается темы: registry-иконка попадает в манифест, expected=decoded, поздних нет", async () => {
+    const root = surface("<div data-eui-key=\"root/0\"></div>");
+    // Тема доезжает **после** старта барьера — ровно та гонка, из которой рождались поздние
+    // registry-<img>: до волны манифест снимался раньше, чем `applyActiveTheme` наполнял реестр.
+    let polls = 0;
+    const icons = (): number => {
+      polls += 1;
+      if (polls === 2) {
+        installRegistry({ star: { assetUrl: "/api/assets/asset_star" } });
+        const image = document.createElement("img");
+        image.setAttribute("src", "/api/assets/asset_star");
+        image.setAttribute("data-eui-icon", "star");
+        root.querySelector("[data-eui-key]")!.append(image);
+      }
+      return polls >= 2 ? 1 : 0;
+    };
+    const outcome = await settleResourceBarrier(root, {
+      barrier: barrier4, deadline: performance.now() + 5_000, ...options,
+      expectations: { themeIcons: 1 }, icons,
+    });
+    expect(outcome.evidence.registry).toMatchObject({ iconsExpected: 1, iconsObserved: 1, timedOut: false });
+    expect(outcome.evidence.expected).toBe(1);
+    expect(outcome.evidence.decoded).toBe(1);
+    expect(outcome.evidence.lateAfterBarrier).toEqual([]);
+    expect(outcome.codes).toEqual([]);
+    // jsdom резолвит `img.src` в абсолютный URL — записи ищутся по `assetId`, а не по строке URL.
+    const record = outcome.evidence.resources!.find((item) => item.assetId === "asset_star")!;
+    // Иконка реестра опознана каналом, а не «просто картинкой»: это и есть класс дефекта волны.
+    expect(record).toMatchObject({
+      channel: "icon-registry", discoveredAt: "dom", assetId: "asset_star",
+      ownerElementKey: "root/0", ownerComponentId: null,
+      requested: true, loaded: true, decoded: true, completedBeforeStableFrame: true, phase: null,
+    });
+    root.remove();
+  });
+
+  it("темы нет — фаза завершается мгновенно, кейс без картинок не обзаводится зависимостями", async () => {
+    const root = surface("<div>нет ни одной картинки</div>");
+    const outcome = await settleResourceBarrier(root, {
+      barrier: barrier4, deadline: performance.now() + 5_000, ...options,
+      expectations: { themeIcons: 0 },
+      // Реестра нет вовсе: `icons()` не должен вызываться в цикле — фаза выходит по объявлению.
+      icons: () => 0,
+      fontEntries: () => [],
+    });
+    expect(outcome.evidence.registry).toMatchObject({ iconsExpected: 0, iconsObserved: 0, timedOut: false });
+    expect(outcome.evidence.registry!.waitedMs).toBeLessThan(100);
+    expect(outcome.evidence.expected).toBe(0);
+    expect(outcome.evidence.resources).toEqual([]);
+    expect(outcome.codes).toEqual([]);
+    expect(outcome.reasons).toEqual([]);
+    root.remove();
+  });
+
+  it("исчерпанная фаза registry — типизированный resource_barrier_timeout с ref registry:…", async () => {
+    const root = surface("<div></div>");
+    const outcome = await settleResourceBarrier(root, {
+      // Под-дедлайн фазы — внутри бюджета барьера, поэтому отказ приходит от **фазы**, а не от джобы.
+      barrier: { ...barrier4, registryDeadlineMs: 40 },
+      deadline: performance.now() + 5_000, ...options,
+      expectations: { themeIcons: 3 }, icons: () => 0, fontEntries: () => [],
+    });
+    expect(outcome.evidence.registry).toMatchObject({ iconsExpected: 3, iconsObserved: 0, timedOut: true });
+    expect(outcome.codes.find((code) => code.code === "resource_barrier_timeout")).toMatchObject({
+      severity: "error", ref: "registry:0/3",
+    });
+    expect(outcome.reasons).toContain("resource_barrier_timeout");
+    root.remove();
+  });
+
+  it("каналы: srcset и шрифты — report-only, ожидаемые ассеты кандидата не требуют декода", async () => {
+    const root = surface(`
+      <img data-eui-key="k1" src="/api/assets/asset_main" srcset="/api/assets/asset_2x 2x, /api/assets/asset_3x 3x" />
+    `);
+    const manifest = collectResourceManifest(root, [...root.querySelectorAll("*")], barrier4.maxResources, {
+      channels: true,
+      expectedAssets: ["asset_declared"],
+      fontEntries: [{ family: "Inter", weight: "400", style: "normal", status: "loaded" }],
+    });
+    const byAsset = new Map(manifest.entries.map((entry) => [entry.assetId ?? entry.url, entry]));
+    expect(byAsset.get("asset_2x")).toMatchObject({ channel: "img-srcset", reportOnly: true });
+    expect(byAsset.get("font:Inter|400|normal")).toMatchObject({ channel: "font", reportOnly: true, loaded: true });
+    expect(byAsset.get("asset_declared")).toMatchObject({ discoveredAt: "bundle", reportOnly: true });
+    // Уже наблюдённый ассет вторым (report-only) дублем не приезжает — иначе каждая объявленная
+    // и отрендеренная иконка удваивала бы записи ровно там, где ищут недоехавшую.
+    expect(manifest.entries.filter((entry) => entry.assetId === "asset_main")).toHaveLength(1);
+    // Реальный `<img>` — цель декода: ключа `reportOnly` у него нет вовсе.
+    expect(byAsset.get("asset_main")).toMatchObject({ channel: "img" });
+    expect(byAsset.get("asset_main")).not.toHaveProperty("reportOnly");
+
+    // Решение (в): decode-цель — только `currentSrc`, поэтому `expected` считает один ресурс из
+    // пяти записей; иначе фаза декода утроилась бы на каждом responsive-изображении.
+    const decoded: string[] = [];
+    const outcome = await settleResourceBarrier(root, {
+      barrier: barrier4, deadline: performance.now() + 5_000, ...options,
+      expectations: { themeIcons: 0, expectedAssets: ["asset_declared"] },
+      icons: () => 0,
+      fontEntries: () => [{ family: "Inter", weight: "400", style: "normal", status: "loaded" }],
+      decode: async (url) => { decoded.push(url); return "decoded"; },
+    });
+    expect(decoded.map((url) => url.replace(/^https?:\/\/[^/]+/, ""))).toEqual(["/api/assets/asset_main"]);
+    expect(outcome.evidence.expected).toBe(1);
+    expect(outcome.evidence.decoded).toBe(1);
+    expect(outcome.evidence.resources!.map((item) => item.channel).sort())
+      .toEqual(["font", "img", "img-srcset", "img-srcset", "img"].sort());
+    root.remove();
+  });
+
+  it("псевдоэлементы: канал пропускается без правил и включается по документному предикату", () => {
+    const root = surface("<div class=\"pseudo-host\"></div>");
+    expect(documentDeclaresPseudoResources()).toBe(false);
+    const style = document.createElement("style");
+    style.dataset.test = "";
+    style.textContent = ".pseudo-host::before{content:url(/api/assets/asset_pseudo)}";
+    document.head.append(style);
+    // Предикат — один скан таблиц стилей документа, а не поэлементная проверка (решение (б)).
+    expect(documentDeclaresPseudoResources()).toBe(true);
+    root.remove();
+  });
+
+  it("srcset-парсер берёт URL кандидата, а не дескриптор", () => {
+    expect(srcsetCandidates("/a.png 1x, /b.png 2x")).toEqual(["/a.png", "/b.png"]);
+    expect(srcsetCandidates(null)).toEqual([]);
+  });
+
+  it("недогруженный ассет назван поимённо: assetId, владелец, канал и фаза", async () => {
+    installRegistry({ star: { assetUrl: "/api/assets/asset_star" } });
+    const root = surface('<div data-eui-key="card/1"><img src="/api/assets/asset_star" data-eui-icon="star" /></div>');
+    const outcome = await settleResourceBarrier(root, {
+      barrier: barrier4, deadline: performance.now() + 5_000, ...options,
+      expectations: { themeIcons: 1 }, icons: () => 1, fontEntries: () => [],
+      decode: async () => "failed",
+    });
+    const record = outcome.evidence.resources!.find((item) => item.assetId === "asset_star")!;
+    expect(record).toMatchObject({
+      assetId: "asset_star", ownerElementKey: "card/1", channel: "icon-registry",
+      phase: "decode", decoded: false, completedBeforeStableFrame: false,
+    });
+    expect(outcome.reasons).toContain("resource_decode_failed");
+    root.remove();
+  });
+
+  it("политика v3 остаётся байт-в-байт доволновой: ни каналов, ни записей, ни фазы registry", async () => {
+    expect(barrierPolicyIsV4(barrier3)).toBe(false);
+    expect(barrierPolicyIsV4(barrier4)).toBe(true);
+    expect(isReadinessPolicy(BARRIER_READINESS_POLICY_V4)).toBe(true);
+    // «v4 без фазы» и «v3 с фазой» — испорченный bootstrap, а не половина волны.
+    expect(isReadinessPolicy({ ...BARRIER_READINESS_POLICY_V4, resourceBarrier: barrier3 })).toBe(false);
+    expect(isReadinessPolicy({ ...BARRIER_READINESS_POLICY_V3, resourceBarrier: barrier4 })).toBe(false);
+    // Хэш v3 не двигается волной (он адресует уже снятые кадры), хэш v4 — обязан отличаться.
+    expect(await readinessPolicyHash(BARRIER_READINESS_POLICY_V3)).toBe(await readinessPolicyHash(BARRIER_READINESS_POLICY));
+    expect(await readinessPolicyHash(BARRIER_READINESS_POLICY_V4)).not.toBe(await readinessPolicyHash(BARRIER_READINESS_POLICY_V3));
+
+    installRegistry({ star: { assetUrl: "/api/assets/asset_star" } });
+    // CSS-фон, а не `<img>`: jsdom резолвит `src` в абсолютный URL, а предмет проверки — форма
+    // записи манифеста (ни одного ключа волны), а не нормализация URL браузером.
+    const root = surface('<div data-eui-key="k" style="background-image: url(/api/assets/asset_star)"></div>');
+    const manifest = collectResourceManifest(root, [...root.querySelectorAll("*")], barrier3.maxResources);
+    expect(manifest.entries).toEqual([{ id: "/api/assets/asset_star", kind: "css", url: "/api/assets/asset_star" }]);
+    const outcome = await settleResourceBarrier(root, { barrier: barrier3, deadline: performance.now() + 5_000, ...options });
+    expect(outcome.evidence.policyVersion).toBeUndefined();
+    expect(outcome.evidence.registry).toBeUndefined();
+    expect(outcome.evidence.resources).toBeUndefined();
+    expect(Object.keys(outcome.evidence).sort())
+      .toEqual(["decoded", "durationMs", "expected", "fontsReady", "lateAfterBarrier", "stableFrames"]);
+    root.remove();
+  });
+
+  /**
+   * Перф-подтверждение (§3, замер V0-D5): расширенный обход с реестром иконок укладывается в
+   * бюджет барьера с запасом. Порог мягкий (десятая доля бюджета) — предмет проверки «не выросло
+   * на порядок», а не микро-бенчмарк: жёсткий порог во флаки-среде CI ловил бы шум планировщика.
+   */
+  it("перф: полный барьер с registry-иконками и всеми каналами укладывается в бюджет", async () => {
+    installRegistry(Object.fromEntries([...Array(20).keys()].map((index) => [
+      `icon${index}`, { assetUrl: `/api/assets/asset_icon_${index}` },
+    ])));
+    const style = document.createElement("style");
+    style.dataset.test = "";
+    style.textContent = ".pseudo-host::after{content:url(/api/assets/asset_pseudo)}";
+    document.head.append(style);
+    const root = surface([...Array(120).keys()].map((index) => `
+      <div class="pseudo-host" data-eui-key="row/${index}" style="background-image:url(/api/assets/asset_bg_${index})">
+        <img src="/api/assets/asset_icon_${index % 20}" data-eui-icon="icon${index % 20}" srcset="/api/assets/asset_icon_${index % 20}@2x 2x" />
+      </div>`).join(""));
+    const startedAt = performance.now();
+    const outcome = await settleResourceBarrier(root, {
+      barrier: barrier4, deadline: performance.now() + 8_000, ...options,
+      expectations: { themeIcons: 20 }, icons: () => 20,
+      fontEntries: () => [{ family: "Inter", weight: "400", style: "normal", status: "loaded" }],
+    });
+    const spent = performance.now() - startedAt;
+    expect(outcome.evidence.expected).toBe(outcome.evidence.decoded);
+    expect(outcome.evidence.lateAfterBarrier).toEqual([]);
+    expect(outcome.evidence.resources!.length).toBeGreaterThan(120);
+    // Мягкий перф-гейт: ловит порядковую регрессию обхода (D5: реальная цена ~55 мс), а не шум
+    // параллельного CI-прогона — budgetMs/10 однажды флакнул на 863 мс под нагрузкой.
+    expect(spent).toBeLessThan(barrier4.budgetMs / 4);
+    root.remove();
   });
 });

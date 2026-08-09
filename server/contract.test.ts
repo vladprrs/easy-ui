@@ -23,6 +23,10 @@ import { MAX_ASSET_BYTES } from "./assets/validate";
 import {
   capabilitiesResponseSchema,
   catalogCandidatesContract,
+  renderStatusResponseSchema,
+  savePrototypeContract,
+  createPrototypeContract,
+  screenshotJobResultSchema,
   catalogCandidatesGetContract,
   createComponentContract,
   listContracts,
@@ -30,9 +34,10 @@ import {
   type RouteContract,
 } from "./contracts";
 import { CALIBRATED_POLICY } from "./catalog/policy";
+import { spaceTokens } from "../src/designSystems/types";
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
-import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
+import { GEOMETRY_RECT_LIMIT, MAX_PAINT_MARGIN_PX, MAX_QUEUE } from "./screenshot/service";
 import {
   ACCEPTANCE_POLICIES,
   acceptanceCaseTtlHours as ACCEPTANCE_CASE_TTL_HOURS,
@@ -42,10 +47,12 @@ import {
 import { UserRepo } from "./users";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { caseSetIdOf } from "./acceptance/caseSets";
+import { CAPTURE_FRAME_BUDGET_MPX } from "./capture/captureV4";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
-  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, caseSetManifestSchema,
+  CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES, CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
+  CASE_SET_MAX_GEOMETRY_OWNERSHIP, CASE_SET_MAX_PRELOAD_ASSETS, caseSetManifestSchema,
 } from "../src/acceptance/caseSetSchema";
 import { prototypeCandidateOverlayMax as PROTOTYPE_CANDIDATE_OVERLAY_MAX } from "./routes/screenshots";
 import { capabilities } from "./routes/meta";
@@ -308,6 +315,12 @@ function orderedCases(): [string, Case][] {
     ["GET /api/acceptance-runs/{runId}/cases", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/cases`), expected: err(404, "not_found") }],
     ["GET /api/acceptance-runs/{runId}/evidence", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/evidence`), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs/{runId}/cancel", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/cancel`, {}), expected: err(404, "not_found") }],
+    // BR-06: resume — тот же 404-конверт несуществующего рана; продолжаемость, lineage, reuse
+    // гейтов и все 409 живут в `server/acceptance/resume.test.ts` и `acceptance-routes.test.ts`.
+    ["POST /api/acceptance-runs/{runId}/resume", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/resume`, {}), expected: err(404, "not_found") }],
+    // BR-10a: тот же 404-конверт несуществующего рана; расчёт disposition, оба 409 и kill-switch
+    // живут в `server/acceptance/retry-disposition.test.ts` и `acceptance-routes.test.ts`.
+    ["GET /api/acceptance-runs/{runId}/retry-disposition", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/retry-disposition`), expected: err(404, "not_found") }],
     // Сага миграционного коммита (план 2026-08-07 §W4). Покрытие — по отказу, как у соседей:
     // happy path саги (все шесть фаз поверх реальных мутаций, идемпотентность, watchdog, cancel)
     // живёт в `server/migration-commit.test.ts`, а здесь проверяется форма ручек и 404-конверт.
@@ -751,6 +764,12 @@ describe("route contracts", () => {
       sourcePackageMaxExports: SOURCE_PACKAGE_MAX_EXPORTS,
       resourceBarrierMaxResources: RESOURCE_BARRIER_MAX_RESOURCES,
       resourceBarrierBudgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
+      // BR-02/BR-03 (план 2026-08-08 §2): потолок стороны поля краски, бюджет площади кадра и
+      // потолок hint'а предзагрузки.
+      captureMaxPaintPaddingPx: MAX_PAINT_MARGIN_PX,
+      captureFrameBudgetMpx: CAPTURE_FRAME_BUDGET_MPX,
+      caseSetMaxPreloadAssets: CASE_SET_MAX_PRELOAD_ASSETS,
+      caseSetMaxGeometryOwnership: CASE_SET_MAX_GEOMETRY_OWNERSHIP,
       surfaces: SURFACES_LIMIT,
     });
     // Продуктовая прекондиция §A2a: карусель способов оплаты — 9 детей default-слота, поэтому
@@ -770,6 +789,22 @@ describe("route contracts", () => {
     expect(value.layoutContractVersion).toBe(1);
     expect(value.regions).toEqual(["statusBar", "header", "footer"]);
     expect(value.features).toEqual({
+      // BR-02/BR-04 (план 2026-08-08 §2/§4): обе фичи безусловны (матрицей не гейтятся) и гаснут
+      // общим `EASYUI_CAPTURE_V4_DISABLED=1` — отдельный тест ниже.
+      paintCapturePaddingV1: true,
+      exactContentHugCanvasV1: true,
+      // BR-10b: «включено ли» и «по каким правилам сведено» — разные вопросы, поэтому рядом с
+      // парой флагов стоит число версии сравнения (доволновое значение под capture-свитчём — 1).
+      comparisonPolicyVersion: 2,
+      // BR-03 (план 2026-08-08 §3): барьер волны и **фактическая** версия политики этого инстанса.
+      // Пара, а не один флаг: «включено» и «чем снято» — разные вопросы (под v4-свитчём флаг
+      // false, а версия честно 3).
+      geometryDecorationOwnershipV1: true,
+      flowOverflowOwnershipV1: true,
+      // BR-10b: версия политики владения геометрией — вердиктный вход; доволново её нет вовсе.
+      geometryOwnershipPolicyVersion: 1,
+      resourceBarrierV4: true,
+      resourceBarrierPolicyVersion: 4,
       renderStatus: true,
       screenshots: true,
       visualRegression: true,
@@ -839,14 +874,30 @@ describe("route contracts", () => {
       figmaSourcePackage: true,
       runtimeSchemaDefaults: true,
       captureNoiseSummary: true,
+      // BR-06 (план 2026-08-08 §6): продолжение остановленного рана приёмки.
+      acceptanceResumeV1: true,
+      // BR-10a (план 2026-08-08 §10): отпечаток блокера и read-only retry-disposition.
+      blockerFingerprintV1: true,
+      // BR-07/BR-08 (план 2026-08-08 §7/§8): атрибуция по элементам, профили политики рендерера и
+      // второй вердикт по владению. Все три гейтятся матричной приёмкой (тест поднимает её) и
+      // своими kill-switch'ами — разведение по тумблерам ниже.
+      visualAttributionV2: true,
+      rendererPolicyProfilesV2: true,
+      comparisonOwnershipV1: true,
       // План 2026-08-07 §W6b: версия схемы агентской квитанции драйвера (`envelope`) — число,
       // а не булев флаг: конверт печатается всегда, клиенту нужна его форма. Kill-switch'а нет.
       receiptEnvelopeVersion: 1,
+      // BR-01a (план 2026-08-08 §1): единый резолвер схемы published component и его контрактная версия.
+      prototypeSchemaResolverV2: true,
+      prototypeSchemaResolverVersion: 2,
     });
     // §W11: версия readiness-политики — **чем снято**, а не «что умеет образ». Барьер W2 поднял
     // дефолтный профиль до v3; `geometryContractVersion` при этом сознательно остаётся 2 (замеры
     // W1b аддитивны и кадры не инвалидируют), и расхождение этих двух чисел — не дефект, а контракт.
-    expect(value.acceptance.readinessPolicyVersion).toBe(3);
+    // BR-03 (план 2026-08-08 §3): волна подняла барьер до v4, и версия честно это показывает —
+    // смоук-ключ включения (под `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1` здесь снова 3).
+    expect(value.acceptance.readinessPolicyVersion).toBe(4);
+    expect(value.features.resourceBarrierPolicyVersion).toBe(value.acceptance.readinessPolicyVersion);
     expect(value.acceptance.geometryContractVersion).toBe(2);
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });
@@ -863,12 +914,28 @@ describe("route contracts", () => {
     const switches = {
       EASYUI_GEOMETRY_SURFACES_DISABLED: "geometrySurfacesV3",
       EASYUI_CANDIDATE_OVERLAY_DISABLED: "candidateDependencyOverlay",
+      EASYUI_ACCEPTANCE_RESUME_DISABLED: "acceptanceResumeV1",
+      EASYUI_BLOCKER_FINGERPRINT_DISABLED: "blockerFingerprintV1",
       EASYUI_SUGGESTED_POLICY_DISABLED: "suggestedPolicy",
       EASYUI_SOURCE_PACKAGE_DISABLED: "figmaSourcePackage",
       EASYUI_RUNTIME_DEFAULTS_DISABLED: "runtimeSchemaDefaults",
       EASYUI_IMPACTED_SNAP_DISABLED: "impactedSnap",
       EASYUI_MIGRATION_COMMIT_DISABLED: "migrationCommit",
+      // BR-07/BR-08: три оси волны снятия блокеров. Атрибуция и владение — report-only слои,
+      // профили рендерера — своя ось именно потому, что меняют promote-eligibility.
+      EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED: "visualAttributionV2",
+      EASYUI_RENDERER_POLICY_PROFILES_DISABLED: "rendererPolicyProfilesV2",
+      EASYUI_COMPARISON_OWNERSHIP_DISABLED: "comparisonOwnershipV1",
     } as const;
+    // BR-02/BR-04 (план 2026-08-08 §2/§4): **один** тумблер на две фичи — они делят зону
+    // «кадр капчура ↔ канва сравнения» и одно окно re-diff'а, поэтому проверяются вместе.
+    expect(flags().paintCapturePaddingV1).toBe(true);
+    expect(flags().exactContentHugCanvasV1).toBe(true);
+    process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+    try {
+      expect(flags().paintCapturePaddingV1).toBe(false);
+      expect(flags().exactContentHugCanvasV1).toBe(false);
+    } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
     for (const [env, flag] of Object.entries(switches)) {
       expect(flags()[flag]).toBe(true);
       process.env[env] = "1";
@@ -884,8 +951,20 @@ describe("route contracts", () => {
     const withoutMatrix = capabilities(db, "shadow", {}).features as Record<string, unknown>;
     expect(withoutMatrix.geometrySurfacesV3).toBe(false);
     expect(withoutMatrix.candidateDependencyOverlay).toBe(false);
+    // BR-06: resume живёт внутри матричной приёмки — без неё ручки нет вовсе.
+    expect(withoutMatrix.acceptanceResumeV1).toBe(false);
+    // BR-02/BR-04: матрицей **не** гейтятся — поле краски едет и по прототипному capture-пути, а
+    // канву сравнения строит визуальный гейт, живущий и вне матричных ручек.
+    expect(withoutMatrix.paintCapturePaddingV1).toBe(true);
+    expect(withoutMatrix.exactContentHugCanvasV1).toBe(true);
+    // BR-10a: отпечаток блокера — тоже свойство приёмки: без ранов его не от чего считать.
+    expect(withoutMatrix.blockerFingerprintV1).toBe(false);
     expect(withoutMatrix.suggestedPolicy).toBe(false);
     expect(withoutMatrix.migrationCommit).toBe(false);
+    // BR-07/BR-08: карта элементов, кластеры и второй вердикт живут только в acceptance-evidence.
+    expect(withoutMatrix.visualAttributionV2).toBe(false);
+    expect(withoutMatrix.rendererPolicyProfilesV2).toBe(false);
+    expect(withoutMatrix.comparisonOwnershipV1).toBe(false);
     expect(withoutMatrix.resourceBarrier).toBe(true);
     expect(withoutMatrix.figmaSourcePackage).toBe(true);
     expect(withoutMatrix.runtimeSchemaDefaults).toBe(true);
@@ -908,6 +987,41 @@ describe("route contracts", () => {
     ]) {
       expect(compose).toContain(`${name}: \${${name}:-}`);
     }
+  });
+
+  /**
+   * BR-01b (план 2026-08-08 §1): контракт фидбэка §4 требует, чтобы **три** ответа называли один
+   * резолв одинаковыми именами полей. Тест сторожит именно объявление в схемах: тройка обязана
+   * приниматься save-ответом, `render-status` и результатом снапа/geometry probe, и все три поля
+   * обязаны быть опциональными (при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` их нет вовсе).
+   */
+  test("BR-01b: resolvedVersion/sourceHash/propsSchemaHash объявлены в save-ответе, render-status и снапе", () => {
+    const triple = { resolvedVersion: 2, sourceHash: "a".repeat(64), propsSchemaHash: "b".repeat(64) };
+
+    const saveBody = { rev: 2, warnings: [], screens: [], components: [{ id: "c", name: "C", origin: "head-active", ...triple, sourceHash: triple.sourceHash, propsSchemaHash: triple.propsSchemaHash }] };
+    expect(savePrototypeContract.responseSchema!.safeParse(saveBody).success).toBe(true);
+    expect(createPrototypeContract.responseSchema!.safeParse({ id: "p", rev: 1, warnings: [], screens: [], components: saveBody.components }).success).toBe(true);
+    // Доволновой ответ (без блока) остаётся валидным — поле опционально.
+    expect(savePrototypeContract.responseSchema!.safeParse({ rev: 2, warnings: [], screens: [] }).success).toBe(true);
+    // Значение `origin` — закрытый набор источников резолва.
+    expect(savePrototypeContract.responseSchema!.safeParse({ ...saveBody, components: [{ ...saveBody.components[0], origin: "guessed" }] }).success).toBe(false);
+
+    const statusBody = {
+      status: { document: true, bundles: true, route: false }, renderable: true, url: "/p/x/s/y",
+      revision: 1, publishedVersion: null, bundleStatus: "ready" as const, warnings: [], errors: [],
+      resolvedPins: [{ id: "c", name: "C", version: 2, bundleUrl: "/b.js", bundleHash: "h", status: "active", ...triple }],
+    };
+    expect(renderStatusResponseSchema.safeParse(statusBody).success).toBe(true);
+    expect(renderStatusResponseSchema.safeParse({ ...statusBody, resolvedPins: [{ id: "c", name: "C", version: 2, bundleUrl: "/b.js", bundleHash: "h", status: "active" }] }).success).toBe(true);
+
+    const geometryBody = {
+      kind: "geometry" as const, surface: "prototype" as const, resolvedRev: 1, prototypeInstanceId: "i",
+      componentPins: [{ id: "c", version: 2, bundleHash: "h", ...triple }],
+      designSystemMetaVersion: null, resolvedSpaceScale: Object.fromEntries(spaceTokens.map((token) => [token, "0px"])),
+      viewport: { width: 390, height: 844 }, dpr: 2, rects: [], truncated: false, total: 0,
+    };
+    expect(screenshotJobResultSchema.safeParse(geometryBody).success).toBe(true);
+    expect(screenshotJobResultSchema.safeParse({ ...geometryBody, componentPins: [{ id: "c", version: 2, bundleHash: "h", sourceHash: null, propsSchemaHash: null }] }).success).toBe(true);
   });
 
   // Фаза гейта — единственное поле discovery, которое зависит от конфигурации процесса.

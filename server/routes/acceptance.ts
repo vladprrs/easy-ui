@@ -42,6 +42,8 @@ import { maintenanceLockHeld } from "../maintenance";
 import { writeAuditEvent } from "../audit";
 import { ComponentRepo } from "../repos/components";
 import { zipResponse } from "./bundles";
+import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
+import { blockerFingerprintEnabled, blockerFingerprintOf, retryDispositionOf } from "../acceptance/disposition";
 import type { AcceptanceOrchestrator, RefreshSpec } from "../acceptance/orchestrator";
 import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateDecisionRow, CandidateRow } from "../acceptance/repo";
 import { isCandidateId, isRunId } from "../acceptance/ids";
@@ -306,7 +308,24 @@ function runView(
     status: run.status,
     // Названная причина терминального статуса (D2): сегодня это `refresh_scope_empty` — форс был
     // задан, но ни один случай не переоценён. `null` у обычного исхода, а не пустая строка.
+    // BR-06 добавил к словарю `interrupted` (ран убила стартовая уборка после рестарта),
+    // `phase_timeout`, `renderer_unavailable`, `capture_budget_exhausted`, `queue_starvation`.
     statusReason: run.status_reason,
+    // BR-06: происхождение и продолжаемость рана. Все три поля — аддитивные и опциональные по
+    // контракту; `resumedFromRunId: null` у самостоятельного рана, `attempt: 1` у первой попытки.
+    resumedFromRunId: run.resumed_from_run_id,
+    attempt: run.attempt,
+    // Отчёт об остановке: `{resumable, phase, lastCompletedPhase, elapsedMs, resumeFrom, jobIds}`
+    // либо lineage продолжения (`resumedFrom`). `null` — ран остановки не описывал.
+    resume: orchestrator.repo.runResume(run),
+    // BR-10a: отпечаток блокера — `blk_<sha256>` канонизованного basis и сортированных терминальных
+    // кодов. `null` — блокера нет (ран прошёл либо отменён); **ключа нет вовсе** при поднятом
+    // `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1`, потому что вместе с ним исчезает и ручка, по которой
+    // отпечаток можно расшифровать. Считается на лету из сохранённых данных той же функцией, что
+    // и в `retry-disposition`: два разных значения были бы хуже отсутствия отпечатка.
+    ...(blockerFingerprintEnabled()
+      ? { blockerFingerprint: blockerFingerprintOf(run, cases, orchestrator.repo.candidate(run.candidate_id)) }
+      : {}),
     policy: { id: run.policy_profile_id, hash: run.policy_profile_hash },
     caseSetId: run.case_set_id,
     idempotencyKey: run.idempotency_key,
@@ -428,6 +447,19 @@ function summaryRefreshPlan(plan: unknown): string {
  * 3. **Метрики случая не повторяются**: `raw`/`aa` — два числа визуального гейта, всё остальное
  *    (regions, bestOffset, thresholds) берётся точечно через `/cases?case=<id>`.
  */
+/**
+ * Отчёт об остановке одной строкой (BR-06) для компактной сводки: `phase_timeout@capture
+ * last=validate resumable` — фаза, докуда ран дошёл, и продолжаем ли он. `null` — останавливаться
+ * рану было не на чем (обычный терминальный исход).
+ */
+function resumeSummaryOf(run: AcceptanceRunRow, orchestrator: AcceptanceOrchestrator): string | null {
+  const resume = orchestrator.repo.runResume(run);
+  if (resume === null) return null;
+  const phase = typeof resume.phase === "string" ? resume.phase : "-";
+  const last = typeof resume.lastCompletedPhase === "string" ? resume.lastCompletedPhase : "-";
+  return `${run.status_reason ?? "stopped"}@${phase} last=${last}${resume.resumable === true ? " resumable" : ""}`;
+}
+
 function runSummaryView(
   run: AcceptanceRunRow,
   cases: AcceptanceCaseRow[],
@@ -457,6 +489,17 @@ function runSummaryView(
     runId: run.run_id,
     status: run.status,
     statusReason: run.status_reason,
+    // BR-06: сводка называет попытку и точку продолжения одной строкой — «где ран встал» обязано
+    // читаться и в компактном отчёте, ради которого она заводилась.
+    ...(run.resumed_from_run_id === null && run.attempt <= 1
+      ? {}
+      : { lineage: `attempt ${run.attempt}${run.resumed_from_run_id ? ` after ${run.resumed_from_run_id}` : ""}` }),
+    ...(resumeSummaryOf(run, orchestrator) === null ? {} : { resume: resumeSummaryOf(run, orchestrator)! }),
+    // BR-10a: тот же отпечаток, что в полном виде — сводка и есть основной вид для агента, и
+    // «тот же блокер, что вчера» обязано читаться из неё.
+    ...(blockerFingerprintEnabled()
+      ? { blockerFingerprint: blockerFingerprintOf(run, cases, orchestrator.repo.candidate(run.candidate_id)) }
+      : {}),
     progress,
     gates: summaryGates(run),
     refresh: isObject(refresh)
@@ -720,6 +763,105 @@ function requireOwnedRun(db: Database, runId: string, principal: Principal, orch
   return run;
 }
 
+/**
+ * `POST /api/acceptance-runs/:runId/resume` (BR-06, план 2026-08-08 §6) — продолжение
+ * остановленного рана.
+ *
+ * Врезка стоит рядом с `cancel` и по той же причине: обе ручки — про **жизненный цикл** рана, а
+ * не про его содержимое. Отличие принципиальное и видно уже по ответу: `cancel` возвращает тот же
+ * ран, `resume` — **новый** (202 + `Location`), потому что терминальный ран неизменяем.
+ *
+ * Тело — `{}`: набор, поверхность, профиль и кандидат берутся у предка. Разрешить их переопределять
+ * значило бы разрешить «продолжить другой ран», а это постановка нового, а не продолжение.
+ */
+async function resumeRun(request: Request, db: Database, runId: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Promise<Response> {
+  if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  const run = requireOwnedRun(db, runId, principal, orchestrator);
+  // Kill-switch — **до** любых проверок состояния: агент обязан получить один и тот же
+  // типизированный отказ независимо от того, продолжаем ли мы вообще что-то способное.
+  if (!acceptanceResumeEnabled()) {
+    throw new ApiError(409, "acceptance_resume_disabled",
+      "Resumable acceptance is disabled on this server (EASYUI_ACCEPTANCE_RESUME_DISABLED=1); queue a new run instead",
+      { runId: run.run_id });
+  }
+  // Тело читается **по факту**, а не по `content-length`: прокси и клиенты его не всегда шлют, а
+  // молча проигнорированное `{"policy": …}` выглядело бы как «сервер меня понял».
+  const raw = (await request.text()).trim();
+  if (raw.length > 0) {
+    let body: unknown;
+    try { body = JSON.parse(raw); }
+    catch { throw new ApiError(400, "invalid_request", "Request body must be valid JSON"); }
+    if (!isObject(body) || Object.keys(body).length > 0) {
+      throw new ApiError(400, "invalid_request", "Resume takes no fields; the body must be {}");
+    }
+  }
+  const actor = requireUser(principal);
+  const started = await orchestrator.resumeRun(runId, { createdBy: actor.userId });
+  const lineage = orchestrator.repo.runResume(started.run);
+  return json({
+    runId: started.run.run_id,
+    status: started.run.status,
+    candidateId: started.run.candidate_id,
+    componentId: started.run.component_id,
+    policy: { id: started.run.policy_profile_id, hash: started.run.policy_profile_hash },
+    progress: parseJson(started.run.progress_json) ?? {},
+    cases: started.cases.length,
+    cached: started.cached,
+    refresh: started.refresh,
+    // Lineage — часть ответа, а не только строки: агент, получивший 202, обязан видеть, чей это
+    // повтор и какой попыткой, не делая второго запроса.
+    resumedFromRunId: started.run.resumed_from_run_id,
+    attempt: started.run.attempt,
+    resumedFrom: isObject(lineage?.resumedFrom) ? lineage.resumedFrom : null,
+  }, 202, { ...noStore, location: `/api/acceptance-runs/${started.run.run_id}` });
+}
+
+/**
+ * `GET /api/acceptance-runs/:runId/retry-disposition` (BR-10a, план 2026-08-08 §10) — read-only
+ * ответ на вопрос «имеет ли смысл повторять этот ран и насколько глубоко».
+ *
+ * Врезка стоит рядом с `cases`/`evidence`, а не с `resume`, и это по существу: ручка **ничего не
+ * создаёт и ничего не меняет** — ни рана, ни строки кэша, ни артефакта. Вся логика живёт в
+ * `acceptance/disposition.ts`; здесь только форма запроса, авторизация и `no-store`.
+ *
+ * `candidateId`/`caseSetId` в query — необязательные **утверждения вызывающего** о ране, а не
+ * фильтры: агент, который спрашивает disposition по ране, обычно держит в руках id кандидата и
+ * набора, и молчаливое согласие сервера с ошибочной парой было бы худшим из ответов (он получил бы
+ * disposition чужого рана). Расхождение — типизированный 409, битая форма — 400.
+ */
+function retryDisposition(request: Request, db: Database, runId: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Response {
+  if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  // Kill-switch — **до** авторизации и до чтения рана: выключенная фича обязана выглядеть как
+  // отсутствующий роут, а не как «есть, но не отвечает» (канон `EASYUI_IMPACTED_SNAP_DISABLED`).
+  if (!blockerFingerprintEnabled()) throw new ApiError(404, "not_found", "Blocker fingerprint is disabled");
+  const run = requireOwnedRun(db, runId, principal, orchestrator);
+  const params = new URL(request.url).searchParams;
+  for (const key of params.keys()) {
+    if (key !== "candidateId" && key !== "caseSetId") {
+      throw new ApiError(400, "invalid_request", `Unknown query parameter: ${key}`);
+    }
+  }
+  const candidateId = params.get("candidateId");
+  if (candidateId !== null) {
+    if (!isCandidateId(candidateId)) throw new ApiError(400, "invalid_request", "candidateId must be a candidate id");
+    if (candidateId !== run.candidate_id) {
+      throw new ApiError(409, "candidate_mismatch",
+        `Run ${run.run_id} was queued for candidate ${run.candidate_id}, not ${candidateId}`);
+    }
+  }
+  const caseSetId = params.get("caseSetId");
+  if (caseSetId !== null) {
+    if (!isCaseSetId(caseSetId)) throw new ApiError(400, "invalid_request", "caseSetId must be a case set id");
+    if (caseSetId !== run.case_set_id) {
+      throw new ApiError(409, "case_set_mismatch",
+        `Run ${run.run_id} was queued for case set ${run.case_set_id ?? "none"}, not ${caseSetId}`);
+    }
+  }
+  return json(retryDispositionOf({
+    db, repo: orchestrator.repo, run, cases: orchestrator.repo.cases(run.run_id),
+  }), 200, noStore);
+}
+
 function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<string, unknown> {
   const entry = manifest?.cases.find((item) => item.caseId === row.case_id);
   return {
@@ -733,6 +875,10 @@ function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<
     aliasOfCaseId: row.alias_of_case_id,
     reuseReason: row.reuse_reason,
     reused: row.reuse_reason === "case_fingerprint",
+    // BR-06: причина инфраструктурного падения случая (`{outcome, message, attempts, elapsedMs,
+    // phase}`). `null` — случай инфраструктурно не падал; до волны это поле не существовало
+    // вовсе, и «почему кейс не дал кадра» не отвечалось нигде.
+    error: parseJson(row.error_json),
     // Квитанция reuse по уровням (P2-10): `{reuse:{candidate,frame,readiness,geometry,
     // visualMetrics,verdict}, fingerprints:{frame,comparison,verdictPolicy,case}}`. `reuseReason`
     // остаётся производной сводкой одной строкой; квитанция отвечает уровень за уровнем — иначе
@@ -770,8 +916,19 @@ async function runEvidence(request: Request, db: Database, dataDir: string, runI
   if (total > evidenceMaxBytes) {
     throw new ApiError(413, "evidence_too_large", `Evidence exceeds ${evidenceMaxBytes} bytes of raw content`);
   }
+  // BR-10a: отпечаток блокера едет в манифест архива — доказательство провала без ответа «тот же
+  // это блокер или новый» заставляет читателя сравнивать вердикты глазами. Поле **вычисляется на
+  // чтении** и потому объявлено вне `RunManifest`: персистированный манифест (и его
+  // `evidence_manifest_hash`, на который ссылается promote) остаётся байт-в-байт прежним, а
+  // kill-switch убирает поле из архива так же, как из представления рана.
+  const fingerprint = blockerFingerprintEnabled()
+    ? blockerFingerprintOf(run, orchestrator.repo.cases(runId), orchestrator.repo.candidate(run.candidate_id))
+    : null;
+  const document: Record<string, unknown> = fingerprint === null
+    ? manifest as unknown as Record<string, unknown>
+    : { ...manifest, blockerFingerprint: fingerprint };
   const files: Zippable = {
-    "manifest.json": strToU8(`${JSON.stringify(manifest, null, 2)}\n`),
+    "manifest.json": strToU8(`${JSON.stringify(document, null, 2)}\n`),
     SHA256SUMS: strToU8(sha256Sums(manifest)),
   };
   for (const item of manifest.cases) {
@@ -856,6 +1013,12 @@ export async function routeAcceptance(
     const cancelled = orchestrator.cancelQueuedRun(runId);
     return json(runView(cancelled, orchestrator.repo.cases(runId), orchestrator,
       await extraRunWarnings(dataDir, cancelled, orchestrator)), 200, noStore);
+  }
+  if (segments.length === 3 && segments[2] === "resume") {
+    return resumeRun(request, db, runId, principal, orchestrator);
+  }
+  if (segments.length === 3 && segments[2] === "retry-disposition") {
+    return retryDisposition(request, db, runId, principal, orchestrator);
   }
   throw new ApiError(404, "not_found", "API route not found");
 }

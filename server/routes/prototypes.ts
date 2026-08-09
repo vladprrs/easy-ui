@@ -1,13 +1,16 @@
 import { z } from "zod";
 import type { Database } from "bun:sqlite";
 import type { ComponentDefinition } from "../../src/catalog/definitions";
+import type { ComponentSchemaContext } from "../../src/prototype/types";
 import { designSystems } from "../../src/designSystems";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
 import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { assertPinnedTrack, PrototypeRepo, type PrototypeLifecyclePatch } from "../repos/prototypes";
 import { parseWith, prototypeKindSchema, prototypeLifecycleSchema } from "../contracts";
-import { collectAndValidateAssetRefs, expandPrototypeForSave, snapshotDefinitions, themesForDoc } from "../validation";
+import { collectAndValidateAssetRefs, expandPrototypeForSave, schemaResolverV2Enabled, snapshotDefinitions, themesForDoc } from "../validation";
+import type { ResolvedComponentGraph } from "../components/resolvedGraph";
 import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
 import { recordValidation } from "../validationRecords";
 import { parseFigmaInput } from "../figma";
@@ -23,6 +26,22 @@ import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
 import { validateViewport } from "../screenshot/service";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
+
+/**
+ * BR-01b (план 2026-08-08 §1): блок `components` save-ответа — проекция **того же** узла
+ * `ResolvedComponentGraph`, который принял документ. `resolvedVersion`/`sourceHash`/
+ * `propsSchemaHash` здесь обязаны совпадать с ответом `render-status` и с `componentPins` снапа:
+ * мигратор сверяет тройки, а не доверяет им по отдельности.
+ *
+ * Поле условное: при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` его нет вовсе (доволновой ответ).
+ */
+function resolvedComponentsBlock(graph:ResolvedComponentGraph):{components:{id:string;name:string;resolvedVersion:number;sourceHash:string|null;propsSchemaHash:string|null;origin:string}[]}|Record<string,never> {
+  if(!schemaResolverV2Enabled()) return {};
+  return {components:graph.nodes.map(node=>({
+    id:node.componentId,name:node.name,resolvedVersion:node.version,
+    sourceHash:node.sourceHash,propsSchemaHash:node.propsSchemaHash,origin:node.origin,
+  }))};
+}
 
 // Lifecycle-метаданные (миграция v16). На POST /api/prototypes они приезжают рядом с
 // doc/message/figma, поэтому там их сначала вычленяют, а тело /lifecycle валидируется целиком
@@ -72,10 +91,34 @@ function message(body:Record<string,unknown>):string|undefined { if(body.message
  */
 export const surfacesWriteEnabled = (raw:string|undefined=process.env.EASYUI_SURFACES):boolean => raw==="1";
 
+/**
+ * Первый элемент документа (в порядке экранов и ключей), объявивший `overflowOwnership` — путём для
+ * `issues`. `null` — деклараций нет вовсе, и запись остаётся доволновой.
+ *
+ * Ищется и элементное поле (канон — в него компилируется и composition layout-токен), и
+ * одноимённый prop — оборонительно: рукописный документ, положивший декларацию в props, обязан
+ * упереться в тот же тумблер, а не проехать мимо него молча.
+ */
+function firstOverflowOwnershipPath(doc:PrototypeDoc):(string|number)[]|null {
+  for(const screen of doc.screens??[]) {
+    for(const [key,element] of Object.entries(screen.spec?.elements??{})) {
+      const item=element as {overflowOwnership?:unknown;props?:Record<string,unknown>};
+      if(item.overflowOwnership!==undefined) return ["screens",screen.id,"spec","elements",key,"overflowOwnership"];
+      if(item.props?.overflowOwnership!==undefined) return ["screens",screen.id,"spec","elements",key,"props","overflowOwnership"];
+    }
+  }
+  return null;
+}
+
 function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
   const parsed=inputPrototypeDocSchema.safeParse(value);
   if(!parsed.success) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:parsed.error.issues});
   if(parsed.data.surfaces&&!surfacesWriteEnabled()) throw new ApiError(422,"surfaces_disabled","Multi-surface documents are disabled on this server (EASYUI_SURFACES)",{issues:[{path:["surfaces"],message:"doc.surfaces requires EASYUI_SURFACES=1 on the server"}]});
+  // BR-09 (план 2026-08-08 §9): `overflowOwnership` — персистируемая форма в строгом allowlist, и
+  // документ с ней старый образ не прочитает вовсе. Поэтому **запись** гейтится kill-switch'ем
+  // группы владения геометрией, а чтение stored-документов — никогда (канон `doc.surfaces`).
+  const owner=firstOverflowOwnershipPath(parsed.data);
+  if(owner!==null&&!geometryOwnershipEnabled()) throw new ApiError(422,"flow_overflow_ownership_disabled","FlowRoot overflow ownership is disabled on this server (EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1)",{issues:[{path:owner,message:"elements[].overflowOwnership requires the geometry ownership wave to be enabled"}]});
   if(pathId!==undefined&&parsed.data.id!==pathId) throw new ApiError(422,"validation_failed","Document id must match path id",{issues:[{path:["id"],message:"must match path id"}]});
   return parsed.data;
 }
@@ -84,12 +127,12 @@ function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
 // `kind` — вид прототипа (волна 0). Архитектурные линты волны 2 не применяются к служебным
 // видам: галереи компонентов и evidence-экраны законно состоят из одного компонента.
 export function validatePrototypeForSave(doc:PrototypeDoc, definitions?:Record<string,ComponentDefinition>, kind?:string,
-  surfaces?:{definitionsBySurface?:Record<string,Record<string,ComponentDefinition>>;themes?:Record<string,{fonts?:{family?:unknown}[]}>}) {
+  surfaces?:{definitionsBySurface?:Record<string,Record<string,ComponentDefinition>>;themes?:Record<string,{fonts?:{family?:unknown}[]}>;componentMeta?:Record<string,ComponentSchemaContext>}) {
   // API saves always pass the registry-backed snapshot. This fallback is only for
   // bundled seed documents, which support provider systems and no custom types.
   const resolved=definitions??designSystems[doc.designSystem as keyof typeof designSystems]?.definitions;
   if(!resolved) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["designSystem"],message:`unknown design system: ${doc.designSystem}`}]});
-  const result=validatePrototype(doc,{definitions:resolved,kind,...(surfaces?.definitionsBySurface?{definitionsBySurface:surfaces.definitionsBySurface}:{}),...(surfaces?.themes?{themes:surfaces.themes}:{})});
+  const result=validatePrototype(doc,{definitions:resolved,kind,...(surfaces?.definitionsBySurface?{definitionsBySurface:surfaces.definitionsBySurface}:{}),...(surfaces?.componentMeta?{componentMeta:surfaces.componentMeta}:{}),...(surfaces?.themes?{themes:surfaces.themes}:{})});
   if(result.errors.length) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:result.errors,warnings:result.warnings});
   return result.warnings;
 }
@@ -107,7 +150,7 @@ export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:
   // Композиции раскрываются ПЕРЕД снимком определений и сбором ассетов (B3): пины полны.
   const expansion=expandPrototypeForSave(db,doc);
   const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir);
-  const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,opts.lifecycle?.kind,{definitionsBySurface:snapshot.definitionsBySurface,themes:themesForDoc(db,expansion.doc)});
+  const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,opts.lifecycle?.kind,{definitionsBySurface:snapshot.definitionsBySurface,componentMeta:snapshot.componentMeta,themes:themesForDoc(db,expansion.doc)});
   const assetIds=collectAndValidateAssetRefs(db,expansion.doc);
   const figma=parseFigmaInput(db,opts.figmaInput,"figma");
   // В БД едет авторский документ, пины — от раскрытого.
@@ -115,7 +158,7 @@ export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:
   db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,doc.id,result.rev);
   writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:doc.id,detail:{rev:result.rev}});
   recordPrototypeValidation(db,doc.id,result.rev,warnings);
-  return {id:result.id,rev:result.rev,warnings};
+  return {id:result.id,rev:result.rev,warnings,...resolvedComponentsBlock(snapshot.graph)};
 }
 
 // Save a new head revision from a document (used by the bundle importer for an owned id whose
@@ -123,14 +166,14 @@ export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:
 export async function updatePrototypeFromDoc(db:Database,repo:PrototypeRepo,id:string,doc:PrototypeDoc,baseRev:number,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown}={}) {
   const expansion=expandPrototypeForSave(db,doc);
   const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir);
-  const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind,{definitionsBySurface:snapshot.definitionsBySurface,themes:themesForDoc(db,expansion.doc)});
+  const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind,{definitionsBySurface:snapshot.definitionsBySurface,componentMeta:snapshot.componentMeta,themes:themesForDoc(db,expansion.doc)});
   const assetIds=collectAndValidateAssetRefs(db,expansion.doc);
   const figma=parseFigmaInput(db,opts.figmaInput,"figma");
   const saved=repo.save(id,doc,baseRev,opts.message,snapshot.pins,assetIds,figma,expansion.pins);
   db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,id,saved.rev);
   writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}});
   recordPrototypeValidation(db,id,saved.rev,warnings);
-  return {rev:saved.rev,warnings};
+  return {rev:saved.rev,warnings,...resolvedComponentsBlock(snapshot.graph)};
 }
 
 export async function routePrototypes(request:Request,db:Database,segments:string[],principal:Principal,dataDir=process.env.DATA_DIR||"data",serveDist?:string):Promise<Response> {
@@ -143,7 +186,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   const id=segments[1]!; const tail=segments.slice(2);
   if(!tail.length) {
     if(request.method==="GET") return json(repo.meta(id,principal),200,noStore);
-    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const expansion=expandPrototypeForSave(db,doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind,{definitionsBySurface:snapshot.definitionsBySurface,themes:themesForDoc(db,expansion.doc)}); const assetIds=collectAndValidateAssetRefs(db,expansion.doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma,expansion.pins); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
+    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const expansion=expandPrototypeForSave(db,doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind,{definitionsBySurface:snapshot.definitionsBySurface,componentMeta:snapshot.componentMeta,themes:themesForDoc(db,expansion.doc)}); const assetIds=collectAndValidateAssetRefs(db,expansion.doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma,expansion.pins); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc),...resolvedComponentsBlock(snapshot.graph)},200,noStore); }
     if(request.method==="DELETE") { requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
@@ -184,7 +227,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
     const b=objectBody(await readJson(request)); const result=repo.restore(id,integer(b.rev,"rev"),baseRev(b));
     // Re-validate the restored document against the live catalog and record the result.
     const draft=repo.draft(id); let ok=true; let issues:{path:string;message:string}[]=[];
-    try { const expansion=expandPrototypeForSave(db,draft.doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const validation=validatePrototype(expansion.doc,{definitions:snapshot.definitions,definitionsBySurface:snapshot.definitionsBySurface,themes:themesForDoc(db,expansion.doc)}); ok=validation.errors.length===0; issues=[...validation.errors,...validation.warnings]; }
+    try { const expansion=expandPrototypeForSave(db,draft.doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const validation=validatePrototype(expansion.doc,{definitions:snapshot.definitions,definitionsBySurface:snapshot.definitionsBySurface,componentMeta:snapshot.componentMeta,themes:themesForDoc(db,expansion.doc)}); ok=validation.errors.length===0; issues=[...validation.errors,...validation.warnings]; }
     catch(error) { ok=false; issues=[{path:"/",message:error instanceof ApiError?error.message:"Restored document failed validation"}]; }
     recordPrototypeValidation(db,id,result.rev,issues,ok);
     db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,result.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:result.rev,restore:true}});

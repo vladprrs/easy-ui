@@ -363,11 +363,36 @@ export const caseSetSlotBindingsSchema: z.ZodType<CaseSetSlotBindings> = z.lazy(
  */
 export const COMPARISON_MATTE_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
+/**
+ * **Владение поверхностью сравнения** (EUI-BR-08, план 2026-08-08 §8, capability
+ * `comparisonOwnershipV1`).
+ *
+ * Три поля, все строго `.optional()` **без** `.default()` (инвариант C6/C25: `caseSetIdOf`
+ * хэширует `parsed.data`, и zod-дефолт сменил бы контентный адрес всех опубликованных манифестов):
+ *
+ * - `ownership: "subject-and-integration"` — просьба посчитать **два** вердикта: по пикселям,
+ *   которыми владеет субъект, и по всей канве (сегодняшнее поведение). Вердикт случая при этом не
+ *   меняется — им остаётся интеграционный;
+ * - `subjectComponentId` — кто субъект, когда снимается обёртка с детьми: без него субъектом
+ *   считается компонент рана, и приёмка обёртки была бы приёмкой всего дерева;
+ * - `dependencyPolicy: "require-eligible-acceptance"` — намерение «зависимости обязаны иметь
+ *   собственную приёмку», читаемое promote-гейтом.
+ *
+ * Слой всех трёх — `comparison` (см. `FIELD_LAYERS` и тест соответствия ключей в
+ * `server/acceptance/ids.test.ts`): они меняют то, **что** и **с чем** сравнивается, не трогая ни
+ * одного пикселя кадра.
+ */
+export const COMPARISON_OWNERSHIP = "subject-and-integration";
+export const COMPARISON_DEPENDENCY_POLICY = "require-eligible-acceptance";
+
 export const caseSetComparisonSchema = z.strictObject({
   matte: z.union([
     z.literal("none"),
     z.string().regex(COMPARISON_MATTE_PATTERN, "matte must be \"none\" or a #RRGGBB colour"),
   ]).optional(),
+  ownership: z.literal(COMPARISON_OWNERSHIP).optional(),
+  subjectComponentId: z.string().min(1).max(64).optional(),
+  dependencyPolicy: z.literal(COMPARISON_DEPENDENCY_POLICY).optional(),
 });
 
 /**
@@ -383,6 +408,82 @@ export const caseSetComparisonSchema = z.strictObject({
  */
 export const TEXT_AA_BUDGETS = ["live-text-v1"] as const;
 export type TextAaBudget = (typeof TEXT_AA_BUDGETS)[number];
+
+/**
+ * **Поле краски случая по сторонам** (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §2,
+ * EUI-BR-02, capability `paintCapturePaddingV1`).
+ *
+ * До этой волны поле было **скаляром** (`padding: 64px` со всех сторон, `src/capture/CaptureComponent.tsx`),
+ * и компонент с декором, уезжающим вправо на 55 px, приходилось снимать либо с симметричным полем в
+ * 4 раза больше нужного, либо с обрезанной краской (`ink clamp` ⇒ вечный `indeterminate`).
+ *
+ * Три инварианта именно схемы:
+ *
+ * 1. **Поле — per-case, а не `capture`-блок набора** (триаж раунда 2, M1). Значение в `capture`
+ *    двигало бы кадр **всех** случаев набора, нарушая AC фидбэка «recapture только затронутых
+ *    cases»; per-case поле входит во frame-слой ровно того случая, который его объявил.
+ * 2. **Стороны обязательны все четыре.** «Забытая сторона = 0» — это не декларация, а опечатка с
+ *    пиксельными последствиями: неназванная сторона обрезала бы краску молча.
+ * 3. **`.optional()` без `.default()`** (C6/C25, тот же инвариант, что у `cropLineage.sourceSurface`):
+ *    `caseSetIdOf` хэширует `parsed.data`, и zod-дефолт сменил бы контентный адрес **всех** уже
+ *    опубликованных манифестов.
+ *
+ * Потолок стороны совпадает с `MAX_PAINT_MARGIN_PX` капчур-сервиса (значение продублировано: `src/`
+ * не импортирует `server/`); бюджет кадра `(w+left+right)×(h+top+bottom)×dsf² ≤ 20 Мпикс` судит
+ * сервер типизированным `422 capture_budget_exceeded`, а не схема — потолок стороны про форму,
+ * бюджет про площадь.
+ */
+export const CASE_MAX_PAINT_PADDING_PX = 256;
+
+const paintPaddingSide = z.number().int().min(0).max(CASE_MAX_PAINT_PADDING_PX);
+
+/**
+ * Потолок hint'а предзагрузки (BR-03). Само поле — **только контракт**: семантику (расширенный
+ * барьер ресурсов) поставляет BR-03; здесь оно объявлено, чтобы манифест, написанный под волну,
+ * не отвергался strict-схемой, и чтобы слой (`report-only`) был назван до появления потребителя.
+ */
+export const CASE_SET_MAX_PRELOAD_ASSETS = 64;
+
+/**
+ * **Владение геометрией узла** (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §5,
+ * EUI-BR-05, capability `geometryDecorationOwnershipV1`).
+ *
+ * Диагностика V0-D3 показала четыре маршрута, которыми декоративный хвост тултипа доводил кейс до
+ * блокера. Два из них авто-правило замера закрывает само (вложенная в контур pre-transform коробка
+ * ⇒ узел прозрачен для `rootBounds` и его краска объяснена). Два оставшихся требуют **декларации**:
+ * DOM неоднозначен (коробка не вложена), либо автор объявил `expectedSurfaces` по макету и получил
+ * `surface-mismatch` на `paint`, который не снимается ни одним допуском.
+ *
+ * Форма ключа — `"<elementKey>"` либо `"<elementKey>//<суффикс elementPath>"`. Одного `elementKey`
+ * мало по построению: внутренние узлы компонента собственного маркера не имеют и наследуют ключ
+ * ближайшего (`ownerKey`, `src/capture/geometry.mjs`), поэтому у тултипа и пузырь, и хвост — оба
+ * `pay-tooltip`. Суффикс сравнивается с **хвостом** `elementPath` (`div.bubble>i.tail`), а не
+ * целиком: полный путь зависит от обёрток поверхности съёмки и ломался бы от смены сцены.
+ *
+ * Инварианты именно схемы:
+ *
+ * 1. **`role` и `participatesIn` — литералы.** Единственная выразимая декларация: «узел —
+ *    декорация, участвует только в краске». Свободный набор поверхностей означал бы «участвует в
+ *    layout, но не в root», то есть четвёртый способ соврать про габариты.
+ * 2. **`.optional()` без `.default()`** (C6/C25, тот же инвариант, что у `paintPaddingPx`):
+ *    `caseSetIdOf` хэширует `parsed.data`, и zod-дефолт сменил бы контентный адрес **всех** уже
+ *    опубликованных манифестов.
+ * 3. **Злоупотребление судит сервер, а не схема.** Метка на in-flow контейнере с layout-детьми —
+ *    `422 geometry_ownership_invalid` гейта `audit` **по фактам замера**: схема про форму ключа,
+ *    а «этот узел на самом деле держит раскладку» — утверждение о снятом кадре.
+ */
+export const CASE_SET_MAX_GEOMETRY_OWNERSHIP = 16;
+export const GEOMETRY_OWNERSHIP_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,64}(?:\/\/[A-Za-z0-9._:#>[\]()-]{1,192})?$/;
+
+export const caseSetGeometryOwnershipSchema = z.record(
+  z.string().regex(GEOMETRY_OWNERSHIP_KEY_PATTERN, "must be \"<elementKey>\" or \"<elementKey>//<elementPath suffix>\""),
+  z.strictObject({
+    role: z.literal("decoration"),
+    participatesIn: z.tuple([z.literal("paint")]),
+  }),
+).refine((value) => Object.keys(value).length > 0, "declare at least one node")
+  .refine((value) => Object.keys(value).length <= CASE_SET_MAX_GEOMETRY_OWNERSHIP,
+    `at most ${CASE_SET_MAX_GEOMETRY_OWNERSHIP} declared nodes per case`);
 
 export const caseSetCaseSchema = z.strictObject({
   id: caseId,
@@ -467,6 +568,31 @@ export const caseSetCaseSchema = z.strictObject({
    * сохранённым числам.
    */
   textAaBudget: z.enum(TEXT_AA_BUDGETS).optional(),
+  /**
+   * Поле краски случая по сторонам (BR-02, см. `CASE_MAX_PAINT_PADDING_PX`). Кадровый слой: смена
+   * поля меняет сами пиксели кадра, поэтому она обязана давать пересъёмку **этого** случая — и
+   * ничьего больше. Канву сравнения поле **не** двигает (блокер B3 раунда 2): comparison margin
+   * остаётся comparison-owned, а кандидатский растр приводится к канве сравнения перед диффом.
+   */
+  paintPaddingPx: z.strictObject({
+    top: paintPaddingSide,
+    right: paintPaddingSide,
+    bottom: paintPaddingSide,
+    left: paintPaddingSide,
+  }).optional(),
+  /**
+   * Hint предзагрузки ассетов случая (BR-03, `preloadAssets`). **Слой `report-only`**: hint не
+   * освобождает сервер от обнаружения ресурсов, поэтому он не входит ни в один отпечаток — иначе
+   * подсказка автора меняла бы кадр, ничего не меняя на пикселях.
+   */
+  preloadAssets: z.array(z.string()).max(CASE_SET_MAX_PRELOAD_ASSETS).optional(),
+  /**
+   * Владение геометрией узлов случая (BR-05, см. `caseSetGeometryOwnershipSchema`). Слой —
+   * **`frame` + `verdict`**: декларация меняет и съёмочную интерпретацию (объявленный узел
+   * перестаёт быть кандидатом в корень и выпадает из сверки поверхностей), и вердикт (краска узла
+   * перестаёт блокировать). Отсутствие поля — старые отпечатки байт-в-байт (условный спред).
+   */
+  geometryOwnership: caseSetGeometryOwnershipSchema.optional(),
 });
 
 export const caseSetManifestSchema = z.strictObject({
@@ -504,5 +630,6 @@ export type CaseSetCase = z.infer<typeof caseSetCaseSchema>;
 export type CaseSetCapture = z.infer<typeof caseSetCaptureSchema>;
 export type CaseSetCasePolicy = z.infer<typeof caseSetCasePolicySchema>;
 export type CaseSetComparison = z.infer<typeof caseSetComparisonSchema>;
+export type CaseSetGeometryOwnership = z.infer<typeof caseSetGeometryOwnershipSchema>;
 // `CaseSetSlotChild`/`CaseSetSlotBindings` объявлены выше вручную: рекурсивная схема (`z.lazy`)
 // инференс не переживает, а экспортируемый тип обязан оставаться читаемым.

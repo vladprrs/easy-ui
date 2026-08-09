@@ -168,6 +168,28 @@ const serializedDefinitionFields = {
   replacement: z.string().optional(),
 };
 
+/**
+ * Поля единого резолвера схемы (BR-01b, план 2026-08-08 §1; контракт фидбэка §4).
+ *
+ * Одни и те же имена в трёх ответах — save прототипа (`components`), `render-status`
+ * (`resolvedPins[]`) и снап/geometry probe (`componentPins[]`), — чтобы мигратор мог **сверить**
+ * тройки, а не доверять каждой ручке по отдельности. Все поля опциональны: при поднятом
+ * kill-switch'е `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` ответ доволновой byte-for-byte, и полей
+ * нет вовсе; `sourceHash`/`propsSchemaHash` бывают `null` (компонент без исходника/схемы props).
+ */
+const resolvedSchemaFieldsShape = {
+  resolvedVersion: z.number().int().positive().optional(),
+  sourceHash: z.string().nullable().optional(),
+  propsSchemaHash: z.string().nullable().optional(),
+};
+
+/** Блок `components` save-ответа прототипа — проекция узлов `ResolvedComponentGraph`. */
+const resolvedComponentsSchema = z.array(z.object({
+  id: z.string(), name: z.string(), resolvedVersion: z.number().int().positive(),
+  sourceHash: z.string().nullable(), propsSchemaHash: z.string().nullable(),
+  origin: z.enum(["head-active", "pinned", "composition-pin"]),
+}));
+
 export const renderStatusQuerySchema = z
   .strictObject({
     version: positiveIntFromString.optional(), rev: positiveIntFromString.optional(),
@@ -188,7 +210,10 @@ export const renderStatusResponseSchema = z.looseObject({
   url: z.string(),
   revision: z.number(),
   publishedVersion: z.number().nullable(),
-  resolvedPins: z.array(z.object({ id: z.string(), name: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), status: z.string() })),
+  resolvedPins: z.array(z.object({
+    id: z.string(), name: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), status: z.string(),
+    ...resolvedSchemaFieldsShape,
+  })),
   bundleStatus: z.enum(["ready", "failed"]),
   warnings: z.array(z.object({ code: z.string(), message: z.string() })),
   errors: z.array(z.object({ code: z.string(), message: z.string() })),
@@ -403,7 +428,7 @@ const screenshotImageResultSchema = z.object({
   bundleHash: z.string().optional(),
   // Draft-цель (P1b): отрендеренная head-ревизия — клиент печатает «draft rev N».
   draftRev: z.number().int().positive().optional(),
-  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string(), ...resolvedSchemaFieldsShape })).optional(),
   rendererBuild: z.string().nullable(), browserVersion: z.string(),
   /**
    * Объявленный рендерер джобы (R1): отпечаток и его входы, замороженные на постановке.
@@ -437,7 +462,7 @@ const geometryMeasurementFields = {
 const screenshotPrototypeGeometryResultSchema = z.object({
   kind: z.literal("geometry"), surface: z.literal("prototype"),
   resolvedRev: z.number().int().positive(), prototypeInstanceId: z.string(),
-  componentPins: z.array(z.object({ id: z.string(), version: z.number().int().positive(), bundleHash: z.string() })),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number().int().positive(), bundleHash: z.string(), ...resolvedSchemaFieldsShape })),
   designSystemMetaVersion: z.number().int().positive().nullable(), resolvedSpaceScale: spaceScaleSchema,
   ...geometryMeasurementFields,
 });
@@ -470,7 +495,7 @@ const screenshotImageBytesResultSchema = z.object({
   consoleErrors: z.array(z.string()), pageErrors: z.array(z.string()),
   bundleHash: z.string().optional(),
   draftRev: z.number().int().positive().optional(),
-  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string(), ...resolvedSchemaFieldsShape })).optional(),
   rendererBuild: z.string().nullable(), browserVersion: z.string(),
   renderer: screenshotImageResultSchema.shape.renderer,
   /** Overlay-джобы receipt'ов не пишут (§B2.6), поэтому у них поля не будет. */
@@ -753,6 +778,8 @@ export const checkVisualReferenceContract = registerContract({
 /** 422-набор head-tracking'а: publish/share/visual-baseline/bundle-export трекающего дока. */
 const headTrackingError = { status: 422, code: "prototype_head_tracking", description: "The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot." } as const;
 /** Kill-switch D16 (план 2026-08-02 multi-surface-flows): запись `doc.surfaces` требует EASYUI_SURFACES=1. */
+/** Kill-switch BR-09 (план 2026-08-08 §9): запись `elements[].overflowOwnership` требует снятого `EASYUI_GEOMETRY_OWNERSHIP_DISABLED`. */
+const flowOverflowOwnershipDisabledError = { status: 422, code: "flow_overflow_ownership_disabled", description: "The document declares elements[].overflowOwnership, but FlowRoot overflow ownership is disabled on this server (EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1). Discovery: capabilities.features.flowOverflowOwnershipV1." } as const;
 const surfacesDisabledError = { status: 422, code: "surfaces_disabled", description: "The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite." } as const;
 /** Kill-switch D9 (план 2026-08-03 W8a): запись композиций `version:3` требует EASYUI_COMPOSITION_V3=1. */
 const compositionV3DisabledError = { status: 422, code: "composition_v3_disabled", description: "The composition document declares version 3, but v3 writes are disabled on this server (EASYUI_COMPOSITION_V3=1 enables them). Reading and expanding stored v3 documents always works. Discovery: capabilities.features.compositionV3." } as const;
@@ -952,8 +979,8 @@ export const createPrototypeContract = registerContract({
   summary: "Create a prototype from a document (revision 1); validates against the design-system catalog.",
   status: 201,
   requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.omit({ track: true }).shape }),
-  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError, compositionForeignDesignSystemError],
+  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema), components: resolvedComponentsSchema.optional() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError, flowOverflowOwnershipDisabledError, compositionForeignDesignSystemError],
 });
 
 const renderableSchema = z.object({ head: z.boolean(), published: z.boolean().nullable() });
@@ -990,8 +1017,8 @@ export const savePrototypeContract = registerContract({
   method: "PUT", path: "/api/prototypes/{id}",
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
   requestSchema: z.object({ doc: inputPrototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
-  responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError, compositionForeignDesignSystemError],
+  responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema), components: resolvedComponentsSchema.optional() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError, flowOverflowOwnershipDisabledError, compositionForeignDesignSystemError],
 });
 
 export const deletePrototypeContract = registerContract({
@@ -1778,7 +1805,7 @@ const componentPromoteConflictEnvelopeSchema = z.strictObject({
  */
 export const promoteComponentContract = registerContract({
   method: "POST", path: "/api/components/{id}/promote",
-  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, slotsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids, and since migration v31 two cases with equal props but different `slotBindings` are two distinct frames instead of one; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, slotsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set. CANDIDATE DEPENDENCY OVERLAY (plan 2026-08-07 §W3): if the backing runs were captured against unpublished dependencies (`candidateOverlay` of their case set), every node of that graph must be published NOW with the same bundleHash/sourceHash (409 overlay_dependency_not_published / overlay_dependency_diverged), and all runs of a multi-run promote must declare the SAME graph (422 overlay_hash_mismatch) — a leaf published from a different build makes the parent's green verdict describe pixels nobody can rebuild. The successful check is reported as a warning naming the version each dependency landed on.",
+  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, slotsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids, and since migration v31 two cases with equal props but different `slotBindings` are two distinct frames instead of one; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, slotsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set. CANDIDATE DEPENDENCY OVERLAY (plan 2026-08-07 §W3): if the backing runs were captured against unpublished dependencies (`candidateOverlay` of their case set), every node of that graph must be published NOW with the same bundleHash/sourceHash (409 overlay_dependency_not_published / overlay_dependency_diverged), and all runs of a multi-run promote must declare the SAME graph (422 overlay_hash_mismatch) — a leaf published from a different build makes the parent's green verdict describe pixels nobody can rebuild. The successful check is reported as a warning naming the version each dependency landed on. SUBJECT PROMOTION (EUI-BR-08, plan 2026-08-08 §8, `capabilities.features.comparisonOwnershipV1`): a run that FAILED the integration verdict may still back a promote when its case set declares BOTH `comparison.ownership: \"subject-and-integration\"` and `comparison.dependencyPolicy: \"require-eligible-acceptance\"`, the subject itself is clean (the subject visual verdict of every case plus every non-visual gate of the FULL tree, read from the stored case rows) and EVERY runtime dependency bound by the cases' slotBindings tree is published and carries an eligible acceptance of its own (a terminal pass/pass_with_exceptions run of that published version, checked in the database — not a flag). Each condition refuses with its own code (422 subject_promotion_ownership_missing / subject_promotion_subject_failed / subject_promotion_dependency_ineligible) instead of the generic acceptance_run_not_passed, and a set that declares nothing keeps the pre-wave behaviour byte-for-byte. The failing integration verdict is NOT forgiven: it is recorded verbatim in the response (and the migration-commit receipt) as `subjectPromotion: [{runId, caseSetId, integrationVerdict, subjectVerdict, dependencies}]`, and the case verdict itself is unchanged (it stays the integration one). With EASYUI_COMPARISON_OWNERSHIP_DISABLED=1 the whole path is off and a failing run is 422 acceptance_run_not_passed as before.",
   status: 201,
   requestSchema: z.strictObject({
     ...casBody,
@@ -1820,6 +1847,18 @@ export const promoteComponentContract = registerContract({
       profileId: z.string(), runPolicyProfileHash: z.string(),
       currentPolicyProfileHash: z.string().nullable(), stale: z.boolean(),
     }).nullable(),
+    /**
+     * BR-08 (план 2026-08-08 §8): квитанция субъектного promote. `null` — обычный путь (все раны
+     * промоутабельны сами). Непустой массив — версия опубликована **при провальном интеграционном
+     * вердикте**, и он сохранён здесь дословно, а не заменён субъектным.
+     */
+    subjectPromotion: z.array(z.looseObject({
+      runId: z.string(), caseSetId: z.string(),
+      integrationVerdict: z.string(), subjectVerdict: z.literal("pass"),
+      dependencies: z.array(z.looseObject({
+        componentId: z.string(), name: z.string(), version: z.number(), runId: z.string(),
+      })),
+    })).nullable(),
   }),
   errors: [
     errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound,
@@ -1849,6 +1888,12 @@ export const promoteComponentContract = registerContract({
     { status: 409, code: "overlay_dependency_diverged", description: "W3: an overlay dependency is published, but not with the bundleHash/sourceHash the run captured; re-run acceptance against the published dependency" },
     { status: 422, code: "overlay_hash_mismatch", description: "W3: the runs of a multi-run promote declare different candidate dependency overlays; shards of one family must share one dependency graph" },
     { status: 422, code: "case_set_manifest_unreadable", description: "a run of this promote references a case-set manifest this server build cannot parse (a newer manifest after a rollback, or a hand-edited row)" },
+    // BR-08 (план 2026-08-08 §8): субъектный promote непромоутабельного рана. Каждое условие
+    // отказывает своим кодом — «почему субъектный путь не сработал» это вопрос агента, и общий
+    // acceptance_run_not_passed на него не отвечает.
+    { status: 422, code: "subject_promotion_ownership_missing", description: "BR-08: the failing run's case set declares only half of the ownership contract (comparison.ownership without comparison.dependencyPolicy, or vice versa); details carry {runId, caseSetId, missing, cases}" },
+    { status: 422, code: "subject_promotion_subject_failed", description: "BR-08: the subject itself is not clean in the failing run — a subject visual verdict failed, a non-visual gate of the full tree failed, or a case carries no subject verdict at all; details carry {runId, caseSetId, cases}" },
+    { status: 422, code: "subject_promotion_dependency_ineligible", description: "BR-08: a runtime dependency of the case tree is unpublished or lacks an eligible acceptance of its own (a terminal promotable run of the published version); details carry {runId, caseSetId, dependencies:[{name, version, componentId, reason}]} where reason is not_published|pin_not_renderable|no_active_publication|no_acceptance_evidence|acceptance_not_promotable. An ownership-declaring set that binds no dependencies at all refuses with the same code and an empty list" },
     { status: 422, code: "acceptance_coverage_incomplete", description: "W7: the union coverage of the runs does not match the requested expectedCases; details carry {expectedCases, coveredCases, runs}" },
     { status: 429, code: "validate_in_flight", description: "a validate/promote build is already in flight for this user" },
     { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
@@ -2044,6 +2089,29 @@ const acceptanceImpactSchema = z.looseObject({
   recaptureCount: z.number(), reason: z.string(),
 });
 
+/**
+ * Отчёт об остановке рана (BR-06, план 2026-08-08 §6). Одна форма на два случая — «где встали» и
+ * «чьим продолжением являемся», — потому что оба отвечают на один вопрос агента: с какой точки
+ * продолжать. `resumable: false` бывает: не всякая остановка продолжаема (cancel, пустой скоуп).
+ */
+const acceptanceResumeSchema = z.looseObject({
+  resumable: z.boolean(),
+  /** Фаза, на которой ран встал: `resolve|validate|allocate-renderer|capture|readiness|geometry|visual|determinism|verdict`. */
+  phase: z.string().optional(),
+  /** Минимальная фаза по НЕЗАВЕРШЁННЫМ случаям: «дальше неё ран целиком не продвинулся». */
+  lastCompletedPhase: z.string().optional(),
+  elapsedMs: z.number().optional(),
+  resumeFrom: z.string().optional(),
+  /** Джобы капчура, названные упавшими случаями. */
+  jobIds: z.array(z.string()).optional(),
+  /** Продолжение: прежние статус, причина и фаза рана-предка. */
+  resumedFrom: z.looseObject({
+    runId: z.string(), attempt: z.number(), status: z.string(),
+    statusReason: z.string().nullable(), phase: z.string().nullable(),
+    lastCompletedPhase: z.string().nullable(), jobIds: z.array(z.string()),
+  }).optional(),
+});
+
 const acceptanceRunViewSchema = z.looseObject({
   runId: z.string(), candidateId: z.string(), componentId: z.string(), status: acceptanceRunStatusSchema,
   policy: z.looseObject({ id: z.string(), hash: z.string() }),
@@ -2054,8 +2122,24 @@ const acceptanceRunViewSchema = z.looseObject({
   impact: acceptanceImpactSchema.nullable(),
   /** Алгебра refresh (C1); `null` — ран поставлен до миграции v29. */
   refresh: acceptanceRefreshAlgebraSchema.nullable(),
-  /** Причина терминального статуса (`refresh_scope_empty`, D2); `null` у обычного исхода. */
+  /**
+   * Причина терминального статуса; `null` у обычного исхода. Словарь: `refresh_scope_empty` (D2),
+   * BR-06 добавил `interrupted`, `phase_timeout`, `renderer_unavailable`,
+   * `capture_budget_exhausted`, `queue_starvation`.
+   */
   statusReason: z.string().nullable(),
+  /** BR-06: ран, продолжением которого этот является; `null` — самостоятельный. */
+  resumedFromRunId: z.string().nullable().optional(),
+  /** BR-06: номер попытки в цепочке продолжений (1 — исходный ран). */
+  attempt: z.number().optional(),
+  /** BR-06: отчёт об остановке либо lineage продолжения; `null` — остановки ран не описывал. */
+  resume: acceptanceResumeSchema.nullable().optional(),
+  /**
+   * BR-10a: `blk_<sha256>` канонизованного basis блокера и сортированных терминальных кодов;
+   * `null` — блокера нет (ран прошёл либо отменён). **Ключа нет вовсе** при
+   * `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1` — вместе с ним исчезает и ручка `/retry-disposition`.
+   */
+  blockerFingerprint: z.string().nullable().optional(),
   remediationGroups: z.array(acceptanceRemediationGroupSchema),
   /** W7 (AC §9.3): advisory-предупреждения рана; пустой массив — «нечего перепроверять». */
   warnings: z.array(acceptanceRunWarningSchema),
@@ -2081,6 +2165,12 @@ const acceptanceRunSummarySchema = z.looseObject({
   /** Маркер контракта (C23): его отсутствие означает сервер, который проигнорировал `view`. */
   view: z.literal("summary"),
   runId: z.string(), status: acceptanceRunStatusSchema, statusReason: z.string().nullable(),
+  /** BR-06: `attempt 2 after acc_…` — поля нет у самостоятельной первой попытки. */
+  lineage: z.string().optional(),
+  /** BR-06: `phase_timeout@capture last=validate resumable` — поля нет, если ран не вставал. */
+  resume: z.string().optional(),
+  /** BR-10a: тот же отпечаток блокера, что в полном виде; ключа нет при поднятом kill-switch'е. */
+  blockerFingerprint: z.string().nullable().optional(),
   progress: acceptanceProgressSchema,
   /** `{gate: "pass:17 fail:8"}` — по строке на гейт. */
   gates: z.record(z.string(), z.string()),
@@ -2164,7 +2254,9 @@ export const createAcceptanceRunContract = registerContract({
     candidateId: z.string(),
     caseSetId: z.string().optional(),
     idempotencyKey: z.string().min(1).max(200).optional(),
-    policy: z.enum(["default-v1", "pixel-strict-v1"]).optional(),
+    // BR-07: третий профиль (`default-v1-exceptions`) допускает `pass_with_exceptions` — единственный
+    // профиль, под которым объяснённые профилем рендерера исключения не роняют ран.
+    policy: z.enum(["default-v1", "pixel-strict-v1", "default-v1-exceptions"]).optional(),
     cases: z.array(z.strictObject({ key: z.string(), props: z.record(z.string(), z.unknown()) })).optional(),
     refresh: z.union([
       z.enum(["none", "failed", "all"]),
@@ -2238,6 +2330,14 @@ export const getAcceptanceRunCasesContract = registerContract({
         reuseReason: z.string().optional(),
       }).nullable(),
       referenceAssetId: z.string().nullable(), startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
+      /**
+       * BR-06: причина инфраструктурного падения случая. `null` — случай инфраструктурно не падал
+       * (в том числе любая строка старше миграции v37: до неё причина не хранилась нигде).
+       */
+      error: z.looseObject({
+        outcome: z.string(), message: z.string(),
+        attempts: z.number().optional(), elapsedMs: z.number().optional(), phase: z.string().optional(),
+      }).nullable().optional(),
       gates: z.array(acceptanceGateResultSchema), causes: z.array(acceptanceCauseSchema),
       suggestedPolicy: acceptanceSuggestedPolicySchema.nullable(),
       artifacts: z.array(z.looseObject({ name: z.string(), sha256: z.string(), bytes: z.number() })),
@@ -2264,6 +2364,90 @@ export const cancelAcceptanceRunContract = registerContract({
   errors: [
     ...acceptanceAuthErrors,
     { status: 409, code: "run_not_cancellable", description: "only queued runs can be cancelled" },
+  ],
+});
+
+/**
+ * BR-06 (план 2026-08-08 §6, фидбэк §9): продолжение остановленного рана. Живёт под тем же
+ * гейтом `EASYUI_ACCEPTANCE_MATRIX=1` и собственным kill-switch'ем.
+ */
+export const resumeAcceptanceRunContract = registerContract({
+  method: "POST", path: "/api/acceptance-runs/{runId}/resume",
+  summary: "Resume a run that STOPPED without a verdict (`capabilities.features.acceptanceResumeV1`). Resume is a NEW RUN, not a resurrection: a terminal run is immutable because publishes, `evidence_manifest_hash` and the promote invariants reference it, so the server queues a fresh run over the same candidate, case set and policy profile and answers 202 with its id, `resumedFromRunId`, `attempt` and `resumedFrom {runId, attempt, status, statusReason, phase, lastCompletedPhase, jobIds}` — the previous error travels with the lineage instead of requiring a second request. Only a run that declared itself resumable can be resumed: after a process restart the startup sweep marks non-terminal runs `error` with `statusReason: \"interrupted\"` (their `running`/`pending` cases are unfinished BY DEFINITION — nobody closed them), a typed infrastructure timeout terminalizes with `statusReason: \"phase_timeout\"` naming the phase, and the allocate circuit breaker terminalizes with `renderer_unavailable` / `capture_budget_exhausted` / `queue_starvation` after three consecutive allocation-class case outcomes. Anything else — a verdict, a cancel, `refresh_scope_empty` — is 409 run_not_resumable; queue an ordinary run instead. WHAT IS REUSED: completed gates of the `validate` phase (contract/defaults/audit) whose PER-GATE FINGERPRINT still matches are carried over verbatim and are not re-executed; everything from `capture` onward is captured again, because the ancestor's frame may not exist at all. A partially executed case carries exactly its finished structural gates. Idempotency is deterministic — `idempotency_key = \"resume:<sourceRunId>:<attempt>\"` — so repeating the call returns the same run, and a second concurrent resume of the same candidate is refused by the one-in-flight index (409 acceptance_run_in_flight). Resuming an already resumed run is 409 run_already_resumed with the successor's id in `error.runId`. The body must be `{}`: the case set, surface, policy and candidate come from the ancestor — overriding them would be a new run, not a continuation. With EASYUI_ACCEPTANCE_RESUME_DISABLED=1 the handle answers 409 acceptance_resume_disabled (the observability half of the wave — per-case `error`, the allocate-renderer seam and the circuit breaker — stays on regardless: those are defect fixes, not a feature).",
+  status: 202,
+  requestSchema: z.strictObject({}),
+  responseSchema: z.looseObject({
+    runId: z.string(), status: acceptanceRunStatusSchema, candidateId: z.string(), componentId: z.string(),
+    policy: z.looseObject({ id: z.string(), hash: z.string() }),
+    progress: acceptanceProgressSchema, cases: z.number(), cached: z.boolean(),
+    refresh: acceptanceRefreshAlgebraSchema.optional(),
+    resumedFromRunId: z.string().nullable(),
+    attempt: z.number(),
+    resumedFrom: z.looseObject({}).nullable(),
+  }),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 409, code: "acceptance_resume_disabled", description: "EASYUI_ACCEPTANCE_RESUME_DISABLED=1 on this server" },
+    { status: 409, code: "run_not_resumable", description: "the run is still going, or it stopped in a state that is not resumable (verdict, cancel, refresh_scope_empty)" },
+    { status: 409, code: "run_already_resumed", description: "a continuation of this run already exists; its id is in error.runId" },
+    { status: 409, code: "acceptance_run_in_flight", description: "the candidate already has a queued/running run" },
+    { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
+  ],
+});
+
+/**
+ * BR-10a (план 2026-08-08 §10, фидбэк §13): read-only disposition повтора. Живёт под тем же гейтом
+ * `EASYUI_ACCEPTANCE_MATRIX=1` и собственным kill-switch'ем `EASYUI_BLOCKER_FINGERPRINT_DISABLED`.
+ */
+const retryDispositionBasisSchema = z.looseObject({
+  rendererFingerprint: z.string().nullable(),
+  geometryContractVersion: z.number(),
+  candidateSourceHash: z.string().nullable(),
+  comparisonFingerprint: z.array(z.string()),
+  verdictPolicyFingerprint: z.array(z.string()),
+  readinessPolicyHash: z.string().nullable(),
+  policyProfileHash: z.string(),
+  caseFingerprintAlgoVersion: z.number(),
+  // ── BR-10b (план 2026-08-08 §10, форма basis фидбэка §13): версии политик волны. Все четыре —
+  // **производные** (собственных колонок у них нет), поэтому они отчёт «под какими политиками этот
+  // сервер судил бы ран сейчас», а не сохранённое состояние: в `changed[]` они не появляются
+  // никогда, зато их значение (и, через него, `blockerFingerprint`) меняется при снятии
+  // kill-switch'а волны — именно так агент узнаёт, что кэшированный блокер пора перечитать.
+  /** BR-01: контрактная версия резолвера схемы — 2 под волной, 1 под `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1`. Слоя отпечатка не имеет: кандидат приёмки резолвером не параметризован. */
+  schemaResolverVersion: z.number(),
+  /** BR-03: версия readiness-политики ПРОФИЛЯ РАНА — 4 / 3 (v4-свитч) / 1 (барьера нет); `null` — профиль неизвестен этому серверу. Кадровый слой (через `rendererFingerprint`). */
+  resourceBarrierPolicyVersion: z.number().nullable(),
+  /** BR-04: версия семантики сравнения — 2 под волной, 1 доволново. Слой сравнения (re-diff). */
+  comparisonPolicyVersion: z.number(),
+  /** BR-05: версия политики владения геометрией — 1 под волной, `null` доволново (политики не существовало). Вердиктный слой (recompute). */
+  geometryOwnershipPolicyVersion: z.number().nullable(),
+});
+
+export const acceptanceRetryDispositionContract = registerContract({
+  method: "GET", path: "/api/acceptance-runs/{runId}/retry-disposition",
+  summary: "Answer, WITHOUT capturing a single pixel, whether repeating this run can produce a different verdict, and how deep the replay would have to go (`capabilities.features.blockerFingerprintV1`). The server recomputes the WOULD-BE case fingerprints of the same cases under its CURRENT state — with the same function the scheduler and the runner use — and compares them layer by layer with the fingerprints persisted on the run: nothing moved → disposition \"unchanged\" (do-not-retry); the verdict layer moved → \"recompute\"; the comparison layer moved → \"rediff\"; the frame layer moved → \"recapture\"; the component head no longer hashes to the candidate's sourceHash → \"rebuild\" (update-source), because the run was taken from source the author has already replaced. The run-level disposition is the MAXIMUM over cases, `changed[]`/`unchanged[]` name the basis fields, and `cases[]` carries the per-case verdict with the layers that moved. `blockerFingerprint` is `blk_<sha256>` over the canonicalized basis plus the SORTED terminal gate codes — neither runId nor timestamps enter the pre-image, so an unchanged blocker keeps its fingerprint across runs and across servers, and the same value is served by GET /api/acceptance-runs/{runId} and by the evidence manifest. When the basis cannot be completed — the candidate was evicted by TTL/GC, the case set is gone or no longer reconstructible, the policy profile is unknown to this server, or the case rows predate the fingerprint layers of migration v29 — the answer is a TYPED `disposition:\"unchanged\"` + `suggestedAction:\"do-not-retry\"` with `basisIncomplete` naming the reason, never a 500. `suggestedAction` is `update-source` for rebuild, `resume-run` when the run declared itself resumable (BR-06), `do-not-retry` when nothing changed, `new-run` otherwise. Optional `candidateId`/`caseSetId` query parameters are ASSERTIONS about the run, not filters: a mismatch is a typed 409 rather than silent agreement. The handle is strictly read-only (no-store): it creates no run, touches no state, and never writes to the CAS. The `basis` also carries the four POLICY VERSIONS of the blocker-removal wave — `schemaResolverVersion` (BR-01), `resourceBarrierPolicyVersion` (BR-03), `comparisonPolicyVersion` (BR-04) and `geometryOwnershipPolicyVersion` (BR-05): they are DERIVED from this server's current state, not persisted on the run, so they never appear in `changed[]` (there is no stored value to compare them with, exactly as for `readinessPolicyHash`); what they do is name the policies a repeat would run under, and each of them enters exactly one fingerprint layer — barrier → frame (recapture), comparison → comparison (rediff), geometry ownership → verdict (recompute), while the schema resolver enters NONE (an acceptance candidate is one component's source and is not parameterised by the prototype schema resolver; only a moved component head produces `rebuild`). Flipping a wave kill-switch therefore changes that basis field and, with it, `blockerFingerprint` — a cached blocker must be re-read rather than trusted.",
+  responseSchema: z.looseObject({
+    runId: z.string(),
+    blockerFingerprint: z.string().nullable(),
+    disposition: z.enum(["unchanged", "recompute", "rediff", "recapture", "rebuild"]),
+    changed: z.array(z.string()),
+    unchanged: z.array(z.string()),
+    suggestedAction: z.enum(["do-not-retry", "resume-run", "new-run", "update-source"]),
+    basis: retryDispositionBasisSchema,
+    basisIncomplete: z.enum([
+      "candidate_evicted", "case_set_evicted", "case_set_unreconstructible", "case_set_changed",
+      "policy_profile_unknown", "case_fingerprint_layers_missing", "no_cases",
+    ]).optional(),
+    cases: z.array(z.looseObject({
+      caseId: z.string(),
+      disposition: z.enum(["unchanged", "recompute", "rediff", "recapture", "rebuild"]),
+      layers: z.array(z.enum(["frame", "comparison", "verdict"])),
+    })),
+  }),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 409, code: "candidate_mismatch", description: "the candidateId query parameter names another candidate than the run" },
+    { status: 409, code: "case_set_mismatch", description: "the caseSetId query parameter names another case set than the run" },
   ],
 });
 
@@ -3293,6 +3477,16 @@ export const capabilitiesResponseSchema = z.object({
     caseSetMaxOverlayNodes: z.number(), snapPlanMaxScreens: z.number(),
     migrationCommitPhaseTimeoutMs: z.number(), sourcePackageMaxExports: z.number(),
     resourceBarrierMaxResources: z.number(), resourceBarrierBudgetMs: z.number(),
+    /**
+     * Волна 2026-08-08 (BR-02/BR-03): потолок **одной стороны** поля краски случая
+     * (`cases[].paintPaddingPx`, тот же, что у скалярного `paintMargin`), бюджет площади кадра
+     * `(w+left+right)×(h+top+bottom)×dsf²` в мегапикселях (`422 capture_budget_exceeded`) и потолок
+     * hint'а предзагрузки (`cases[].preloadAssets`).
+     */
+    captureMaxPaintPaddingPx: z.number(), captureFrameBudgetMpx: z.number(),
+    caseSetMaxPreloadAssets: z.number(),
+    /** BR-05: потолок объявленных узлов владения геометрией на случай (`cases[].geometryOwnership`). */
+    caseSetMaxGeometryOwnership: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
     surfaces: z.number(),
   }),
@@ -3438,12 +3632,125 @@ export const capabilitiesResponseSchema = z.object({
     /** Сага миграционного коммита `/api/migration-commits*` (план 2026-08-07 §W4); гаснет матрицей и `EASYUI_MIGRATION_COMMIT_DISABLED=1`. */
     migrationCommit: z.boolean(),
     /**
+     * `POST /api/acceptance-runs/:runId/resume` — продолжение остановленного рана **новым** раном
+     * (BR-06, план 2026-08-08 §6); гаснет матрицей и `EASYUI_ACCEPTANCE_RESUME_DISABLED=1`.
+     * Наблюдаемость той же волны (per-case `error`, шов allocate-renderer, circuit breaker) от
+     * флага не зависит — это фиксы дефектов, а не фича.
+     */
+    acceptanceResumeV1: z.boolean(),
+    /**
+     * `blockerFingerprint` терминального рана и read-only
+     * `GET /api/acceptance-runs/:runId/retry-disposition` (BR-10a, план 2026-08-08 §10); гаснет
+     * матрицей и `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1`. Слой полностью read-only: ни вердиктов,
+     * ни отпечатков случаев, ни evidence он не меняет — только отвечает, стоит ли повторять.
+     */
+    blockerFingerprintV1: z.boolean(),
+    /**
+     * Атрибуция расхождения по элементам (BR-07, план 2026-08-08 §7): карта элементов кадра
+     * (`element-map.json` в evidence), owner-тоталы по **полной** diff-маске, честный `unknown`,
+     * контракт кластера §10 (`ownerElementKey`/`ownerComponentId`/`paintClass`/`structural`/
+     * `basis[]`/`confidence`) и квитанция сравнения (matte/flattening/color profile/renderer/
+     * шрифты/версия политики сравнения). Слой **report-only**: ни один вердикт от него не зависит.
+     * Гейтится матричной приёмкой и `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1`.
+     */
+    visualAttributionV2: z.boolean(),
+    /**
+     * Профили политики рендерера (BR-07): server-owned реестр, публикуемый в
+     * `acceptance.rendererPolicyProfiles` **до** рана. Применяются второй инстанцией визуального
+     * гейта и только когда все кластеры случая — renderer-only класс в scope профиля; пишут
+     * `exceptions[]` (первый продюсер `pass_with_exceptions`). Своя ось тумблера
+     * (`EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1`), потому что она меняет **promote-eligibility**:
+     * под ней профиль политики `default-v1-exceptions` перестаёт быть промоутабельным.
+     */
+    rendererPolicyProfilesV2: z.boolean(),
+    /**
+     * Два вердикта одного сравнения (BR-08, план 2026-08-08 §8): `comparison.ownership`,
+     * `comparison.subjectComponentId`, `comparison.dependencyPolicy` в case-set, subject/integration
+     * метрики визуального гейта и группировка исключённых пикселей по зависимостям. Вердикт случая
+     * не меняется — им остаётся интеграционный. Гейтится матрицей и
+     * `EASYUI_COMPARISON_OWNERSHIP_DISABLED=1`.
+     */
+    comparisonOwnershipV1: z.boolean(),
+    /**
      * Версия схемы агентской квитанции драйвера (`envelope`, план 2026-08-07 §1.4, W6b) —
      * **число**, а не булев флаг: конверт существует всегда, вопрос только в том, какую его
      * форму понимает эта пара «сервер × харнес». Растёт лишь при несовместимом изменении самого
      * конверта; новые ключи внутри `summary` версию не двигают.
      */
     receiptEnvelopeVersion: z.number().int().positive(),
+    /**
+     * Единый резолвер схемы published component на save/readiness (план 2026-08-08 §1, BR-01a):
+     * пины композиции — только на её раскрытие, `track:head` резолвит голову в ДС закреплённой
+     * версии, неизвестный prop — `component_prop_unknown` с `resolvedVersion`/`sourceHash`/
+     * `propsSchemaHash`/`catalogRevision`/`acceptedKeys`. Матрицей не гейтится; false — при
+     * `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` (доволновая семантика byte-for-byte).
+     */
+    prototypeSchemaResolverV2: z.boolean(),
+    /**
+     * Контрактная версия этого резолвера: 2 — волна BR-01a/BR-01b, 1 — доволновой путь под
+     * kill-switch. На версии 2 три ответа называют **один и тот же** резолв одинаковыми полями
+     * (`resolvedVersion`/`sourceHash`/`propsSchemaHash`): save прототипа — блоком `components`,
+     * `GET …/render-status` — в `resolvedPins[]`, снап и geometry probe — в `componentPins[]`.
+     * Источник у всех трёх один — `ResolvedComponentGraph` (`server/components/resolvedGraph.ts`).
+     */
+    prototypeSchemaResolverVersion: z.number().int().positive(),
+    /**
+     * Поле краски случая **по сторонам** (`cases[].paintPaddingPx`, план 2026-08-08 §2, BR-02):
+     * кадровый слой ровно того случая, который его объявил, — соседние кейсы набора не
+     * переснимаются. Канву сравнения поле не двигает: кандидатский растр приводится к ней окном.
+     * Матрицей не гейтится; false — при `EASYUI_CAPTURE_V4_DISABLED=1`
+     * (`422 capture_padding_disabled` на PUT набора). Потолки — `limits.captureMaxPaintPaddingPx`
+     * и `limits.captureFrameBudgetMpx`.
+     */
+    paintCapturePaddingV1: z.boolean(),
+    /**
+     * Точная канва content-hug сравнения (план 2026-08-08 §4, BR-04): при объявленной канве
+     * размеры сводятся **точно** (delta 0, без неявного zero-pad), бюджет судится по поверхности
+     * сравнения (`rawDiffPctOfSurface`), эталон не того масштаба — `reference_scale_mismatch`.
+     * Общий kill-switch с `paintCapturePaddingV1`: `EASYUI_CAPTURE_V4_DISABLED=1`.
+     */
+    exactContentHugCanvasV1: z.boolean(),
+    /**
+     * Версия семантики сравнения этого инстанса (BR-04/BR-10b): `2` — волна, `1` — доволновые
+     * правила под `EASYUI_CAPTURE_V4_DISABLED=1`. Пара к `exactContentHugCanvasV1` того же вида,
+     * что `resourceBarrierV4` ↔ `resourceBarrierPolicyVersion`: флаг говорит «включено», число —
+     * «по каким правилам сведены метрики». Смена стоит re-diff'а (слой сравнения), не пересъёмки.
+     */
+    comparisonPolicyVersion: z.number().int().positive(),
+    /**
+     * Полный registry-resource barrier (план 2026-08-08 §3, BR-03): фаза `registry`, каналы
+     * srcset/псевдоэлементов/шрифтов/`icon-registry`, ожидаемый манифест ассетов кандидата,
+     * пер-ресурсные записи и сужение вердикта до `indeterminate` (`resource_barrier_incomplete`)
+     * на барьерных причинах. Матрицей не гейтится; false — под любым из двух свитчей
+     * (`EASYUI_RESOURCE_BARRIER_DISABLED=1`, `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`).
+     */
+    /**
+     * Decoration-aware geometry (план 2026-08-08 §5, BR-05): факты замера узлов вне потока
+     * (`preTransformBounds`, матрица, post-transform краска, причины участия в поверхностях),
+     * авто-правило decoration (прозрачность для `rootBounds`, неблокирующая краска) и per-case
+     * `cases[].geometryOwnership` (слой `frame`+`verdict`, `geometryContractVersion: 3`).
+     * Матрицей не гейтится; false — при `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1`
+     * (`422 geometry_ownership_disabled` на PUT набора, доволновая семантика byte-for-byte).
+     */
+    geometryDecorationOwnershipV1: z.boolean(),
+    /**
+     * Владение переливом FlowRoot (план 2026-08-08 §9, BR-09): `elements[].overflowOwnership`
+     * (и composition layout-токен), вклад поддерева по объявленной оси ограничен scrollport'ом,
+     * факты `overflowOwners`, коды `unowned-overflow`/`owned-overflow-exceeds-axis`. Общий
+     * kill-switch с `geometryDecorationOwnershipV1`; false ⇒ `422 flow_overflow_ownership_disabled`
+     * на записи документа с полем (чтение stored-документов не гейтится).
+     */
+    flowOverflowOwnershipV1: z.boolean(),
+    /**
+     * Версия политики владения геометрией (BR-05/BR-10b): `1` — волна, **`null`** — доволновое
+     * состояние под `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` (политики владения до волны не
+     * существовало вовсе, поэтому `0` был бы выдумкой). Входит в вердиктный снимок случая, поэтому
+     * её смена стоит recompute'а без пересъёмки.
+     */
+    geometryOwnershipPolicyVersion: z.number().int().positive().nullable(),
+    resourceBarrierV4: z.boolean(),
+    /** Фактическая версия политики барьера этого инстанса: `4` / `3` (v4-свитч) / `1` (барьера нет). */
+    resourceBarrierPolicyVersion: z.number().int().positive(),
   }),
   /**
    * Именованные пресеты live-text AA-бюджета (план 2026-08-06 §W4): значения владеет сервер,
@@ -3481,6 +3788,27 @@ export const capabilitiesResponseSchema = z.object({
      * (`default-v1` → `1`; `pixel-strict-v1` откатывается в `2`, поэтому одно число на всех соврало бы).
      */
     readinessPolicyVersion: z.number().int().positive(),
+    /**
+     * **Профили политики рендерера** (BR-07, план 2026-08-08 §7): server-owned реестр, объявленный
+     * до рана. Клиент обязан иметь возможность прочитать scope, потолок и **чем профиль протухает**
+     * (`expiry`), не заглядывая в образ: профиль, применённый задним числом, был бы не политикой, а
+     * самооправданием. Пустой массив — исключений в этой сборке не производит никто (в том числе
+     * при `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1`).
+     */
+    rendererPolicyProfiles: z.array(z.object({
+      profileId: z.string(),
+      rendererFingerprint: z.string().nullable(),
+      scope: z.object({
+        paintClass: z.string(),
+        region: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+      }),
+      maxResidualPct: z.number(),
+      expiry: z.object({
+        renderer: z.string().optional(), fonts: z.string().optional(), matte: z.string().optional(),
+        asset: z.string().optional(), geometry: z.string().optional(),
+      }),
+      description: z.string(),
+    })),
   }),
   /** Объявленный рендерер этой сборки (план renderer-contract-2 §5 R1). */
   renderer: rendererReportSchema,

@@ -54,6 +54,12 @@ interface PaintShape {
   effectSources?: unknown[];
   clipChain?: unknown[];
   bytes?: Uint8Array;
+  /** BR-05: узлы вне потока с pre-transform геометрией и ролью (аддитивный факт замера). */
+  outOfFlowNodes?: unknown[];
+  /** BR-05: декларации, наложенные на in-flow контейнер с layout-детьми (факт замера). */
+  ownershipViolations?: unknown[];
+  /** BR-07 S1: карта узлов поддерева маркера (аддитивный факт замера вне отпечатка). */
+  elementMap?: { nodes: unknown[]; truncated: boolean; total: number };
 }
 
 const paintResult = (shape: PaintShape = {}): ScreenshotResult => ({
@@ -70,6 +76,9 @@ const paintResult = (shape: PaintShape = {}): ScreenshotResult => ({
     rootClip: shape.rootClip ?? null,
     effectSources: shape.effectSources ?? [],
     clipChain: shape.clipChain ?? [],
+    outOfFlowNodes: shape.outOfFlowNodes ?? [],
+    elementMap: shape.elementMap ?? { nodes: [], truncated: false, total: 0 },
+    ...(shape.ownershipViolations === undefined ? {} : { ownershipViolations: shape.ownershipViolations }),
   }],
 } as unknown as ScreenshotResult);
 
@@ -94,7 +103,7 @@ const ink = (bounds: { x: number; y: number; width: number; height: number } | n
     clamped: { left: false, right: false, top: false, bottom: false, ...clamped },
   });
 
-async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; expectedSurfaces?: Record<string, { width: number; height: number }>; clipExpectation?: "root-does-not-clip-layout"; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES; db?: Database; referenceAssetId?: string; dsf?: number } = {}) {
+async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; expectedSurfaces?: Record<string, { width: number; height: number }>; clipExpectation?: "root-does-not-clip-layout"; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES; db?: Database; referenceAssetId?: string; dsf?: number; geometryOwnership?: Record<string, unknown> } = {}) {
   const dir = await mkdtemp(resolve(process.cwd(), ".geo2-test-"));
   dirs.push(dir);
   const service = new PaintCapture(options.result ?? paintResult());
@@ -107,6 +116,7 @@ async function context(options: { result?: ScreenshotResult; inkBbox?: GateConte
     candidate: { componentId: COMPONENT_ID, rev: 1, sourceHash: "src" } as unknown as CandidateSubject,
     case: {
       caseId: "alpha", caseKey: "alpha", props: {}, propsHash: "ph", aliasOfCaseId: null,
+      ...(options.geometryOwnership ? { geometryOwnership: options.geometryOwnership as never } : {}),
       ...(options.expectedGeometry ? { expectedGeometry: options.expectedGeometry } : {}),
       ...(options.expectedSurfaces ? { expectedSurfaces: options.expectedSurfaces as never } : {}),
       ...(options.clipExpectation ? { clipExpectation: options.clipExpectation } : {}),
@@ -131,7 +141,9 @@ test("clean geometry passes and the paint frame plus facts land in evidence", as
   expect(service.probes).toEqual(["paint"]);
   expect(result.status).toBe("pass");
   expect(result.metrics).toMatchObject({ semantics: "v2-paint", policyVerdict: "clean", deviceScaleFactor: 2, paintMargin: 64 });
-  expect(result.artifacts?.map((item) => item.name).sort()).toEqual(["geometry.json", "paint.png"]);
+  // BR-07 S1: карта элементов — **свой** артефакт (`geometry.json` при этом остаётся без неё:
+  // карта на порядок объёмнее замера, и её место рядом, а не внутри).
+  expect(result.artifacts?.map((item) => item.name).sort()).toEqual(["element-map.json", "geometry.json", "paint.png"]);
   const facts = JSON.parse(new TextDecoder().decode((await readArtifact(dir, result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!)) as { layoutBounds: unknown; paintBoundsSource: string };
   expect(facts.layoutBounds).toEqual(LAYOUT);
   expect(facts.paintBoundsSource).toBe("alpha");
@@ -267,7 +279,27 @@ test("clamped ink and a missing layout contour stay indeterminate with actionabl
   const clamped = await context({ inkBbox: ink({ x: 0, y: 64, width: 268, height: 96 }, { left: true }) });
   const clampedResult = await geometry2Gate.run(clamped.ctx);
   expect(clampedResult.status).toBe("indeterminate");
-  expect(clampedResult.detail).toContain("increase the paint margin");
+  // BR-02 (план 2026-08-08 §2): вместо безликого «increase the paint margin» — названная сторона,
+  // её фактическое поле и требуемый минимум, плюс типизированный код `paint_capture_clipped`.
+  expect(clampedResult.detail).toContain("ink touches the left edge of the capture field (left 64px)");
+  expect(clampedResult.detail).toContain("at least left 65");
+  expect(clampedResult.metrics!.codes).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: "paint_capture_clipped", severity: "error", ref: "left" }),
+  ]));
+  expect(clampedResult.metrics!.paintClipped).toMatchObject({
+    sides: ["left"], requestedPx: { top: 64, right: 64, bottom: 64, left: 64 }, minimumPx: { left: 65 },
+  });
+
+  // Kill-switch: доволновая формулировка возвращается целиком, кодов волны нет.
+  process.env.EASYUI_CAPTURE_V4_DISABLED = "1";
+  try {
+    const legacy = await context({ inkBbox: ink({ x: 0, y: 64, width: 268, height: 96 }, { left: true }) });
+    const legacyResult = await geometry2Gate.run(legacy.ctx);
+    expect(legacyResult.status).toBe("indeterminate");
+    expect(legacyResult.detail).toContain("increase the paint margin");
+    expect(legacyResult.metrics!.codes).toEqual([]);
+    expect(legacyResult.metrics!.paintClipped).toBeUndefined();
+  } finally { delete process.env.EASYUI_CAPTURE_V4_DISABLED; }
 
   const noLayout = await context({ result: paintResult({ layoutBounds: null }) });
   const noLayoutResult = await geometry2Gate.run(noLayout.ctx);
@@ -514,4 +546,133 @@ test("W1b: clipExpectation судится по клипу самого корн�
   expect(violatedResult.status).toBe("fail");
   expect(violatedResult.metrics!.clipSatisfied).toBe(false);
   expect(violatedResult.detail).toContain("the root box declares overflow: hidden hidden");
+});
+
+// --------------------------------------------- BR-05: владение геометрией (план 2026-08-08 §5)
+
+/** Хвост тултипа: `8×24` под нижней кромкой пузыря `391×88`, вложенный pre-transform коробкой. */
+const TAIL_NODE = {
+  elementKey: "pay-tooltip", elementPath: "div.bubble>i.tail",
+  causes: ["position:absolute", "transform:rotate(45deg)"],
+  preTransformBounds: { x: 90, y: 136, width: 8, height: 24 },
+  transform: "rotate(45deg)",
+  postTransformPaintBounds: { x: 94, y: 160, width: 8, height: 24 },
+  role: "decoration", roleSource: "auto",
+  participation: { layoutUnion: "excluded:decoration", root: "excluded:decoration", paint: "included" },
+};
+
+test("BR-05: краска декорации не блокирует вердикт и без allowPaintOverflow", async () => {
+  const { ctx, dir } = await context({
+    result: paintResult({ outOfFlowNodes: [TAIL_NODE], effectSources: [
+      { elementKey: "pay-tooltip", elementPath: "div.bubble>i.tail", cause: "position:absolute", rect: { x: 94, y: 160, width: 8, height: 24 } },
+    ] }),
+    // Краска вышла на 24 px вниз — ровно на коробку хвоста.
+    inkBbox: ink({ x: 64, y: 64, width: 140, height: 120 }),
+  });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics!.policyVerdict).toBe("paint-overflow-decoration");
+  expect(result.metrics!.allowPaintOverflow).toBe(false);
+  expect((result.metrics!.decorationSources as unknown[]).length).toBe(1);
+  const record = JSON.parse(new TextDecoder().decode(
+    (await readArtifact(dir, result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!)) as Record<string, unknown>;
+  // Факт «краска вышла» сохраняется в evidence вместе с объяснением — вердикт не притворяется clean.
+  expect(record.policyVerdict).toBe("paint-overflow-decoration");
+  expect(record.decorationSources).toHaveLength(1);
+});
+
+test("BR-05: kill-switch возвращает доволновой вердикт байт-в-байт", async () => {
+  const previous = process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED;
+  process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = "1";
+  try {
+    const { ctx } = await context({
+      result: paintResult({ outOfFlowNodes: [TAIL_NODE], effectSources: [
+        { elementKey: "pay-tooltip", elementPath: "div.bubble>i.tail", cause: "position:absolute", rect: { x: 94, y: 160, width: 8, height: 24 } },
+      ] }),
+      inkBbox: ink({ x: 64, y: 64, width: 140, height: 120 }),
+    });
+    const result = await geometry2Gate.run(ctx);
+    expect(result.status).toBe("fail");
+    expect(result.metrics!.policyVerdict).toBe("paint-overflow-not-clipped");
+    expect(result.metrics!.decorationSources).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED;
+    else process.env.EASYUI_GEOMETRY_OWNERSHIP_DISABLED = previous;
+  }
+});
+
+test("BR-05: декларация на in-flow контейнере — fail с кодом geometry_ownership_invalid", async () => {
+  const { ctx } = await context({
+    geometryOwnership: { "pay-tooltip//div.bubble": { role: "decoration", participatesIn: ["paint"] } },
+    result: paintResult({
+      ownershipViolations: [{ elementKey: "pay-tooltip", elementPath: "div.bubble", reason: "in-flow-container", layoutChildren: 3 }],
+    }),
+  });
+  const result = await geometry2Gate.run(ctx);
+  expect(result.status).toBe("fail");
+  const codes = result.metrics!.codes as { code: string; severity: string; ref?: string }[];
+  expect(codes.map((item) => item.code)).toContain("geometry_ownership_invalid");
+  expect(codes.find((item) => item.code === "geometry_ownership_invalid")).toMatchObject({ severity: "error", ref: "div.bubble" });
+  expect(result.detail).toContain("in-flow container with 3 layout child(ren)");
+});
+
+test("BR-05: декларация доезжает до съёмки — джоба несёт geometryOwnership", async () => {
+  const ownership = { "pay-tooltip//i.tail": { role: "decoration", participatesIn: ["paint"] } };
+  const { ctx, service } = await context({ geometryOwnership: ownership });
+  const seen: unknown[] = [];
+  const original = service.enqueueComponentCandidate.bind(service);
+  service.enqueueComponentCandidate = (id, candidate, opts: Record<string, unknown>) => {
+    seen.push(opts.geometryOwnership);
+    return original(id, candidate, opts as never);
+  };
+  await geometry2Gate.run(ctx);
+  expect(seen).toEqual([ownership]);
+});
+
+// ------------------------------------------------------------------- BR-07 S1: карта элементов
+
+const ELEMENT_MAP_SHAPE: PaintShape["elementMap"] = {
+  nodes: [
+    { path: "div.card", bbox: { x: 64, y: 64, width: 140, height: 96 }, hasText: false, markerKey: "c", depth: 1 },
+    { path: "div.card>span.title", bbox: { x: 70, y: 70, width: 60, height: 20 }, hasText: true, markerKey: "s0", depth: 2 },
+  ],
+  truncated: false, total: 2,
+};
+
+test("BR-07 S1: карта элементов едет своим артефактом с владением по slot-дереву", async () => {
+  const { ctx, dir } = await context({ result: paintResult({ elementMap: ELEMENT_MAP_SHAPE }) });
+  ctx.case.slotBindings = [{
+    slot: "items", index: 0, componentId: "pay-child", name: "PayChild", version: 1,
+    bundleHash: "bh", props: {}, propsHash: "ph",
+  }];
+  const result = await geometry2Gate.run(ctx);
+  const ref = result.artifacts!.find((item) => item.name === "element-map.json")!;
+  const map = JSON.parse(new TextDecoder().decode((await readArtifact(dir, ref.sha256))!)) as {
+    subjectComponentId: string;
+    markers: { markerKey: string; componentId: string; slot?: string; index?: number; version?: number }[];
+    nodes: { markerKey: string; componentId: string | null; ownership: string; hasText: boolean }[];
+  };
+  expect(map.subjectComponentId).toBe(COMPONENT_ID);
+  expect(map.markers).toEqual([
+    { markerKey: "c", componentId: COMPONENT_ID },
+    { markerKey: "s0", componentId: "pay-child", slot: "items", index: 0, version: 1 },
+  ]);
+  expect(map.nodes.map((node) => [node.markerKey, node.componentId, node.ownership])).toEqual([
+    ["c", COMPONENT_ID, "subject"],
+    ["s0", "pay-child", "dependency"],
+  ]);
+  // `geometry.json` карту **не** несёт: её место рядом, а не внутри замера.
+  const facts = JSON.parse(new TextDecoder().decode(
+    (await readArtifact(dir, result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!,
+  )) as { geometry: { details: Record<string, unknown>[] } };
+  expect(facts.geometry.details[0]).not.toHaveProperty("elementMap");
+});
+
+test("BR-07 S1: под kill-switch'ем артефакта карты нет вовсе (evidence доволновой)", async () => {
+  process.env.EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED = "1";
+  try {
+    const { ctx } = await context({ result: paintResult({ elementMap: ELEMENT_MAP_SHAPE }) });
+    const result = await geometry2Gate.run(ctx);
+    expect(result.artifacts?.map((item) => item.name).sort()).toEqual(["geometry.json", "paint.png"]);
+  } finally { delete process.env.EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED; }
 });

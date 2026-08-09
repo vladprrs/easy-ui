@@ -719,8 +719,8 @@ describe("promotion policy (план 2026-08-04 W3)", () => {
 
   test("профиль вне promotion policy (инъекция мимо роута) → 422 acceptance_policy_mismatch", async () => {
     const { handler, orchestrator, id, candidate } = await policyFixture("promote-badpolicy", "PromoteBadpolicy");
-    // Реестр сегодня содержит ровно два профиля, и `startRun` отвергает чужие (C3), поэтому
-    // единственный способ дойти до ветки отказа — записать ран мимо роута.
+    // Реестр сегодня содержит три профиля (BR-07 добавил `default-v1-exceptions`), и `startRun`
+    // отвергает чужие (C3), поэтому единственный способ дойти до ветки отказа — записать ран мимо роута.
     const run = runWith(orchestrator, candidate.candidateId, id, {
       policyProfileId: "experimental-v9", policyProfileHash: "9".repeat(64),
     });
@@ -733,7 +733,7 @@ describe("promotion policy (план 2026-08-04 W3)", () => {
       error: {
         code: "acceptance_policy_mismatch",
         runPolicyProfileId: "experimental-v9",
-        allowed: ["default-v1", "pixel-strict-v1"],
+        allowed: ["default-v1", "pixel-strict-v1", "default-v1-exceptions"],
       },
     });
   }, 180_000);
@@ -845,14 +845,20 @@ describe("promotion policy (план 2026-08-04 W3)", () => {
       acceptance: {
         policyProfiles: string[]; defaultPolicyProfile: string; promotionPolicyProfiles: string[];
         geometryContractVersion: number; comparisonSurfaces: string[]; readinessPolicyVersion: number;
+        rendererPolicyProfiles: { profileId: string }[];
       };
     };
     expect(caps.acceptance).toEqual({
-      policyProfiles: ["default-v1", "pixel-strict-v1"],
+      // BR-07 (план 2026-08-08 §7): третий профиль политики — единственный с `allowExceptions: true`;
+      // он же промоутабелен, пока включены профили политики рендерера (реестр рядом).
+      policyProfiles: ["default-v1", "pixel-strict-v1", "default-v1-exceptions"],
       defaultPolicyProfile: "default-v1",
-      promotionPolicyProfiles: ["default-v1", "pixel-strict-v1"],
+      promotionPolicyProfiles: ["default-v1", "pixel-strict-v1", "default-v1-exceptions"],
+      rendererPolicyProfiles: [expect.objectContaining({ profileId: "live-text-aa-v1" })],
       geometryContractVersion: 2,
-      readinessPolicyVersion: 3,
+      // BR-03 (план 2026-08-08 §3): барьер поднят до v4; под `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`
+      // здесь снова 3, под `EASYUI_RESOURCE_BARRIER_DISABLED=1` — доволновая 1 (по профилю).
+      readinessPolicyVersion: 4,
       comparisonSurfaces: ["root", "layoutUnion", "paint", "referenceExport"],
     });
   }, 180_000);

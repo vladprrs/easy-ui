@@ -100,6 +100,8 @@ const geometryShape: GeometryCollection = {
   roleRects: {},
   frame: { x: 0, y: 0, width: 320, height: 200, source: "surface" },
   content: { x: 0, y: 0, width: 320, height: 200 },
+  // BR-05: layout-габарит рядом с paint-габаритом `content` (тут декораций нет — числа совпадают).
+  layout: { x: 0, y: 0, width: 320, height: 200 },
   scroll: { width: 320, height: 200 },
   viewportOwnership: { frame: { width: 320, height: 200 }, content: { width: 320, height: 200 }, scroll: { width: 320, height: 200 }, scrollable: false, owners: [], unownedPct: 0 },
   issues: [],

@@ -16,7 +16,8 @@
  * значение» означало бы два разных отпечатка у одного рана. Смена флага — рестарт сервера.
  */
 import {
-  BARRIER_READINESS_POLICY, DEFAULT_READINESS_POLICY, STRICT_READINESS_POLICY,
+  barrierPolicyIsV4,
+  BARRIER_READINESS_POLICY_V3, BARRIER_READINESS_POLICY_V4, DEFAULT_READINESS_POLICY, STRICT_READINESS_POLICY,
   type ReadinessPolicy,
 } from "../../src/capture/readinessPolicy";
 
@@ -42,16 +43,55 @@ export const RESOURCE_BARRIER_DISABLED: boolean =
   typeof process !== "undefined" && process.env?.EASYUI_RESOURCE_BARRIER_DISABLED === "1";
 
 /**
- * Политика readiness потребителя. Чистая функция от скоупа и состояния kill-switch'а — именно она,
- * а не сам флаг, проверяется тестом волны: «выключенный барьер возвращает по-профильную доволновую
- * политику», а не одну на всех.
+ * **Второй этаж иерархии** (BR-03, план 2026-08-08 §3): `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`
+ * оставляет барьер включённым, но исполняемым по политике v3 **byte-for-byte** — тот же пре-образ
+ * `readinessPolicyHash`, те же кадры, те же отпечатки, что до волны.
+ *
+ * Приоритет отдан старому свитчу: `EASYUI_RESOURCE_BARRIER_DISABLED=1` гасит барьер целиком, и
+ * значение v4-свитча при нём не читается вовсе — иначе «выключено» имело бы два разных смысла.
+ *
+ * Читается **один раз на процесс** по той же причине, что и старший свитч: политика питает
+ * `policyProfileHash`, `readinessPolicyHash` и `rendererFingerprint`, и смена значения на середине
+ * жизни процесса дала бы два разных отпечатка у одного рана. Смена — рестарт сервера.
+ */
+export const RESOURCE_BARRIER_V4_DISABLED: boolean =
+  typeof process !== "undefined" && process.env?.EASYUI_RESOURCE_BARRIER_V4_DISABLED === "1";
+
+/**
+ * Политика readiness потребителя. Чистая функция от скоупа и состояния обоих kill-switch'ей —
+ * именно она, а не сами флаги, проверяется тестами волны: «выключенный барьер возвращает
+ * по-профильную доволновую политику» и «выключенная v4 возвращает v3 байт-в-байт».
  */
 export function barrierAwareReadinessPolicy(
   scope: BarrierPolicyScope,
   disabled: boolean = RESOURCE_BARRIER_DISABLED,
+  v4Disabled: boolean = RESOURCE_BARRIER_V4_DISABLED,
 ): ReadinessPolicy {
-  return disabled ? PRE_WAVE_POLICY[scope] : BARRIER_READINESS_POLICY;
+  if (disabled) return PRE_WAVE_POLICY[scope];
+  return v4Disabled ? BARRIER_READINESS_POLICY_V3 : BARRIER_READINESS_POLICY_V4;
 }
+
+/**
+ * Активен ли барьер волны BR-03 (`features.resourceBarrierV4`). Гаснет под **обоими** свитчами:
+ * без барьера нет и его четвёртой версии.
+ */
+export const resourceBarrierV4Enabled = (): boolean => !RESOURCE_BARRIER_DISABLED && !RESOURCE_BARRIER_V4_DISABLED;
+
+/**
+ * Фактическая версия политики барьера, объявляемая capability (`resourceBarrierPolicyVersion`):
+ * `4` — волна активна, `3` — v4 выключена свитчём, доволновое значение дефолтного профиля — при
+ * выключенном барьере целиком (там у каждого профиля своя, см. `PRE_WAVE_POLICY`).
+ */
+export const resourceBarrierPolicyVersion = (scope: BarrierPolicyScope = "acceptance-default"): number =>
+  barrierAwareReadinessPolicy(scope).version;
 
 /** Политика требует исполнения барьера (гейт `readiness` спрашивает именно это, а не версию). */
 export const readinessRequiresBarrier = (policy: ReadinessPolicy): boolean => policy.resourceBarrier !== undefined;
+
+/**
+ * Политика джобы — барьер волны BR-03. Спрашивается **у политики случая**, а не у env: гейт судит
+ * кадр, снятый под той политикой, которая уехала в его bootstrap, и env к моменту разбора мог
+ * успеть смениться рестартом.
+ */
+export const readinessRequiresBarrierV4 = (policy: ReadinessPolicy): boolean =>
+  barrierPolicyIsV4(policy.resourceBarrier);

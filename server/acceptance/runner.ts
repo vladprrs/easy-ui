@@ -18,7 +18,8 @@
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import {
   classifyVisualCauses,
-  type CauseGeometryFacts, type CauseInput, type CauseReadinessFacts, type CauseVisualMetrics, type VisualCause,
+  type CauseGeometryFacts, type CauseInput, type CauseReadinessFacts, type CauseRect,
+  type CauseVisualMetrics, type VisualCause,
 } from "../visual/causes";
 import type { AcceptanceCase } from "./cases";
 import { artifactPresent, readArtifact } from "./evidence";
@@ -29,8 +30,8 @@ import {
 } from "./ids";
 import { reevaluateGates, rewriteDerivedArtifacts, verdictRecomputeEnabled } from "./recompute";
 import { suggestPolicy, suggestedPolicyEnabled } from "./suggest";
-import { CaptureInfraError } from "./gates/capture";
-import { GATE_ORDER, IMPLEMENTED_GATES } from "./gates";
+import { CaptureInfraError, type RunPhase } from "./gates/capture";
+import { GATE_ORDER, IMPLEMENTED_GATES, RESUMABLE_GATES, phaseOfGate } from "./gates";
 import { readinessBlocksVisual } from "./gates/readiness";
 import { renderQualityKey } from "./gates/render";
 import { rediffCase } from "./gates/visual";
@@ -75,7 +76,79 @@ export interface CaseExecution {
   rediffed?: boolean;
   reuseReason: string | null;
   durationMs: number;
-  error?: { outcome: string; message: string };
+  /**
+   * Причина инфраструктурного падения (BR-06). До волны здесь были только `outcome`/`message`, и
+   * они **никуда не персистились** — после рестарта процесса причина исчезала вовсе. Теперь это
+   * содержимое колонки `acceptance_cases.error_json` (v37): `attempts` отвечает «сколько раз
+   * пробовали», `elapsedMs` — «сколько это стоило», `phase` — «на какой фазе шкалы».
+   */
+  error?: { outcome: string; message: string; attempts?: number; elapsedMs?: number; phase?: RunPhase };
+}
+
+/**
+ * Результат гейта с его учётной обвязкой (BR-06): отпечаток и границы исполнения.
+ *
+ * Тип объявлен здесь, а не в `gates/types.ts`, намеренно: гейты этих полей не считают и знать о
+ * них не обязаны — их пишет раннер вокруг вызова, как и `causes`/`suggestedPolicy`. Для
+ * сериализации это те же `GateResult`, лежащие в `gates_json`.
+ */
+export interface GateEnvelope extends GateResult {
+  /**
+   * Отпечаток гейта: доказательство того, что завершённый результат относится к тем же входам.
+   * Единственный ключ, по которому resume имеет право переиспользовать чужой (прежнего рана)
+   * результат гейта — без него это был бы «молчаливый reuse», запрещённый §3 фидбэка.
+   */
+  fingerprint?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  /** Гейт переехал из рана-предка (resume): его id — часть квитанции продолжения. */
+  reusedFromRunId?: string;
+}
+
+/** Версия алгоритма per-gate отпечатка: смена делает прежние гейты непереиспользуемыми. */
+export const GATE_FINGERPRINT_ALGO_VERSION = 1;
+
+/**
+ * Отпечаток одного гейта случая (BR-06).
+ *
+ * Считается из **всех трёх слоёв** отпечатка случая, а не из «своего» слоя каждого гейта. Это
+ * осознанно консервативно: точная привязка (`contract` зависит только от схемы и props) сделала бы
+ * reuse шире, но потребовала бы объявлять слои per-gate — то есть завести вторую карту слоёв рядом
+ * с `FIELD_LAYERS`, разъезд которых никто бы не заметил. Здесь цена промаха — лишнее исполнение
+ * трёх дешёвых structural-гейтов, цена ложного попадания — переиспользованный вердикт по чужим
+ * входам, поэтому асимметрия выбрана в пользу пересчёта.
+ *
+ * Живёт в раннере, **не** в `ids.ts`: это ключ reuse внутри `gates_json`, а не слой идентичности
+ * случая, и в `FIELD_LAYERS` ему места нет.
+ */
+export function gateFingerprintOf(gate: GateName, fps: CaseFingerprints): string {
+  return new Bun.CryptoHasher("sha256").update(canonicalStringify({
+    v: GATE_FINGERPRINT_ALGO_VERSION,
+    gate,
+    frame: fps.frame,
+    comparison: fps.comparison,
+    verdictPolicy: fps.verdictPolicy,
+  })).digest("hex");
+}
+
+/**
+ * Завершённые гейты рана-предка, годные к переносу в продолжение (BR-06).
+ *
+ * Три условия, и все три обязательны: гейт из фазы `validate` (`RESUMABLE_GATES` — кадра он не
+ * трогает), он **завершён** (`finishedAt`), и его отпечаток совпал с сегодняшним. Частично
+ * исполненный случай отдаёт ровно свои завершённые structural-гейты; всё от `capture` и дальше
+ * снимается заново — кадр прошлого рана мог не существовать вовсе.
+ */
+export function resumableGatesOf(stored: readonly GateResult[], fps: CaseFingerprints): Map<GateName, GateEnvelope> {
+  const out = new Map<GateName, GateEnvelope>();
+  for (const gate of stored) {
+    const envelope = gate as GateEnvelope;
+    if (!RESUMABLE_GATES.includes(gate.gate)) continue;
+    if (typeof envelope.finishedAt !== "string") continue;
+    if (envelope.fingerprint !== gateFingerprintOf(gate.gate, fps)) continue;
+    out.set(gate.gate, envelope);
+  }
+  return out;
 }
 
 export interface CaseRunnerDeps {
@@ -317,10 +390,26 @@ export function causeInputOf(gates: GateResult[], deviceScaleFactor: number): Ca
     pendingRequests: Array.isArray(readinessMetrics.pendingRequests) ? readinessMetrics.pendingRequests as string[] : [],
   };
 
+  // BR-07: владельцы кластеров из атрибуции — по индексу региона (оба массива приходят из одного
+  // прогона воркера, поэтому индексы сопоставимы по построению).
+  const attribution = isObject(visualMetrics.attribution) ? visualMetrics.attribution as Record<string, unknown> : null;
+  const attributionRegions = Array.isArray(attribution?.regions)
+    ? attribution!.regions as { index: number; ownerElementKey?: string | null }[]
+    : [];
+  const regionBoxes = Array.isArray(visualMetrics.regions)
+    ? visualMetrics.regions as { bbox: CauseRect }[]
+    : [];
+  const elementOwners = attributionRegions
+    .map((region) => ({ region, bbox: regionBoxes[region.index]?.bbox }))
+    .filter((item): item is { region: { index: number; ownerElementKey?: string | null }; bbox: CauseRect } =>
+      item.bbox !== undefined && typeof item.region.ownerElementKey === "string")
+    .map((item) => ({ elementKey: item.region.ownerElementKey as string, rect: item.bbox }));
+
   return {
     visual,
     geometry,
     readiness,
+    ...(elementOwners.length === 0 ? {} : { elementOwners }),
     deviceScaleFactor,
     visualReason: typeof visualMetrics.reason === "string" ? visualMetrics.reason : null,
   };
@@ -452,6 +541,21 @@ export interface ExecuteCaseOptions {
    * иначе «снят заново» неотличим от «кэша не было», и стоимость рана нечем объяснить.
    */
   refreshReason?: string | null;
+  /**
+   * Завершённые гейты рана-предка (BR-06, resume): карта `gate → результат`, уже отфильтрованная
+   * по фазе и отпечатку (`resumableGatesOf`). Такой гейт **не исполняется заново** — его результат
+   * переезжает как есть, с пометкой `reusedFromRunId`.
+   */
+  resumeGates?: ReadonlyMap<GateName, GateEnvelope>;
+  /**
+   * Персист по ходу случая (BR-06). Вызывается после **группы** дешёвых structural-гейтов
+   * (`contract`/`defaults`/`audit` — одной записью, group-commit) и затем после каждого дорогого
+   * гейта. Двухрежимность здесь не украшение: три записи вместо одной на каждом из 64 случаев —
+   * это трёхкратная write-амплификация ради данных, которые всё равно появляются за миллисекунды,
+   * тогда как после капчура (десятки секунд) запись обязана быть немедленной — иначе рестарт
+   * процесса снова теряет всё, ради чего заводился resume.
+   */
+  onGateProgress?: (gates: GateResult[], phase: RunPhase) => void;
 }
 
 /** Часть исполнения, которую отдаёт каскад reuse (остальное дописывает `executeCase`). */
@@ -714,9 +818,37 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
   const ctx: GateContext = gateContextOf(deps, item, options.determinismSampled === true);
   const gates: GateResult[] = [];
   const modes = deps.policy.gates;
+  const resumeGates = options.resumeGates;
+  const iso = (): string => new Date(ctx.now()).toISOString();
+  /**
+   * Group-commit фазы `validate` (BR-06): три дешёвых гейта персистятся одной записью — она
+   * ставится на границе фазы, а не после каждого из них. Дальше каждый гейт пишет сам за себя.
+   */
+  let validateCommitted = false;
+  const commitProgress = (phase: RunPhase): void => {
+    // Фаза `validate` своей записи не делает: её группа уезжает одним коммитом на границе фазы
+    // (см. ниже, перед первым дорогим гейтом).
+    if (phase !== "validate") options.onGateProgress?.(gates, phase);
+  };
   for (const name of GATE_ORDER) {
     const gate = IMPLEMENTED_GATES[name];
     if (!gate || modes[name] === "not-implemented") continue;
+    const phase = phaseOfGate(name);
+    // Граница фазы `validate` → всё остальное: структурные гейты уезжают одной записью.
+    if (phase !== "validate" && !validateCommitted && gates.length > 0) {
+      validateCommitted = true;
+      options.onGateProgress?.(gates, "validate");
+    }
+    const gateFingerprint = gateFingerprintOf(name, fps);
+    // Resume (BR-06): завершённый structural-гейт предка с тем же отпечатком переезжает как есть.
+    // Это единственный путь, которым результат чужого рана попадает в этот; он и есть ответ AC
+    // «resume не переисполняет contract/defaults/audit без fingerprint change».
+    const carried = resumeGates?.get(name);
+    if (carried !== undefined) {
+      gates.push({ ...carried, fingerprint: gateFingerprint } as GateResult);
+      continue;
+    }
+    const gateStartedAt = iso();
     // **Инвариант D5**: кадр, не прошедший readiness, не получает визуального вердикта. Сравнения
     // (геометрия, детерминизм, визуал W5a) не считаются вовсе — их результат относился бы к
     // кадру, снятому до готовности шрифтов/ассетов, и обвинял бы компонент за чужой дефект.
@@ -727,11 +859,15 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
         gate: name, status: "indeterminate",
         detail: "Skipped: capture readiness was not met, so the frame gets no visual verdict (D5)",
         metrics: { skippedByReadiness: true },
-      });
+        fingerprint: gateFingerprint, startedAt: gateStartedAt, finishedAt: iso(),
+      } as GateResult);
+      commitProgress(phase);
       continue;
     }
     try {
-      gates.push(await gate.run(ctx));
+      const result = await gate.run(ctx);
+      gates.push({ ...result, fingerprint: gateFingerprint, startedAt: gateStartedAt, finishedAt: iso() } as GateResult);
+      commitProgress(phase);
     } catch (error) {
       if (error instanceof CaptureInfraError) {
         // Инфраструктура: бюджет ретраев исчерпан внутри `captureCase`. Случай — `error`,
@@ -747,11 +883,19 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
           reused: false,
           reuseReason: refreshReason,
           durationMs: ctx.now() - startedAt,
-          error: { outcome: error.outcome, message: error.message },
+          // BR-06: полная причина — она уезжает в `error_json` строки случая и переживает рестарт.
+          error: {
+            outcome: error.outcome, message: error.message,
+            attempts: error.attempts, elapsedMs: ctx.now() - startedAt, phase: error.phase,
+          },
         };
       }
       // Доменный отказ (невалидные props, вытесненный бандл) — продуктовый провал случая.
-      gates.push({ gate: name, status: "fail", detail: error instanceof Error ? error.message : String(error) });
+      gates.push({
+        gate: name, status: "fail", detail: error instanceof Error ? error.message : String(error),
+        fingerprint: gateFingerprint, startedAt: gateStartedAt, finishedAt: iso(),
+      } as GateResult);
+      commitProgress(phase);
     }
   }
 

@@ -26,7 +26,7 @@ import { MAX_ASSET_BYTES } from "../assets/validate";
 import { listActiveDesignSystems } from "../designSystems";
 import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
-import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "../screenshot/service";
+import { GEOMETRY_RECT_LIMIT, MAX_PAINT_MARGIN_PX, MAX_QUEUE } from "../screenshot/service";
 import { rendererReport } from "../capture/renderer";
 import { DEFAULT_REUSE_GATE_MODE, type ReuseGateMode } from "../catalog/gate";
 import { CALIBRATED_POLICY } from "../catalog/policy";
@@ -34,19 +34,28 @@ import { VALIDATE_GLOBAL_CONCURRENT, VALIDATE_USER_CONCURRENT } from "../compone
 import { CANDIDATE_CACHE_MAX_BYTES, CANDIDATE_CACHE_TTL_MS } from "../components/candidates";
 import {
   ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, PROMOTION_POLICY_PROFILES, acceptanceCaseTtlHours,
-  acceptanceMaxCasesPerRun, evidenceMaxBytes,
+  acceptanceMaxCasesPerRun, evidenceMaxBytes, isPromotionPolicyProfile,
 } from "../acceptance/policies";
+// BR-07/BR-08 (план 2026-08-08 §7/§8): атрибуция, реестр профилей рендерера и второй вердикт.
+import { comparisonOwnershipEnabled, visualAttributionV2Enabled } from "../visual/attribution";
+import { rendererPolicyProfiles, rendererPolicyProfilesEnabled } from "../acceptance/rendererProfiles";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
   CASE_SET_MAX_SLOT_DEPTH, CASE_SET_MAX_SLOT_NODES,
-  CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX,
+  CASE_POLICY_MAX_OVERFLOW_BUDGET_PX, CASE_POLICY_MAX_SIZE_DELTA_PX, CASE_SET_MAX_GEOMETRY_OWNERSHIP,
+  CASE_SET_MAX_PRELOAD_ASSETS,
 } from "../../src/acceptance/caseSetSchema";
 import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
 import { candidateOverlayEnabled } from "../acceptance/caseSets";
+import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
+import { blockerFingerprintEnabled } from "../acceptance/disposition";
 import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
 import { suggestedPolicyEnabled } from "../acceptance/suggest";
-import { RESOURCE_BARRIER_DISABLED } from "../capture/resourceBarrier";
+import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled, COMPARISON_POLICY_VERSION } from "../capture/captureV4";
+import { GEOMETRY_OWNERSHIP_POLICY_VERSION, geometryOwnershipEnabled } from "../capture/geometryOwnership";
+import { RESOURCE_BARRIER_DISABLED, resourceBarrierPolicyVersion, resourceBarrierV4Enabled } from "../capture/resourceBarrier";
+import { LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION, PROTOTYPE_SCHEMA_RESOLVER_VERSION, schemaResolverV2Enabled } from "../validation";
 import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../../src/capture/readinessPolicy";
 import { runtimeDefaultsDisabled } from "../components/runtimeDefaults";
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
@@ -185,6 +194,16 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // Оба числа — свойство политики v3, поэтому объявлены **независимо** от kill-switch'а:
       // выключенный барьер меняет версию политики (`acceptance.readinessPolicyVersion`), а не
       // потолки, которыми он исполняется.
+      // Поле краски по сторонам (BR-02, план 2026-08-08 §2): потолок **одной стороны** (тот же, что
+      // у скалярного `paintMargin`) и бюджет площади кадра `(w+left+right)×(h+top+bottom)×dsf²`.
+      // Два числа отвечают на разные вопросы автора: первое — «сколько можно объявить по стороне»,
+      // второе — «почему 256 по кругу при dsf 3 отвергнуто» (`422 capture_budget_exceeded`).
+      captureMaxPaintPaddingPx: MAX_PAINT_MARGIN_PX,
+      captureFrameBudgetMpx: CAPTURE_FRAME_BUDGET_MPX,
+      // Hint предзагрузки ассетов случая (BR-03): потолок массива `cases[].preloadAssets`.
+      caseSetMaxPreloadAssets: CASE_SET_MAX_PRELOAD_ASSETS,
+      // Владение геометрией (BR-05): потолок объявленных узлов на случай (`cases[].geometryOwnership`).
+      caseSetMaxGeometryOwnership: CASE_SET_MAX_GEOMETRY_OWNERSHIP,
       resourceBarrierMaxResources: RESOURCE_BARRIER_MAX_RESOURCES,
       resourceBarrierBudgetMs: RESOURCE_BARRIER_MAX_BUDGET_MS,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
@@ -347,6 +366,46 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // `limits.caseSetMaxOverlayNodes`). Гаснет матрицей (без неё кандидатов нет) и собственным
       // `EASYUI_CANDIDATE_OVERLAY_DISABLED=1` (манифест с overlay — `422 candidate_overlay_disabled`).
       candidateDependencyOverlay: options.acceptanceMatrix === true && candidateOverlayEnabled(),
+      // BR-06 (план 2026-08-08 §6): `POST /api/acceptance-runs/:runId/resume` — продолжение
+      // остановленного рана **новым** раном с lineage (`resumedFromRunId`/`attempt`) и переносом
+      // завершённых structural-гейтов по совпавшим per-gate отпечаткам. Гейтится матричной
+      // приёмкой (без неё acceptance-ручек нет вовсе) **и** собственным kill-switch'ем
+      // `EASYUI_ACCEPTANCE_RESUME_DISABLED=1`; false — ручка отвечает `409 acceptance_resume_disabled`.
+      // Наблюдаемость волны (причина падения случая, шов allocate-renderer, circuit breaker)
+      // этим флагом **не** управляется: это фиксы дефектов, а не фича.
+      acceptanceResumeV1: options.acceptanceMatrix === true && acceptanceResumeEnabled(),
+      // BR-10a (план 2026-08-08 §10): `blockerFingerprint` терминального рана и read-only
+      // `GET /api/acceptance-runs/:runId/retry-disposition`. Гейтится матричной приёмкой (без неё
+      // ранов нет вовсе) **и** собственным `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1`; false — ручка
+      // отвечает 404, а поле исчезает из представления рана и из манифеста evidence. Отпечаток
+      // ничего не меняет в вердиктах и отпечатках случаев: слой полностью read-only.
+      blockerFingerprintV1: options.acceptanceMatrix === true && blockerFingerprintEnabled(),
+      /**
+       * BR-07 (план 2026-08-08 §7): атрибуция расхождения **по элементам** — карта элементов кадра
+       * (`element-map.json` в evidence), owner-тоталы по полной diff-маске с честным `unknown`,
+       * контракт кластера §10 (владелец, компонент владельца, класс краски, `structural`, `basis[]`)
+       * и квитанция сравнения (matte/flattening, color profile, renderer + шрифтовые отпечатки,
+       * версия политики сравнения). Гейтится **матричной** приёмкой: и карта, и кластеры живут
+       * только в acceptance-evidence, вне её у них нет ни одного потребителя. Свой kill-switch —
+       * `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1`: под ним evidence и метрики доволновые
+       * byte-for-byte. Слой report-only — ни один вердикт от флага не зависит.
+       */
+      visualAttributionV2: options.acceptanceMatrix === true && visualAttributionV2Enabled(),
+      /**
+       * BR-07: профили политики рендерера (реестр — `acceptance.rendererPolicyProfiles`). Тумблер
+       * **свой**, а не общий с атрибуцией, ровно потому, что он меняет promote-eligibility: под
+       * `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1` реестр пуст, `exceptions[]` не пишет никто, а
+       * профиль политики `default-v1-exceptions` исчезает из `promotionPolicyProfiles`.
+       */
+      rendererPolicyProfilesV2: options.acceptanceMatrix === true && rendererPolicyProfilesEnabled(),
+      /**
+       * BR-08 (план 2026-08-08 §8): два вердикта одного сравнения — `subject` (пиксели, которыми
+       * владеет субъект) и `integration` (вся канва, сегодняшняя семантика). Вердикт случая не
+       * меняется вовсе: им остаётся интеграционный, субъектный едет дополнительным фактом в
+       * метрики, evidence и манифест. Гейтится матрицей и `EASYUI_COMPARISON_OWNERSHIP_DISABLED=1`
+       * (под ним `cases[].comparison.ownership` остаётся валидным полем-декларацией без эффекта).
+       */
+      comparisonOwnershipV1: options.acceptanceMatrix === true && comparisonOwnershipEnabled(),
       // §W5: `POST /api/prototypes/:id/snap-plan` — импакт-план галерейной съёмки (какие экраны
       // снимать и почему, какие переиспользуются с доказательством). Матричной приёмкой **не**
       // гейтится: галерея к ней не относится. false — при `EASYUI_IMPACTED_SNAP_DISABLED=1`, и
@@ -380,6 +439,89 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // блок аддитивен, а сами capture-маршруты SPA вынесены из-под `AuthProvider`, поэтому
       // источник шума удалён, а не подавлен.
       captureNoiseSummary: true,
+      /**
+       * BR-01a (план 2026-08-08 §1): один резолвер схемы published component на save и readiness —
+       * пины композиции применяются только к элементам её раскрытия, `track:head` резолвит голову
+       * в дизайн-системе закреплённой версии, неизвестный prop отвечает типизированным
+       * `component_prop_unknown` с фактически применённой схемой. Матрицей не гейтится: путь
+       * save/readiness к приёмке не относится. false — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1`,
+       * и тогда `prototypeSchemaResolverVersion` честно откатывается на доволновую 1.
+       */
+      prototypeSchemaResolverV2: schemaResolverV2Enabled(),
+      /**
+       * BR-02 (план 2026-08-08 §2): `cases[].paintPaddingPx` — поле краски **по сторонам**, кадровый
+       * слой ровно того случая, который его объявил (`limits.captureMaxPaintPaddingPx`,
+       * `limits.captureFrameBudgetMpx`). Матрицей **не** гейтится: поле едет и по прототипному
+       * capture-пути, а не только по приёмочному. false — при `EASYUI_CAPTURE_V4_DISABLED=1`, и
+       * тогда манифест с полем отвечает `422 capture_padding_disabled`, а кадр снимается скаляром.
+       */
+      paintCapturePaddingV1: captureV4Enabled(),
+      /**
+       * BR-04 (план 2026-08-08 §4): объявленная канва сравнения сводится **точно** (delta 0, без
+       * неявного zero-pad до `max(ref, cand)`), бюджет судится по поверхности сравнения
+       * (`rawDiffPctOfSurface`), а эталон не того масштаба называется `reference_scale_mismatch`
+       * вместо молчаливого `pass`. Общий тумблер с BR-02 — одна зона (кадр ↔ канва) и одно окно
+       * re-diff'а; false — при `EASYUI_CAPTURE_V4_DISABLED=1` (доволновая семантика byte-for-byte).
+       */
+      exactContentHugCanvasV1: captureV4Enabled(),
+      /**
+       * BR-04/BR-10b: **версия семантики сравнения** этого инстанса — `2` под волной, `1`
+       * доволново. Пара к `exactContentHugCanvasV1` того же вида, что `resourceBarrierV4` ↔
+       * `resourceBarrierPolicyVersion`: флаг отвечает «включено ли», число — «по каким правилам
+       * сведены метрики». То же число публикует `basis.comparisonPolicyVersion`
+       * retry-disposition'а, и его смена стоит **re-diff'а**, а не пересъёмки.
+       */
+      comparisonPolicyVersion: captureV4Enabled() ? COMPARISON_POLICY_VERSION : 1,
+      /**
+       * BR-03 (план 2026-08-08 §3): полный registry-resource barrier — фаза `registry` до первого
+       * манифеста (реестр иконок темы), каналы `img-srcset`/псевдоэлементы/`font`/`icon-registry`,
+       * ожидаемый манифест ассетов кандидата, пер-ресурсные записи контракта §6 и сужение вердикта
+       * до `indeterminate` с `resource_barrier_incomplete` — **только** на барьерных причинах.
+       * Матрицей **не** гейтится: барьер исполняется и на опт-ине галерейной джобы. Гаснет под
+       * **обоими** свитчами — `EASYUI_RESOURCE_BARRIER_DISABLED=1` (барьера нет вовсе) и
+       * `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1` (барьер по v3 byte-for-byte).
+       */
+      /**
+       * BR-05 (план 2026-08-08 §5): decoration-aware geometry — аддитивные факты замера
+       * (`preTransformBounds`/матрица/`postTransformPaintBounds`/причины участия в поверхностях),
+       * авто-правило «узел вне потока, чья pre-transform коробка вложена в контур, прозрачен для
+       * `rootBounds` и объясняет свою краску» и per-case декларация `cases[].geometryOwnership`.
+       * Матрицей **не** гейтится: замер расширяется на любом capture-пути. false — при
+       * `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1`, и тогда манифест с полем отвечает
+       * `422 geometry_ownership_disabled`, а сбор и вердикт остаются доволновыми byte-for-byte.
+       */
+      geometryDecorationOwnershipV1: geometryOwnershipEnabled(),
+      /**
+       * BR-09 (план 2026-08-08 §9): владение переливом FlowRoot — `elements[].overflowOwnership`
+       * (и одноимённый composition layout-токен), ограничение вклада поддерева границей
+       * scrollport'а по объявленной оси, факты `overflowOwners` и коды `unowned-overflow` /
+       * `owned-overflow-exceeds-axis`. **Персистируемая форма документа**, поэтому тумблер гейтит
+       * запись: `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` → `false` и `422 flow_overflow_ownership_disabled`
+       * на save (чтение stored-документов не гейтится никогда — канон `doc.surfaces`).
+       */
+      flowOverflowOwnershipV1: geometryOwnershipEnabled(),
+      /**
+       * BR-05/BR-10b: **версия политики владения геометрией** — `1` под волной и `null` доволново
+       * (до волны политики владения не существовало вовсе, и `0` был бы выдумкой). Число входит в
+       * вердиктный снимок случая, поэтому его смена стоит **recompute'а** без пересъёмки; то же
+       * значение публикует `basis.geometryOwnershipPolicyVersion` retry-disposition'а.
+       */
+      geometryOwnershipPolicyVersion: geometryOwnershipEnabled() ? GEOMETRY_OWNERSHIP_POLICY_VERSION : null,
+      resourceBarrierV4: resourceBarrierV4Enabled(),
+      /**
+       * Фактическая версия политики барьера — **число**, а не факт: клиенту нужно знать, чем этот
+       * инстанс снимает кадры прямо сейчас. `4` — волна активна, `3` — под v4-свитчём, доволновое
+       * значение дефолтного профиля (`1`) — при выключенном барьере целиком. Пара с
+       * `acceptance.readinessPolicyVersion`, которая говорит то же самое о профиле приёмки.
+       */
+      resourceBarrierPolicyVersion: resourceBarrierPolicyVersion(),
+      /**
+       * Версия контракта резолвера (фидбэк §4) — **число**, а не факт существования: клиенту нужно
+       * знать, по какому контракту этот инстанс отвечает прямо сейчас, а не что умеет образ.
+       * На версии 2 (BR-01b) save-ответ, `render-status` и снап называют один резолв одинаковыми
+       * полями `resolvedVersion`/`sourceHash`/`propsSchemaHash`.
+       */
+      prototypeSchemaResolverVersion: schemaResolverV2Enabled() ? PROTOTYPE_SCHEMA_RESOLVER_VERSION : LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION,
       // §W6b: версия схемы агентской квитанции драйвера (`envelope: {schemaVersion, command, ok,
       // summary, items, artifacts, warnings, nextActions}`) — число, а не булев флаг: конверт
       // печатается всегда, и клиенту нужна его **форма**, а не факт существования. Растёт только
@@ -403,7 +545,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
     acceptance: {
       policyProfiles: Object.keys(ACCEPTANCE_POLICIES),
       defaultPolicyProfile: DEFAULT_ACCEPTANCE_POLICY_ID,
-      promotionPolicyProfiles: [...PROMOTION_POLICY_PROFILES],
+      // BR-07: состав считается предикатом, а не константой: `default-v1-exceptions` промоутабелен
+      // только при включённых профилях политики рендерера — иначе discovery обещал бы профиль,
+      // который promote отвергнет.
+      promotionPolicyProfiles: PROMOTION_POLICY_PROFILES.filter((id) => isPromotionPolicyProfile(id)),
       // План 2026-08-06 §1.3: версия контракта измерения геометрии — кадровый вход
       // frameFingerprint; её смена = полная пересъёмка затронутых наборов.
       geometryContractVersion: GEOMETRY_CONTRACT_VERSION,
@@ -420,6 +565,16 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
        * Пара с `features.resourceBarrier`: флаг говорит «барьер включён», версия — «чем снято».
        */
       readinessPolicyVersion: ACCEPTANCE_POLICIES[DEFAULT_ACCEPTANCE_POLICY_ID].readiness.version,
+      // BR-07: реестр профилей политики рендерера — объявлен **до** рана и читается клиентом
+      // вместе с `expiry`: чем профиль протухает, обязано быть видно снаружи образа.
+      rendererPolicyProfiles: rendererPolicyProfiles().map((profile) => ({
+        profileId: profile.profileId,
+        rendererFingerprint: profile.rendererFingerprint,
+        scope: profile.scope,
+        maxResidualPct: profile.maxResidualPct,
+        expiry: profile.expiry,
+        description: profile.description,
+      })),
     },
     // План renderer-contract-2 §5 R1: чем именно эта сборка рисует кадры. Агент (и приёмка
     // прода) обязаны иметь возможность сверить отпечаток с тем, что приехало в результате джобы,

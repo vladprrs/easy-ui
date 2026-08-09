@@ -78,6 +78,8 @@ export interface AcceptanceCaptureService {
       theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
       /** W3 (`probe:"paint"`): поле вокруг компонента и ключи детальных измерений. */
       paintMargin?: number; geometryDetailKeys?: string[];
+      /** BR-05: декларации владения геометрией случая — вход интерпретации замера. */
+      geometryOwnership?: Record<string, { role: "decoration"; participatesIn: readonly ["paint"] }>;
       /** W4: политика readiness, которую обязана исполнить поверхность. */
       readinessPolicy?: ReadinessPolicy;
       /**
@@ -93,6 +95,16 @@ export interface AcceptanceCaptureService {
   get(jobId: string): JobStatus;
   outcome(jobId: string): JobOutcome | undefined;
   hasBackgroundCapacity(): boolean;
+  /**
+   * Есть ли у сервиса рендерер вообще (BR-06): `SERVE_DIST` + установленный chromium. Оркестратор
+   * спрашивает это **один раз до цикла случаев** — «браузера нет» обязано терминализовать ран за
+   * секунды с названной причиной, а не превращаться в N×`maxInfraRetries`×дедлайн 501-х.
+   *
+   * Опционально: не всякая реализация сервиса (тестовые двойники, стенды) обязана знать про
+   * бинарь браузера, и отсутствие метода читается как «спросить не у кого» — прекондиция тогда
+   * просто не срабатывает, а поведение остаётся доволновым.
+   */
+  available?(): boolean;
 }
 
 export interface GateContext {

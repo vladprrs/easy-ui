@@ -27,10 +27,12 @@
  */
 import {
   evaluateGeometryPolicy, geometryVerdictBlocks,
-  type GeometryPolicyClipLink, type GeometryPolicyEffectSource, type GeometryPolicyRect, type GeometryTolerancesInput,
+  type GeometryDecorationSource, type GeometryPolicyClipLink, type GeometryPolicyEffectSource,
+  type GeometryPolicyRect, type GeometryTolerancesInput,
 } from "../../src/capture/geometryPolicy";
 import type { TextAaBudget } from "../../src/acceptance/caseSetSchema";
 import { GEOMETRY_SURFACES, type GeometrySurface } from "../../src/acceptance/surfaces";
+import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { putArtifact, readArtifact } from "./evidence";
 import { geometryCodes, geometrySurfacesEnabled, geometryVerdictIsNamed, surfaceFacts } from "./gates/geometry2";
 import { textAaBudgetApplies, textAaPresetOf } from "./gates/visual";
@@ -57,7 +59,8 @@ export type VerdictPolicyField =
   | "perCase.maxRawDiffPct" | "perCase.allowPaintOverflow" | "perCase.expectedClip"
   | "perCase.sizeDeltaPx" | "perCase.overflowBudgetPx"
   | "textAaBudget"
-  | "expectedGeometry" | "expectedSurfaces" | "clipExpectation" | "declaredPolicyProfile";
+  | "expectedGeometry" | "expectedSurfaces" | "clipExpectation" | "declaredPolicyProfile"
+  | "geometryOwnership" | "geometryOwnershipPolicyVersion";
 
 /**
  * Карта «поле политики → гейты, чей вердикт оно может изменить» (C26).
@@ -95,6 +98,12 @@ export const GATES_BY_POLICY_FIELD: Record<VerdictPolicyField, readonly GateName
   expectedSurfaces: ["geometry", "visual"],
   clipExpectation: ["geometry"],
   declaredPolicyProfile: [],
+  // BR-05 (план 2026-08-08 §5): владение геометрией читает вердикт геометрии. Канву визуала оно
+  // не двигает — поверхность сравнения остаётся comparison-owned, — поэтому `visual` тут нет.
+  geometryOwnership: ["geometry"],
+  // Версия политики вердикта волны: та же зона, но инвалидирует **авто-правило**, которое ни
+  // одного поля манифеста не меняет. Пересчитывается по сохранённым метрикам.
+  geometryOwnershipPolicyVersion: ["geometry"],
 };
 
 /** Гейты, вердикт которых восстановим из сохранённых метрик без единого нового пикселя. */
@@ -129,6 +138,8 @@ export function verdictPolicyDelta(oldPolicy: VerdictPolicySnapshot, newPolicy: 
   check("expectedSurfaces", oldPolicy.expectedSurfaces, newPolicy.expectedSurfaces);
   check("clipExpectation", oldPolicy.clipExpectation, newPolicy.clipExpectation);
   check("declaredPolicyProfile", oldPolicy.declaredPolicyProfile, newPolicy.declaredPolicyProfile);
+  check("geometryOwnership", oldPolicy.geometryOwnership, newPolicy.geometryOwnership);
+  check("geometryOwnershipPolicyVersion", oldPolicy.geometryOwnershipPolicyVersion, newPolicy.geometryOwnershipPolicyVersion);
   return delta;
 }
 
@@ -300,6 +311,15 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
     }
   }
 
+  // BR-05 (план 2026-08-08 §5, правило доволновых кадров): случай **затребовал** decoration-
+  // семантику (объявил `geometryOwnership`), а сохранённые метрики сняты до волны и не несут ни
+  // одного факта владения. Пересчитать вердикт по ним нельзя — только выдумать: в кадре нет ни
+  // `preTransformBounds`, ни ролей узлов. Отказ ⇒ честная пересъёмка (прецедент `expectedSurfaces`).
+  const ownershipDeclared = geometryOwnershipEnabled() && newPolicy.geometryOwnership !== undefined;
+  const ownershipFactsPresent = Array.isArray(metrics.decorationSources)
+    || Array.isArray(metrics.geometryOwnershipViolations);
+  if (ownershipDeclared && !ownershipFactsPresent) return null;
+
   const clippedBy = isObject(metrics.clippedBy) ? metrics.clippedBy : null;
   const clipChain: GeometryPolicyClipLink[] = clippedBy
     ? [{
@@ -333,6 +353,11 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
     // Факты поверхностей — из тех же сохранённых метрик, что и всё остальное (W1b кладёт их туда).
     ...(isRect(metrics.rootBounds) ? { rootBounds: metrics.rootBounds } : {}),
     ...(isDims(metrics.referenceExportDims) ? { referenceExportDims: metrics.referenceExportDims } : {}),
+    // BR-05: decoration-источники — из тех же сохранённых метрик. Условный ключ: кадр без них
+    // (доволновой либо без декораций вовсе) пересчитывается доволновой веткой байт-в-байт.
+    ...(geometryOwnershipEnabled() && Array.isArray(metrics.decorationSources) && metrics.decorationSources.length > 0
+      ? { decorationSources: metrics.decorationSources as GeometryDecorationSource[] }
+      : {}),
     tolerances,
   });
 
@@ -368,6 +393,7 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
       expectedGeometryDelta: policy.expectedGeometryDelta,
       clippedBy: policy.clippedBy,
       ...surfaceFacts(policy),
+      ...(policy.paintOwnership === undefined ? {} : { paintOwnership: policy.paintOwnership }),
       allowPaintOverflow: tolerances.allowPaintOverflow ?? false,
       expectedClip: tolerances.expectedClip ?? false,
       overflowBudgetPx: tolerances.overflowBudgetPx ?? null,

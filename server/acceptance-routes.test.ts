@@ -179,6 +179,10 @@ test("флаг OFF: весь набор acceptance-ручек отвечает 4
     [`/acceptance-runs/${runId}/cases`, "GET"],
     [`/acceptance-runs/${runId}/evidence`, "GET"],
     [`/acceptance-runs/${runId}/cancel`, "POST", {}],
+    // BR-06: продолжение живёт под тем же гейтом — без матрицы ручки нет вовсе.
+    [`/acceptance-runs/${runId}/resume`, "POST", {}],
+    // BR-10a: retry-disposition — тот же гейт: без ранов disposition считать не от чего.
+    [`/acceptance-runs/${runId}/retry-disposition`, "GET"],
     [`/components/${COMPONENT_ID}/impact`, "POST", { candidateId: `cand_${"0".repeat(64)}`, baselineRunId: runId }],
   ];
   for (const [path, method, body] of calls) {
@@ -366,6 +370,128 @@ test("cancel: queued отменяется, второй нетерминальн
   const again = await handler(req(`/acceptance-runs/${run.runId}/cancel`, "POST", {}));
   expect(again.status).toBe(409);
   expect(await jsonOf<{ error: { code: string } }>(again)).toMatchObject({ error: { code: "run_not_cancellable" } });
+}, 120_000);
+
+/**
+ * BR-06: HTTP-поверхность продолжения. Предмет — коды отказов и форма ответа; продолжаемость,
+ * lineage и перенос гейтов живут в `server/acceptance/resume.test.ts`.
+ */
+test("resume: kill-switch, неподходящее состояние и повторное продолжение — типизированные 409", async () => {
+  const { handler, orchestrator } = await setup({ autoDrain: false });
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const run = await jsonOf<RunBody>(await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId })));
+
+  // Kill-switch отвечает **до** проверок состояния: агент получает один и тот же отказ.
+  process.env.EASYUI_ACCEPTANCE_RESUME_DISABLED = "1";
+  try {
+    const off = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+    expect(off.status).toBe(409);
+    expect(await jsonOf<{ error: { code: string } }>(off)).toMatchObject({ error: { code: "acceptance_resume_disabled" } });
+  } finally { delete process.env.EASYUI_ACCEPTANCE_RESUME_DISABLED; }
+
+  // Бегущий/поставленный ран продолжать нечем — он ещё идёт.
+  const running = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+  expect(running.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string } }>(running)).toMatchObject({ error: { code: "run_not_resumable" } });
+
+  // Тело — только `{}`: переопределять набор/профиль продолжением нельзя.
+  orchestrator!.repo.sweepNonTerminalRuns();
+  const withFields = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", { policy: "pixel-strict-v1" }));
+  expect(withFields.status).toBe(400);
+
+  const resumed = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+  expect(resumed.status, await resumed.clone().text()).toBe(202);
+  const body = await jsonOf<{ runId: string; attempt: number; resumedFromRunId: string; resumedFrom: { statusReason: string } }>(resumed);
+  expect(body.attempt).toBe(2);
+  expect(body.resumedFromRunId).toBe(run.runId);
+  expect(body.resumedFrom.statusReason).toBe("interrupted");
+
+  // Повтор называет продолжение, а не создаёт второе.
+  const again = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+  expect(again.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string; runId: string } }>(again))
+    .toMatchObject({ error: { code: "run_already_resumed", runId: body.runId } });
+
+  // Ран-предок остался неизменным: продолжение — новая строка, а не правка терминального рана.
+  const source = await jsonOf<RunView & { runId: string; attempt: number; resumedFromRunId: string | null }>(
+    await handler(req(`/acceptance-runs/${run.runId}`)));
+  expect(source).toMatchObject({ status: "error", statusReason: "interrupted", attempt: 1, resumedFromRunId: null });
+}, 120_000);
+
+/**
+ * BR-10a: HTTP-поверхность отпечатка блокера и disposition. Предмет — согласованность трёх
+ * ответов (ран, disposition, манифест архива), утверждения query-параметров и kill-switch;
+ * сам расчёт слоёв живёт в `server/acceptance/retry-disposition.test.ts`.
+ */
+test("retry-disposition: один отпечаток в ране, ручке и манифесте; query — утверждения, не фильтры", async () => {
+  const { dir, handler, orchestrator } = await setup();
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const run = await jsonOf<RunBody>(await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId })));
+  await orchestrator!.settled();
+
+  // Прошедший ран блокера не имеет — и отпечаток честно `null`, а не пустая строка.
+  const passed = await jsonOf<{ blockerFingerprint: string | null }>(await handler(req(`/acceptance-runs/${run.runId}`)));
+  expect(passed.blockerFingerprint).toBeNull();
+
+  // Неопределённый случай — тоже блокер (фидбэк §13): вердикта нет, и агенту нужен тот же дедуп.
+  orchestrator!.repo.updateCase(run.runId, "alpha", { verdict: "indeterminate" });
+  const view = await jsonOf<{ blockerFingerprint: string }>(await handler(req(`/acceptance-runs/${run.runId}`)));
+  expect(view.blockerFingerprint).toMatch(/^blk_[0-9a-f]{64}$/);
+
+  const disposition = await handler(req(`/acceptance-runs/${run.runId}/retry-disposition`));
+  expect(disposition.status, await disposition.clone().text()).toBe(200);
+  expect(disposition.headers.get("cache-control")).toContain("no-store");
+  const body = await jsonOf<{
+    runId: string; blockerFingerprint: string; disposition: string; suggestedAction: string;
+    changed: string[]; unchanged: string[]; basis: Record<string, unknown>; cases: unknown[];
+  }>(disposition);
+  // Инвариант волны: run view и disposition обязаны давать **одно** значение.
+  expect(body.blockerFingerprint).toBe(view.blockerFingerprint);
+  expect(body).toMatchObject({ runId: run.runId, disposition: "unchanged", suggestedAction: "do-not-retry", changed: [] });
+  expect(body.basis.policyProfileHash).toEqual(expect.any(String));
+  expect(body.cases.length).toBe(2);
+
+  // Сводка несёт тот же отпечаток: она и есть основной вид для агента.
+  const summary = await jsonOf<{ blockerFingerprint: string }>(await handler(req(`/acceptance-runs/${run.runId}?view=summary`)));
+  expect(summary.blockerFingerprint).toBe(view.blockerFingerprint);
+
+  // …и манифест архива — тоже: доказательство провала без ответа «тот же блокер или новый»
+  // заставляет читателя сверять вердикты глазами.
+  const evidence = await handler(req(`/acceptance-runs/${run.runId}/evidence`));
+  expect(evidence.status).toBe(200);
+  const entries = unzipSync(new Uint8Array(await evidence.arrayBuffer()));
+  const manifest = JSON.parse(strFromU8(entries["manifest.json"]!)) as { blockerFingerprint?: string };
+  expect(manifest.blockerFingerprint).toBe(view.blockerFingerprint);
+  // Персистированный манифест при этом не тронут: поле вычисляется на чтении, поэтому
+  // `evidence_manifest_hash` рана остаётся хэшем ровно того, что записано на диск.
+  const stored = await readRunManifest(dir, run.runId);
+  expect(stored).not.toBeNull();
+  expect("blockerFingerprint" in (stored as unknown as object)).toBe(false);
+
+  // Утверждения о ране: неверная пара — типизированный 409, битая форма — 400.
+  const foreign = await handler(req(`/acceptance-runs/${run.runId}/retry-disposition?candidateId=cand_${"0".repeat(64)}`));
+  expect(foreign.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string } }>(foreign)).toMatchObject({ error: { code: "candidate_mismatch" } });
+  const otherSet = await handler(req(`/acceptance-runs/${run.runId}/retry-disposition?caseSetId=cset_${"0".repeat(64)}`));
+  expect(otherSet.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string } }>(otherSet)).toMatchObject({ error: { code: "case_set_mismatch" } });
+  expect((await handler(req(`/acceptance-runs/${run.runId}/retry-disposition?candidateId=nope`))).status).toBe(400);
+  expect((await handler(req(`/acceptance-runs/${run.runId}/retry-disposition?whatever=1`))).status).toBe(400);
+  // Своя же пара проходит.
+  const asserted = await handler(req(`/acceptance-runs/${run.runId}/retry-disposition?candidateId=${candidate.candidateId}`));
+  expect(asserted.status).toBe(200);
+  // Ручка read-only: ни одного нового рана после всех обращений.
+  expect(orchestrator!.repo.runsForCandidate(candidate.candidateId).length).toBe(1);
+
+  // Kill-switch гасит обе поверхности сразу: ручку — 404, поле — отсутствием ключа.
+  process.env.EASYUI_BLOCKER_FINGERPRINT_DISABLED = "1";
+  try {
+    expect((await handler(req(`/acceptance-runs/${run.runId}/retry-disposition`))).status).toBe(404);
+    const off = await jsonOf<Record<string, unknown>>(await handler(req(`/acceptance-runs/${run.runId}`)));
+    expect("blockerFingerprint" in off).toBe(false);
+    const archive = unzipSync(new Uint8Array(await (await handler(req(`/acceptance-runs/${run.runId}/evidence`))).arrayBuffer()));
+    expect("blockerFingerprint" in (JSON.parse(strFromU8(archive["manifest.json"]!)) as object)).toBe(false);
+  } finally { delete process.env.EASYUI_BLOCKER_FINGERPRINT_DISABLED; }
 }, 120_000);
 
 // ------------------------------------------------------- case-set-манифесты (W2)
@@ -835,8 +961,13 @@ test("view: default остаётся полным ответом, неизвес
   // Регрессия формы полного вида: набор ключей и вложенность failedCases не менялись волной W8.
   const full = await jsonOf<Record<string, unknown>>(await handler(req(`/acceptance-runs/${runId}`)));
   expect(Object.keys(full).sort()).toEqual([
+    // BR-06 (2026-08-08): аддитивная тройка родословной — `attempt`, `resumedFromRunId`, `resume`.
+    "attempt",
+    // BR-10a (2026-08-08): аддитивный `blockerFingerprint`; при поднятом kill-switch'е ключа нет.
+    "blockerFingerprint",
     "candidateId", "caseSetId", "componentId", "createdAt", "eta", "evidenceManifestHash", "failedCases",
     "finishedAt", "gates", "idempotencyKey", "impact", "policy", "progress", "refresh", "remediationGroups",
+    "resume", "resumedFromRunId",
     // W7 (2026-08-07): аддитивный раздел `warnings` — advisory-предупреждения рана.
     "runId", "startedAt", "status", "statusReason", "warnings",
   ]);
