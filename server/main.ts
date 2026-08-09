@@ -53,6 +53,9 @@ import { acceptanceResumeEnabled } from "./acceptance/orchestrator";
 import { blockerFingerprintEnabled } from "./acceptance/disposition";
 import { captureV4Enabled } from "./capture/captureV4";
 import { geometryOwnershipEnabled } from "./capture/geometryOwnership";
+// BR-07/BR-08 (план 2026-08-08 §7/§8): три оси волны — атрибуция, профили рендерера, владение.
+import { comparisonOwnershipEnabled, visualAttributionV2Enabled } from "./visual/attribution";
+import { rendererPolicyProfilesEnabled } from "./acceptance/rendererProfiles";
 import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
@@ -318,6 +321,20 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // (case-set) и `overflowOwnership` (документ прототипа): под свитчем обе отвергаются на записи.
     if(!geometryOwnershipEnabled()) console.warn("[capture] EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1: decoration-aware geometry and FlowRoot overflow ownership off, case sets declaring geometryOwnership are refused (422 geometry_ownership_disabled), documents declaring overflowOwnership are refused (422 flow_overflow_ownership_disabled), and geometry collection/verdict stay pre-wave byte-for-byte");
     if(!blockerFingerprintEnabled()) console.warn("[acceptance] EASYUI_BLOCKER_FINGERPRINT_DISABLED=1: blocker fingerprint off, GET /api/acceptance-runs/:id/retry-disposition answers 404 and runs carry no blockerFingerprint");
+    // BR-07 (план 2026-08-08 §7): атрибуция по элементам — слой **report-only**. Под свитчем
+    // исчезают карта элементов в evidence, owner-тоталы, кластеры §10 и квитанция сравнения;
+    // вердикты, отпечатки случаев и `evidence_manifest_hash` от него не зависят ни в каком
+    // положении. Отдельная ось от профилей рендерера намеренно: у той цена — promote-eligibility.
+    if(!visualAttributionV2Enabled()) console.warn("[acceptance] EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1: element-level visual attribution off, cases carry no element-map.json, no owner totals and no §10 clusters (verdicts and fingerprints are unaffected)");
+    // BR-07: профили политики рендерера. **Меняют promote-eligibility**: при опущенном свитче
+    // визуальный гейт впервые в продукте пишет `exceptions[]`, а профиль политики
+    // `default-v1-exceptions` становится промоутабельным. Включать только вместе с решением о
+    // том, что объяснённый renderer-only остаток допускает публикацию.
+    if(!rendererPolicyProfilesEnabled()) console.warn("[acceptance] EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1: renderer policy profiles off, no run produces exceptions[] and default-v1-exceptions is not a promotion policy profile");
+    // BR-08 (план 2026-08-08 §8): второй вердикт по владению. Вердикт случая он не меняет ни в
+    // каком положении тумблера — им остаётся интеграционный; гаснут ровно subject-метрики,
+    // группировка исключённых пикселей по зависимостям и предикат субъектной промоутабельности.
+    if(!comparisonOwnershipEnabled()) console.warn("[acceptance] EASYUI_COMPARISON_OWNERSHIP_DISABLED=1: subject/integration verdicts off, cases[].comparison.ownership stays a declaration without effect (case verdict is the integration one either way)");
     // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —
     // ручку плана (404) и запись кадров экранов на горячем пути съёмки, — потому что писать в
     // таблицу v34 при откате образа некуда. Уже записанные кадры не трогаются: включение обратно

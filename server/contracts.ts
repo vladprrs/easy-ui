@@ -168,6 +168,28 @@ const serializedDefinitionFields = {
   replacement: z.string().optional(),
 };
 
+/**
+ * Поля единого резолвера схемы (BR-01b, план 2026-08-08 §1; контракт фидбэка §4).
+ *
+ * Одни и те же имена в трёх ответах — save прототипа (`components`), `render-status`
+ * (`resolvedPins[]`) и снап/geometry probe (`componentPins[]`), — чтобы мигратор мог **сверить**
+ * тройки, а не доверять каждой ручке по отдельности. Все поля опциональны: при поднятом
+ * kill-switch'е `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` ответ доволновой byte-for-byte, и полей
+ * нет вовсе; `sourceHash`/`propsSchemaHash` бывают `null` (компонент без исходника/схемы props).
+ */
+const resolvedSchemaFieldsShape = {
+  resolvedVersion: z.number().int().positive().optional(),
+  sourceHash: z.string().nullable().optional(),
+  propsSchemaHash: z.string().nullable().optional(),
+};
+
+/** Блок `components` save-ответа прототипа — проекция узлов `ResolvedComponentGraph`. */
+const resolvedComponentsSchema = z.array(z.object({
+  id: z.string(), name: z.string(), resolvedVersion: z.number().int().positive(),
+  sourceHash: z.string().nullable(), propsSchemaHash: z.string().nullable(),
+  origin: z.enum(["head-active", "pinned", "composition-pin"]),
+}));
+
 export const renderStatusQuerySchema = z
   .strictObject({
     version: positiveIntFromString.optional(), rev: positiveIntFromString.optional(),
@@ -188,7 +210,10 @@ export const renderStatusResponseSchema = z.looseObject({
   url: z.string(),
   revision: z.number(),
   publishedVersion: z.number().nullable(),
-  resolvedPins: z.array(z.object({ id: z.string(), name: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), status: z.string() })),
+  resolvedPins: z.array(z.object({
+    id: z.string(), name: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), status: z.string(),
+    ...resolvedSchemaFieldsShape,
+  })),
   bundleStatus: z.enum(["ready", "failed"]),
   warnings: z.array(z.object({ code: z.string(), message: z.string() })),
   errors: z.array(z.object({ code: z.string(), message: z.string() })),
@@ -403,7 +428,7 @@ const screenshotImageResultSchema = z.object({
   bundleHash: z.string().optional(),
   // Draft-цель (P1b): отрендеренная head-ревизия — клиент печатает «draft rev N».
   draftRev: z.number().int().positive().optional(),
-  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string(), ...resolvedSchemaFieldsShape })).optional(),
   rendererBuild: z.string().nullable(), browserVersion: z.string(),
   /**
    * Объявленный рендерер джобы (R1): отпечаток и его входы, замороженные на постановке.
@@ -437,7 +462,7 @@ const geometryMeasurementFields = {
 const screenshotPrototypeGeometryResultSchema = z.object({
   kind: z.literal("geometry"), surface: z.literal("prototype"),
   resolvedRev: z.number().int().positive(), prototypeInstanceId: z.string(),
-  componentPins: z.array(z.object({ id: z.string(), version: z.number().int().positive(), bundleHash: z.string() })),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number().int().positive(), bundleHash: z.string(), ...resolvedSchemaFieldsShape })),
   designSystemMetaVersion: z.number().int().positive().nullable(), resolvedSpaceScale: spaceScaleSchema,
   ...geometryMeasurementFields,
 });
@@ -470,7 +495,7 @@ const screenshotImageBytesResultSchema = z.object({
   consoleErrors: z.array(z.string()), pageErrors: z.array(z.string()),
   bundleHash: z.string().optional(),
   draftRev: z.number().int().positive().optional(),
-  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string(), ...resolvedSchemaFieldsShape })).optional(),
   rendererBuild: z.string().nullable(), browserVersion: z.string(),
   renderer: screenshotImageResultSchema.shape.renderer,
   /** Overlay-джобы receipt'ов не пишут (§B2.6), поэтому у них поля не будет. */
@@ -954,7 +979,7 @@ export const createPrototypeContract = registerContract({
   summary: "Create a prototype from a document (revision 1); validates against the design-system catalog.",
   status: 201,
   requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.omit({ track: true }).shape }),
-  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
+  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema), components: resolvedComponentsSchema.optional() }),
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError, flowOverflowOwnershipDisabledError, compositionForeignDesignSystemError],
 });
 
@@ -992,7 +1017,7 @@ export const savePrototypeContract = registerContract({
   method: "PUT", path: "/api/prototypes/{id}",
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
   requestSchema: z.object({ doc: inputPrototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
-  responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
+  responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema), components: resolvedComponentsSchema.optional() }),
   errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError, flowOverflowOwnershipDisabledError, compositionForeignDesignSystemError],
 });
 
@@ -2211,7 +2236,9 @@ export const createAcceptanceRunContract = registerContract({
     candidateId: z.string(),
     caseSetId: z.string().optional(),
     idempotencyKey: z.string().min(1).max(200).optional(),
-    policy: z.enum(["default-v1", "pixel-strict-v1"]).optional(),
+    // BR-07: третий профиль (`default-v1-exceptions`) допускает `pass_with_exceptions` — единственный
+    // профиль, под которым объяснённые профилем рендерера исключения не роняют ран.
+    policy: z.enum(["default-v1", "pixel-strict-v1", "default-v1-exceptions"]).optional(),
     cases: z.array(z.strictObject({ key: z.string(), props: z.record(z.string(), z.unknown()) })).optional(),
     refresh: z.union([
       z.enum(["none", "failed", "all"]),
@@ -3588,6 +3615,32 @@ export const capabilitiesResponseSchema = z.object({
      */
     blockerFingerprintV1: z.boolean(),
     /**
+     * Атрибуция расхождения по элементам (BR-07, план 2026-08-08 §7): карта элементов кадра
+     * (`element-map.json` в evidence), owner-тоталы по **полной** diff-маске, честный `unknown`,
+     * контракт кластера §10 (`ownerElementKey`/`ownerComponentId`/`paintClass`/`structural`/
+     * `basis[]`/`confidence`) и квитанция сравнения (matte/flattening/color profile/renderer/
+     * шрифты/версия политики сравнения). Слой **report-only**: ни один вердикт от него не зависит.
+     * Гейтится матричной приёмкой и `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1`.
+     */
+    visualAttributionV2: z.boolean(),
+    /**
+     * Профили политики рендерера (BR-07): server-owned реестр, публикуемый в
+     * `acceptance.rendererPolicyProfiles` **до** рана. Применяются второй инстанцией визуального
+     * гейта и только когда все кластеры случая — renderer-only класс в scope профиля; пишут
+     * `exceptions[]` (первый продюсер `pass_with_exceptions`). Своя ось тумблера
+     * (`EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1`), потому что она меняет **promote-eligibility**:
+     * под ней профиль политики `default-v1-exceptions` перестаёт быть промоутабельным.
+     */
+    rendererPolicyProfilesV2: z.boolean(),
+    /**
+     * Два вердикта одного сравнения (BR-08, план 2026-08-08 §8): `comparison.ownership`,
+     * `comparison.subjectComponentId`, `comparison.dependencyPolicy` в case-set, subject/integration
+     * метрики визуального гейта и группировка исключённых пикселей по зависимостям. Вердикт случая
+     * не меняется — им остаётся интеграционный. Гейтится матрицей и
+     * `EASYUI_COMPARISON_OWNERSHIP_DISABLED=1`.
+     */
+    comparisonOwnershipV1: z.boolean(),
+    /**
      * Версия схемы агентской квитанции драйвера (`envelope`, план 2026-08-07 §1.4, W6b) —
      * **число**, а не булев флаг: конверт существует всегда, вопрос только в том, какую его
      * форму понимает эта пара «сервер × харнес». Растёт лишь при несовместимом изменении самого
@@ -3602,7 +3655,13 @@ export const capabilitiesResponseSchema = z.object({
      * `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` (доволновая семантика byte-for-byte).
      */
     prototypeSchemaResolverV2: z.boolean(),
-    /** Контрактная версия этого резолвера: 2 — волна BR-01a, 1 — доволновой путь под kill-switch. */
+    /**
+     * Контрактная версия этого резолвера: 2 — волна BR-01a/BR-01b, 1 — доволновой путь под
+     * kill-switch. На версии 2 три ответа называют **один и тот же** резолв одинаковыми полями
+     * (`resolvedVersion`/`sourceHash`/`propsSchemaHash`): save прототипа — блоком `components`,
+     * `GET …/render-status` — в `resolvedPins[]`, снап и geometry probe — в `componentPins[]`.
+     * Источник у всех трёх один — `ResolvedComponentGraph` (`server/components/resolvedGraph.ts`).
+     */
     prototypeSchemaResolverVersion: z.number().int().positive(),
     /**
      * Поле краски случая **по сторонам** (`cases[].paintPaddingPx`, план 2026-08-08 §2, BR-02):
@@ -3684,6 +3743,27 @@ export const capabilitiesResponseSchema = z.object({
      * (`default-v1` → `1`; `pixel-strict-v1` откатывается в `2`, поэтому одно число на всех соврало бы).
      */
     readinessPolicyVersion: z.number().int().positive(),
+    /**
+     * **Профили политики рендерера** (BR-07, план 2026-08-08 §7): server-owned реестр, объявленный
+     * до рана. Клиент обязан иметь возможность прочитать scope, потолок и **чем профиль протухает**
+     * (`expiry`), не заглядывая в образ: профиль, применённый задним числом, был бы не политикой, а
+     * самооправданием. Пустой массив — исключений в этой сборке не производит никто (в том числе
+     * при `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1`).
+     */
+    rendererPolicyProfiles: z.array(z.object({
+      profileId: z.string(),
+      rendererFingerprint: z.string().nullable(),
+      scope: z.object({
+        paintClass: z.string(),
+        region: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+      }),
+      maxResidualPct: z.number(),
+      expiry: z.object({
+        renderer: z.string().optional(), fonts: z.string().optional(), matte: z.string().optional(),
+        asset: z.string().optional(), geometry: z.string().optional(),
+      }),
+      description: z.string(),
+    })),
   }),
   /** Объявленный рендерер этой сборки (план renderer-contract-2 §5 R1). */
   renderer: rendererReportSchema,

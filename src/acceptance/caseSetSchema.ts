@@ -363,11 +363,36 @@ export const caseSetSlotBindingsSchema: z.ZodType<CaseSetSlotBindings> = z.lazy(
  */
 export const COMPARISON_MATTE_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
+/**
+ * **Владение поверхностью сравнения** (EUI-BR-08, план 2026-08-08 §8, capability
+ * `comparisonOwnershipV1`).
+ *
+ * Три поля, все строго `.optional()` **без** `.default()` (инвариант C6/C25: `caseSetIdOf`
+ * хэширует `parsed.data`, и zod-дефолт сменил бы контентный адрес всех опубликованных манифестов):
+ *
+ * - `ownership: "subject-and-integration"` — просьба посчитать **два** вердикта: по пикселям,
+ *   которыми владеет субъект, и по всей канве (сегодняшнее поведение). Вердикт случая при этом не
+ *   меняется — им остаётся интеграционный;
+ * - `subjectComponentId` — кто субъект, когда снимается обёртка с детьми: без него субъектом
+ *   считается компонент рана, и приёмка обёртки была бы приёмкой всего дерева;
+ * - `dependencyPolicy: "require-eligible-acceptance"` — намерение «зависимости обязаны иметь
+ *   собственную приёмку», читаемое promote-гейтом.
+ *
+ * Слой всех трёх — `comparison` (см. `FIELD_LAYERS` и тест соответствия ключей в
+ * `server/acceptance/ids.test.ts`): они меняют то, **что** и **с чем** сравнивается, не трогая ни
+ * одного пикселя кадра.
+ */
+export const COMPARISON_OWNERSHIP = "subject-and-integration";
+export const COMPARISON_DEPENDENCY_POLICY = "require-eligible-acceptance";
+
 export const caseSetComparisonSchema = z.strictObject({
   matte: z.union([
     z.literal("none"),
     z.string().regex(COMPARISON_MATTE_PATTERN, "matte must be \"none\" or a #RRGGBB colour"),
   ]).optional(),
+  ownership: z.literal(COMPARISON_OWNERSHIP).optional(),
+  subjectComponentId: z.string().min(1).max(64).optional(),
+  dependencyPolicy: z.literal(COMPARISON_DEPENDENCY_POLICY).optional(),
 });
 
 /**

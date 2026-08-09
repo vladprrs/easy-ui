@@ -1098,6 +1098,43 @@ test("§W6: вложенный слот судится по definition запи�
   db.close();
 });
 
+test("BR-08: ownership/subjectComponentId/dependencyPolicy доезжают до случая, чужое поле — отказ", () => {
+  const db = dbWithAsset();
+  const parsed = validateManifest(db, "yp-badge", manifest({
+    cases: [
+      {
+        id: "owned", props: { tone: "neutral" },
+        comparison: {
+          ownership: "subject-and-integration", subjectComponentId: "yp-badge",
+          dependencyPolicy: "require-eligible-acceptance",
+        },
+      },
+      { id: "plain", props: { tone: "accent" } },
+    ],
+  } as unknown as Partial<CaseSetManifest>)).manifest;
+  const [owned, plain] = buildCasesFromManifest(parsed);
+  expect(owned).toMatchObject({
+    comparison: {
+      ownership: "subject-and-integration", subjectComponentId: "yp-badge",
+      dependencyPolicy: "require-eligible-acceptance",
+    },
+  });
+  // Инвариант отсутствия: случай без объявления не получает ни ключа (контентный адрес набора).
+  expect(Object.keys(plain!)).not.toContain("comparison");
+
+  // Строгая схема: свободные значения литералов и опечатки в ключах — 422, а не молчаливый дефолт.
+  for (const bad of [
+    { comparison: { ownership: "subject-only" } },
+    { comparison: { dependencyPolicy: "any" } },
+    { comparison: { subjectComponent: "yp-badge" } },
+  ]) {
+    fails(() => validateManifest(db, "yp-badge", manifest({
+      cases: [{ id: "default", props: { tone: "neutral" }, ...bad }],
+    } as unknown as Partial<CaseSetManifest>)), 422, "validation_failed");
+  }
+  db.close();
+});
+
 test("§W4: comparison.matte и textAaBudget доезжают до случая, а их отсутствие остаётся отсутствием", () => {
   const db = dbWithAsset();
   const parsed = validateManifest(db, "yp-badge", manifest({

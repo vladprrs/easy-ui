@@ -32,6 +32,25 @@ export const GEOMETRY_CONTRACT_VERSION = 2;
  */
 export const GEOMETRY_OWNERSHIP_CONTRACT_VERSION = 3;
 
+/**
+ * **Карта узлов поддерева маркера** (EUI-BR-07 S1, план `docs/plans/2026-08-08-blocker-removal-eui-br.md`
+ * §7): потолок записей на один маркер и на весь замер.
+ *
+ * Карта — новое **измерение**, а не переиспользование `rects[]`: у `rects[]` гранулярность
+ * маркерная (union поддерева на `data-eui-key`), и для одиночного компонента она вырождается в
+ * один прямоугольник, по которому атрибуция пикселей неотличима от «весь диф принадлежит
+ * компоненту». Здесь запись заводится на **узел**, а внутренние узлы адресуются `path`.
+ *
+ * Оба числа — потолки, а не бюджеты «сколько поместится»: карта обязана быть доказательством, а не
+ * второй копией DOM. Усечение всегда видимо (`truncated`), потому что «карта неполна» и «пиксель
+ * ничей» — разные факты, и атрибуция обязана уметь их различать.
+ *
+ * Замер **аддитивен и вне отпечатков** (прецедент W1a/BR-05): `GEOMETRY_CONTRACT_VERSION` он не
+ * двигает, во `frameFingerprint` не входит, и дифференциальный тест доказывает это отдельно.
+ */
+export const ELEMENT_MAP_NODE_LIMIT = 512;
+export const ELEMENT_MAP_TOTAL_LIMIT = 2048;
+
 /** Round browser geometry without leaking device-pixel noise into the API. */
 export const roundCssPx = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -553,6 +572,12 @@ export function collectGeometry({
     const flowExcluded = [];
     /** Декларации, наложенные на in-flow контейнер с layout-детьми (см. `visit`). */
     const ownershipViolations = [];
+    // BR-07 S1: карта узлов поддерева. Ведётся **всегда** — это чистое расширение замера, и
+    // потребитель (атрибуция диффа) обязан получать её по любому уже снятому кадру, а не только по
+    // снятому «с флагом»: опцию сбора пришлось бы протаскивать сквозь капчур-помпу, то есть менять
+    // кадр ради факта, который на пиксели не влияет.
+    const elementMapNodes = [];
+    let elementMapTotal = 0;
     const push = (element, cause, rect) => {
       if (sources.length >= DETAIL_SOURCE_LIMIT) return;
       sources.push({ elementKey: ownerKey(element), elementPath: nodePath(element), cause, rect: boxOf(rect) });
@@ -577,10 +602,32 @@ export function collectGeometry({
         }
       }
     };
-    const visit = (element, inFlow, clips, isRoot = false) => {
+    /** Собственные непустые текстовые дети узла: «здесь живёт живой текст», а не «текст внутри». */
+    const hasOwnText = (element) => {
+      for (const node of element.childNodes) {
+        // 3 — Node.TEXT_NODE (литерал: функция сериализуется в страницу).
+        if (node.nodeType === 3 && (node.data ?? "").trim() !== "") return true;
+      }
+      return false;
+    };
+    const visit = (element, inFlow, clips, isRoot = false, depth = 0) => {
       if (isHidden(element)) return;
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
+      // BR-07 S1: запись карты. Вырожденный (0×0) узел не заводится вовсе — он не может владеть ни
+      // одним пикселем, и держать его значило бы тратить потолок на заведомо пустое владение.
+      if (rect.right - rect.left > 0 || rect.bottom - rect.top > 0) {
+        elementMapTotal += 1;
+        if (elementMapNodes.length < ELEMENT_MAP_NODE_LIMIT) {
+          elementMapNodes.push({
+            path: nodePath(element),
+            bbox: boxOf(rect),
+            hasText: hasOwnText(element),
+            markerKey: ownerKey(element),
+            depth,
+          });
+        }
+      }
       const position = style.position ?? "static";
       const outOfFlow = position === "absolute" || position === "fixed";
       const transform = style.transform ?? "";
@@ -655,9 +702,9 @@ export function collectGeometry({
       const childClips = declaration
         ? [...clips, { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }]
         : clips;
-      for (const child of element.children) visit(child, keeps, childClips);
+      for (const child of element.children) visit(child, keeps, childClips, false, depth + 1);
     };
-    visit(marker, true, [], true);
+    visit(marker, true, [], true, 0);
     const union = rectUnion(boxes);
     const sourceBoxes = sources.map((item) => ({
       left: item.rect.x + surfaceRect.left, top: item.rect.y + surfaceRect.top,
@@ -726,6 +773,9 @@ export function collectGeometry({
       clipChain,
       // BR-05: аддитивный факт замера — вне отпечатка (`GEOMETRY_CONTRACT_VERSION` остаётся 2).
       outOfFlowNodes,
+      // BR-07 S1: карта узлов — тоже аддитивный факт вне отпечатка. `total` — сколько узлов у
+      // поддерева вообще есть: без него `truncated` не отвечает «насколько неполна карта».
+      elementMap: { nodes: elementMapNodes, truncated: elementMapNodes.length < elementMapTotal, total: elementMapTotal },
       // Условный ключ: у случая без декларации его нет вовсе, и `geometry.json` корпуса не растёт.
       ...(geometryOwnership ? { ownershipViolations } : {}),
     };
@@ -750,8 +800,25 @@ export function collectGeometry({
       const marker = markers.find((candidate) => (candidate.getAttribute("data-eui-key") ?? "") === key);
       return marker
         ? detailOf(marker)
-        : { key, instance: 0, layoutBounds: null, rootBounds: null, rootClip: null, effectSources: [], clipChain: [], outOfFlowNodes: [] };
+        : {
+          key, instance: 0, layoutBounds: null, rootBounds: null, rootClip: null,
+          effectSources: [], clipChain: [], outOfFlowNodes: [],
+          elementMap: { nodes: [], truncated: false, total: 0 },
+        };
     });
+  // BR-07 S1: потолок карты на **весь** замер. Считается здесь, а не в `detailOf`: тот вызывается
+  // и служебно (union корневых маркеров), и общий бюджет, потраченный отброшенным вызовом, сделал
+  // бы карту зависящей от порядка обхода. Усечение видимо у той детали, которую оно затронуло.
+  let elementMapBudget = ELEMENT_MAP_TOTAL_LIMIT;
+  for (const item of details) {
+    const map = item.elementMap;
+    if (!map) continue;
+    if (map.nodes.length > elementMapBudget) {
+      map.nodes = map.nodes.slice(0, Math.max(0, elementMapBudget));
+      map.truncated = true;
+    }
+    elementMapBudget -= map.nodes.length;
+  }
 
   // --- BR-09 (план 2026-08-08 §9): владение переливом ------------------------------------------
   // Вклад поддерева объявленного владельца в габарит экрана ограничивается **границей его

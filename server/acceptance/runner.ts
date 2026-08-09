@@ -18,7 +18,8 @@
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import {
   classifyVisualCauses,
-  type CauseGeometryFacts, type CauseInput, type CauseReadinessFacts, type CauseVisualMetrics, type VisualCause,
+  type CauseGeometryFacts, type CauseInput, type CauseReadinessFacts, type CauseRect,
+  type CauseVisualMetrics, type VisualCause,
 } from "../visual/causes";
 import type { AcceptanceCase } from "./cases";
 import { artifactPresent, readArtifact } from "./evidence";
@@ -389,10 +390,26 @@ export function causeInputOf(gates: GateResult[], deviceScaleFactor: number): Ca
     pendingRequests: Array.isArray(readinessMetrics.pendingRequests) ? readinessMetrics.pendingRequests as string[] : [],
   };
 
+  // BR-07: владельцы кластеров из атрибуции — по индексу региона (оба массива приходят из одного
+  // прогона воркера, поэтому индексы сопоставимы по построению).
+  const attribution = isObject(visualMetrics.attribution) ? visualMetrics.attribution as Record<string, unknown> : null;
+  const attributionRegions = Array.isArray(attribution?.regions)
+    ? attribution!.regions as { index: number; ownerElementKey?: string | null }[]
+    : [];
+  const regionBoxes = Array.isArray(visualMetrics.regions)
+    ? visualMetrics.regions as { bbox: CauseRect }[]
+    : [];
+  const elementOwners = attributionRegions
+    .map((region) => ({ region, bbox: regionBoxes[region.index]?.bbox }))
+    .filter((item): item is { region: { index: number; ownerElementKey?: string | null }; bbox: CauseRect } =>
+      item.bbox !== undefined && typeof item.region.ownerElementKey === "string")
+    .map((item) => ({ elementKey: item.region.ownerElementKey as string, rect: item.bbox }));
+
   return {
     visual,
     geometry,
     readiness,
+    ...(elementOwners.length === 0 ? {} : { elementOwners }),
     deviceScaleFactor,
     visualReason: typeof visualMetrics.reason === "string" ? visualMetrics.reason : null,
   };

@@ -828,7 +828,13 @@ const manifestShapeHash = (manifest: unknown): string =>
 // восстановить), при этом **ни один** вход `frameFingerprint`/`comparisonFingerprint` не добавлен —
 // golden кадрового отпечатка в `ids.test.ts` держится байт-в-байт, а вердикты доволновых случаев не
 // меняются (парные legacy-тесты `decoration-symptom-diagnosis.test.ts` под kill-switch'ем).
-const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "4803ecba2b45a13d1b6bc33a9453fdc5f585d0a0fd65c4e0b9da49af95296006";
+// **Санкционированный сдвиг BR-07** (план 2026-08-08 §7): у случая появляются артефакт
+// `element-map.json` (карта элементов кадра) и квитанция сравнения `comparisonReceipt` в записи
+// манифеста. Оба — **доказательство**, а не украшение: без карты владелец пикселя невыразим, без
+// квитанции «вердикт получен» неотличимо от «сравнили не тем». Ни один вход отпечатков при этом
+// не добавлен (golden `frameFingerprint`/`comparisonFingerprint` в `ids.test.ts` держится), а под
+// `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1` артефакта нет вовсе и форма записи доволновая.
+const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "5e0a7c5da41e42fe1ba212d602213ad7fdb5144965bf5c3e72890af698ad2217";
 
 test("evidence-манифест slot-free рана не меняется от появления слот-полей (golden §A7)", async () => {
   const harness = await setup();

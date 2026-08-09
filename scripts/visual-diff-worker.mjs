@@ -235,6 +235,7 @@ export function diffRegions(mask, width, height, deltas, totalPixels, limit = MA
   const seen = new Uint8Array(width * height);
   const queue = new Int32Array(width * height);
   const regions = [];
+  const seeds = [];
   for (let start = 0; start < mask.length; start += 1) {
     if (seen[start] === 1 || mask[start] === 0) continue;
     let head = 0; let tail = 0;
@@ -257,9 +258,178 @@ export function diffRegions(mask, width, height, deltas, totalPixels, limit = MA
       areaPct: round4((area / totalPixels) * 100),
       meanDelta: round4(deltaSum / area),
     });
+    seeds.push(start);
   }
-  regions.sort((left, right) => right.areaPct - left.areaPct);
-  return { regions: regions.slice(0, limit), totalRegions: regions.length };
+  // BR-07: сортируется **пара** (регион, его затравочный пиксель). Затравка нужна атрибуции: по
+  // ней компонента обходится повторно, и пер-регионные счётчики считаются по **тем самым**
+  // пикселям региона, а не по его bbox'у, куда попадают чужие (bbox'ы соседних областей
+  // пересекаются, и счёт «по прямоугольнику» назначил бы владельца чужому расхождению).
+  const order = regions.map((region, index) => index)
+    .sort((left, right) => regions[right].areaPct - regions[left].areaPct);
+  return {
+    regions: order.slice(0, limit).map((index) => regions[index]),
+    totalRegions: regions.length,
+    seeds: order.slice(0, limit).map((index) => seeds[index]),
+  };
+}
+
+// ------------------------------------------------------------------ атрибуция (BR-07, план §7)
+//
+// Вопрос, на который отвечает этот блок: **какой элемент владеет этим пикселем расхождения**.
+// Три инварианта, каждый из которых — прямое требование плана:
+//
+// 1. Считается по **полной** diff-маске, а не по усечённому `regions[]` (там максимум 12 самых
+//    крупных областей, и доля «≥95 % пикселей атрибутировано» по ним была бы долей от огрызка).
+// 2. **Per-pixel owner-растр не строится**: канва легально до 20 Мпикс, и Uint16 на пиксель — это
+//    40 МБ на случай. Вместо растра — построчный индекс прямоугольников, отсортированных по
+//    глубине: владельцем становится **глубочайший** узел, содержащий пиксель (tie-break плана).
+// 3. Пиксель, которого не покрыл ни один узел, честно уходит в `unknown`. «Не знаю, чей» — факт,
+//    а не повод назначить владельцем корень.
+
+/** Потолок узлов карты в задании: контракт транспорта, не «сколько поместится». */
+export const ATTRIBUTION_MAX_NODES = 512;
+
+/**
+ * Построчный индекс узлов: `rows[y]` — индексы узлов, чей прямоугольник пересекает строку `y`, в
+ * порядке **убывания глубины**. Порядок задаётся один раз сортировкой узлов, поэтому разрешение
+ * владельца — это первый подошедший по `x`, без сравнений на каждом пикселе.
+ */
+export function nodeRowIndex(nodes, width, height) {
+  const rows = new Array(height);
+  for (let y = 0; y < height; y += 1) rows[y] = null;
+  nodes.forEach((node, index) => {
+    const fromY = Math.max(0, Math.floor(node.y));
+    const toY = Math.min(height, Math.ceil(node.y + node.height));
+    if (node.x >= width || node.x + node.width <= 0) return;
+    for (let y = fromY; y < toY; y += 1) (rows[y] ?? (rows[y] = [])).push(index);
+  });
+  return rows;
+}
+
+/** Владелец пикселя `(x, y)` — индекс узла либо `-1` (не покрыт ни одним). */
+export function ownerAt(rows, nodes, x, y) {
+  const bucket = rows[y];
+  if (!bucket) return -1;
+  for (const index of bucket) {
+    const node = nodes[index];
+    if (x >= node.x && x < node.x + node.width) return index;
+  }
+  return -1;
+}
+
+/**
+ * Атрибуция полной diff-маски по карте элементов.
+ *
+ * `regionSeeds` — затравочные пиксели топ-областей: по ним компоненты обходятся повторно, и
+ * кластер получает **своего** владельца (мажоритарного по своим же пикселям), а не владельца
+ * своего bbox'а.
+ */
+export function attributeMask(input) {
+  const { mask, width, height, nodes, regionSeeds = [], edgeMask = null, refData = null, candData = null, deltas = null } = input;
+  const sorted = nodes
+    .map((node, index) => ({ node, index }))
+    .sort((left, right) => right.node.depth - left.node.depth || left.index - right.index)
+    .map((item) => item.node);
+  const rows = nodeRowIndex(sorted, width, height);
+  const owners = new Float64Array(sorted.length);
+  let unknownPixels = 0;
+  let attributedPixels = 0;
+  let dependencyPixels = 0;
+  const dependencyByMarker = new Map();
+  for (let y = 0; y < height; y += 1) {
+    const base = y * width;
+    for (let x = 0; x < width; x += 1) {
+      if (mask[base + x] === 0) continue;
+      const owner = ownerAt(rows, sorted, x, y);
+      if (owner === -1) { unknownPixels += 1; continue; }
+      owners[owner] += 1;
+      attributedPixels += 1;
+      if (sorted[owner].ownership === "dependency") {
+        dependencyPixels += 1;
+        const key = sorted[owner].markerKey ?? "";
+        const bucket = dependencyByMarker.get(key) ?? { markerKey: key, componentId: sorted[owner].componentId ?? null, pixels: 0 };
+        bucket.pixels += 1;
+        dependencyByMarker.set(key, bucket);
+      }
+    }
+  }
+
+  // --- пер-регионная атрибуция: повторный обход компоненты от затравки -------------------------
+  const seen = regionSeeds.length > 0 ? new Uint8Array(width * height) : null;
+  const queue = regionSeeds.length > 0 ? new Int32Array(width * height) : null;
+  const regions = regionSeeds.map((seed, regionIndex) => {
+    const counts = new Map();
+    let mismatchedPixels = 0; let unknown = 0;
+    let edgeInside = 0; let edgeOutside = 0; let alphaDominant = 0; let deltaSum = 0; let maxDelta = 0;
+    let head = 0; let tail = 0;
+    queue[tail++] = seed; seen[seed] = 1;
+    while (head < tail) {
+      const index = queue[head++];
+      const x = index % width; const y = (index / width) | 0;
+      mismatchedPixels += 1;
+      const owner = ownerAt(rows, sorted, x, y);
+      if (owner === -1) unknown += 1;
+      else counts.set(owner, (counts.get(owner) ?? 0) + 1);
+      if (edgeMask) { if (edgeMask[index] === 1) edgeInside += 1; else edgeOutside += 1; }
+      if (deltas) { deltaSum += deltas[index]; if (deltas[index] > maxDelta) maxDelta = deltas[index]; }
+      if (refData && candData) {
+        const offset = index * 4;
+        const dr = Math.abs(refData[offset] - candData[offset]);
+        const dg = Math.abs(refData[offset + 1] - candData[offset + 1]);
+        const db = Math.abs(refData[offset + 2] - candData[offset + 2]);
+        const da = Math.abs(refData[offset + 3] - candData[offset + 3]);
+        if (da > Math.max(dr, dg, db)) alphaDominant += 1;
+      }
+      if (x > 0 && seen[index - 1] === 0 && mask[index - 1] === 1) { seen[index - 1] = 1; queue[tail++] = index - 1; }
+      if (x + 1 < width && seen[index + 1] === 0 && mask[index + 1] === 1) { seen[index + 1] = 1; queue[tail++] = index + 1; }
+      if (y > 0 && seen[index - width] === 0 && mask[index - width] === 1) { seen[index - width] = 1; queue[tail++] = index - width; }
+      if (y + 1 < height && seen[index + width] === 0 && mask[index + width] === 1) { seen[index + width] = 1; queue[tail++] = index + width; }
+    }
+    let best = -1; let bestCount = 0;
+    for (const [owner, count] of counts) {
+      // Ничья решается глубиной: `sorted` уже отсортирован по её убыванию, поэтому меньший индекс
+      // и есть более глубокий узел.
+      if (count > bestCount || (count === bestCount && best !== -1 && owner < best)) { best = owner; bestCount = count; }
+    }
+    const winner = best === -1 ? null : sorted[best];
+    return {
+      index: regionIndex,
+      ownerElementKey: winner === null ? null : winner.key,
+      ownerMarkerKey: winner === null ? null : winner.markerKey ?? null,
+      ownerPath: winner === null ? null : winner.path ?? null,
+      ownerDepth: winner === null ? null : winner.depth,
+      ownerHasText: winner === null ? false : winner.hasText === true,
+      ownerComponentId: winner === null ? null : winner.componentId ?? null,
+      mismatchedPixels,
+      unknownPixels: unknown,
+      edgeInsidePixels: edgeInside,
+      edgeOutsidePixels: edgeOutside,
+      alphaDominantPixels: alphaDominant,
+      meanMaxDelta: mismatchedPixels === 0 ? 0 : round4(deltaSum / mismatchedPixels),
+      maxChannelDelta: maxDelta,
+    };
+  });
+
+  const totalMismatchedPixels = attributedPixels + unknownPixels;
+  return {
+    owners: sorted
+      .map((node, index) => ({
+        elementKey: node.key,
+        markerKey: node.markerKey ?? null,
+        componentId: node.componentId ?? null,
+        depth: node.depth,
+        mismatchedPixels: owners[index],
+      }))
+      .filter((item) => item.mismatchedPixels > 0)
+      .sort((left, right) => right.mismatchedPixels - left.mismatchedPixels),
+    attributedPixels,
+    unknownPixels,
+    totalMismatchedPixels,
+    coveragePct: totalMismatchedPixels === 0 ? null : round4((attributedPixels / totalMismatchedPixels) * 100),
+    dependencyPixels,
+    dependencyByMarker: [...dependencyByMarker.values()].sort((left, right) => right.pixels - left.pixels),
+    regions,
+  };
 }
 
 /**
@@ -620,18 +790,47 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
     deltas[index] = delta;
     if (delta > maxChannelDelta) maxChannelDelta = delta;
   }
-  const { regions, totalRegions } = diffRegions(mask, width, height, deltas, total, options.maxRegions ?? MAX_REGIONS);
+  const { regions, totalRegions, seeds } = diffRegions(mask, width, height, deltas, total, options.maxRegions ?? MAX_REGIONS);
 
   // Edge-сигнал в режиме нормализации — **только** под флагом волны (R7a, opt-in): при
   // выключенном флаге результат воркера обязан быть доволновым байт-в-байт, иначе evidence
   // приёмки менялся бы без решения о включении.
-  const edgeResidual = signalsV2Requested(options)
-    ? edgeResidualOf(
-      exactDiffMaskOf(paddedRef.data, paddedCand.data, total).mask,
-      edgeMaskOf(paddedRef.data, width, height, options.edgeOptions),
-      total, total,
-    )
+  const edge = signalsV2Requested(options) ? edgeMaskOf(paddedRef.data, width, height, options.edgeOptions) : null;
+  const edgeResidual = edge === null
+    ? null
+    : edgeResidualOf(exactDiffMaskOf(paddedRef.data, paddedCand.data, total).mask, edge, total, total);
+
+  // BR-07/BR-08: атрибуция и владение. Ключ условный — задание без карты элементов даёт результат
+  // воркера байт-в-байт доволновым, поэтому legacy-путь (kill-switch) ничего не меняет вовсе.
+  const attributionNodes = Array.isArray(options.attribution?.nodes)
+    ? options.attribution.nodes.slice(0, ATTRIBUTION_MAX_NODES)
     : null;
+  let attribution = null;
+  if (attributionNodes !== null && attributionNodes.length > 0) {
+    attribution = attributeMask({
+      mask, width, height, nodes: attributionNodes, regionSeeds: seeds,
+      edgeMask: edge?.mask ?? null, refData: paddedRef.data, candData: paddedCand.data, deltas,
+    });
+    attribution.truncated = options.attribution.truncated === true || options.attribution.nodes.length > ATTRIBUTION_MAX_NODES;
+    // BR-08: субъектные метрики. Знаменатель тот же, что у интеграционных, — меняется **числитель**:
+    // пиксели, которыми владеют поддеревья зависимостей, из него вычитаются. Пиксель, которого не
+    // покрыл ни один узел (фон родителя, гэп, маска), остаётся субъектным: маска зависимостей его
+    // не покрывает, и прощать субъекту его собственную раскладку было бы подменой предмета.
+    if (options.attribution.ownership === true) {
+      const aaMaskPng = new PNG({ width, height });
+      pixelmatch(paddedRef.data, paddedCand.data, aaMaskPng.data, width, height, { threshold: aaThreshold, includeAA: false, diffMask: true });
+      const aaMask = new Uint8Array(total);
+      for (let index = 0; index < total; index += 1) if (aaMaskPng.data[index * 4 + 3] > 0) aaMask[index] = 1;
+      const aaOwned = attributeMask({ mask: aaMask, width, height, nodes: attributionNodes });
+      attribution.ownership = {
+        subjectRawDiffPixels: rawPixels - attribution.dependencyPixels,
+        dependencyRawDiffPixels: attribution.dependencyPixels,
+        subjectAaDiffPixels: Math.max(0, aaPixels - aaOwned.dependencyPixels),
+        dependencyAaDiffPixels: aaOwned.dependencyPixels,
+        byDependency: attribution.dependencyByMarker,
+      };
+    }
+  }
 
   return {
     ok: true,
@@ -669,6 +868,8 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
       }),
       thresholds: { raw: rawThreshold, aa: aaThreshold },
       ...(edgeResidual === null ? {} : { edgeResidual }),
+      // BR-07: атрибуция по полной маске. Условный ключ — без карты элементов метрики доволновые.
+      ...(attribution === null ? {} : { attribution }),
       // Факт матирования — в метриках, а не только в задании: по нему потребитель отличает
       // «альфа совпала» от «альфы больше нет вовсе» (обесточенный `alpha-compositing`, §W4-4).
       // Условный ключ: без matte результат воркера обязан остаться доволновым байт-в-байт.

@@ -58,6 +58,8 @@ interface PaintShape {
   outOfFlowNodes?: unknown[];
   /** BR-05: декларации, наложенные на in-flow контейнер с layout-детьми (факт замера). */
   ownershipViolations?: unknown[];
+  /** BR-07 S1: карта узлов поддерева маркера (аддитивный факт замера вне отпечатка). */
+  elementMap?: { nodes: unknown[]; truncated: boolean; total: number };
 }
 
 const paintResult = (shape: PaintShape = {}): ScreenshotResult => ({
@@ -75,6 +77,7 @@ const paintResult = (shape: PaintShape = {}): ScreenshotResult => ({
     effectSources: shape.effectSources ?? [],
     clipChain: shape.clipChain ?? [],
     outOfFlowNodes: shape.outOfFlowNodes ?? [],
+    elementMap: shape.elementMap ?? { nodes: [], truncated: false, total: 0 },
     ...(shape.ownershipViolations === undefined ? {} : { ownershipViolations: shape.ownershipViolations }),
   }],
 } as unknown as ScreenshotResult);
@@ -138,7 +141,9 @@ test("clean geometry passes and the paint frame plus facts land in evidence", as
   expect(service.probes).toEqual(["paint"]);
   expect(result.status).toBe("pass");
   expect(result.metrics).toMatchObject({ semantics: "v2-paint", policyVerdict: "clean", deviceScaleFactor: 2, paintMargin: 64 });
-  expect(result.artifacts?.map((item) => item.name).sort()).toEqual(["geometry.json", "paint.png"]);
+  // BR-07 S1: карта элементов — **свой** артефакт (`geometry.json` при этом остаётся без неё:
+  // карта на порядок объёмнее замера, и её место рядом, а не внутри).
+  expect(result.artifacts?.map((item) => item.name).sort()).toEqual(["element-map.json", "geometry.json", "paint.png"]);
   const facts = JSON.parse(new TextDecoder().decode((await readArtifact(dir, result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!)) as { layoutBounds: unknown; paintBoundsSource: string };
   expect(facts.layoutBounds).toEqual(LAYOUT);
   expect(facts.paintBoundsSource).toBe("alpha");
@@ -622,4 +627,52 @@ test("BR-05: декларация доезжает до съёмки — джо�
   };
   await geometry2Gate.run(ctx);
   expect(seen).toEqual([ownership]);
+});
+
+// ------------------------------------------------------------------- BR-07 S1: карта элементов
+
+const ELEMENT_MAP_SHAPE: PaintShape["elementMap"] = {
+  nodes: [
+    { path: "div.card", bbox: { x: 64, y: 64, width: 140, height: 96 }, hasText: false, markerKey: "c", depth: 1 },
+    { path: "div.card>span.title", bbox: { x: 70, y: 70, width: 60, height: 20 }, hasText: true, markerKey: "s0", depth: 2 },
+  ],
+  truncated: false, total: 2,
+};
+
+test("BR-07 S1: карта элементов едет своим артефактом с владением по slot-дереву", async () => {
+  const { ctx, dir } = await context({ result: paintResult({ elementMap: ELEMENT_MAP_SHAPE }) });
+  ctx.case.slotBindings = [{
+    slot: "items", index: 0, componentId: "pay-child", name: "PayChild", version: 1,
+    bundleHash: "bh", props: {}, propsHash: "ph",
+  }];
+  const result = await geometry2Gate.run(ctx);
+  const ref = result.artifacts!.find((item) => item.name === "element-map.json")!;
+  const map = JSON.parse(new TextDecoder().decode((await readArtifact(dir, ref.sha256))!)) as {
+    subjectComponentId: string;
+    markers: { markerKey: string; componentId: string; slot?: string; index?: number; version?: number }[];
+    nodes: { markerKey: string; componentId: string | null; ownership: string; hasText: boolean }[];
+  };
+  expect(map.subjectComponentId).toBe(COMPONENT_ID);
+  expect(map.markers).toEqual([
+    { markerKey: "c", componentId: COMPONENT_ID },
+    { markerKey: "s0", componentId: "pay-child", slot: "items", index: 0, version: 1 },
+  ]);
+  expect(map.nodes.map((node) => [node.markerKey, node.componentId, node.ownership])).toEqual([
+    ["c", COMPONENT_ID, "subject"],
+    ["s0", "pay-child", "dependency"],
+  ]);
+  // `geometry.json` карту **не** несёт: её место рядом, а не внутри замера.
+  const facts = JSON.parse(new TextDecoder().decode(
+    (await readArtifact(dir, result.artifacts!.find((item) => item.name === "geometry.json")!.sha256))!,
+  )) as { geometry: { details: Record<string, unknown>[] } };
+  expect(facts.geometry.details[0]).not.toHaveProperty("elementMap");
+});
+
+test("BR-07 S1: под kill-switch'ем артефакта карты нет вовсе (evidence доволновой)", async () => {
+  process.env.EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED = "1";
+  try {
+    const { ctx } = await context({ result: paintResult({ elementMap: ELEMENT_MAP_SHAPE }) });
+    const result = await geometry2Gate.run(ctx);
+    expect(result.artifacts?.map((item) => item.name).sort()).toEqual(["geometry.json", "paint.png"]);
+  } finally { delete process.env.EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED; }
 });

@@ -96,6 +96,31 @@ export interface GeometryOutOfFlowNode {
     paint: "included";
   };
 }
+/**
+ * Запись **карты узлов** поддерева маркера (BR-07 S1, план 2026-08-08 §7).
+ *
+ * Одна запись на узел — в отличие от `rects[]`, чья гранулярность маркерная. Именно по ней
+ * атрибуция диффа отвечает «какой элемент владеет этим пикселем», а не «весь диф принадлежит
+ * компоненту».
+ */
+export interface GeometryElementMapNode {
+  /** `nodePath`-формат (`div.card>span.title`), тот же, что у `effectSources[].elementPath`. */
+  path: string;
+  /** Border-box узла в CSS px относительно поверхности съёмки. */
+  bbox: GeometryBox;
+  /** У узла есть **собственные** непустые текстовые дети (вход классификации `live-text`). */
+  hasText: boolean;
+  /** Ключ ближайшего маркера-владельца (`data-eui-key`); пустая строка — узел вне маркеров. */
+  markerKey: string;
+  /** Глубина от корня измерения (сам корень — 0): tie-break атрибуции «побеждает глубочайший». */
+  depth: number;
+}
+/** Карта узлов одной детали: записи, флаг усечения и полное число узлов поддерева. */
+export interface GeometryElementMap {
+  nodes: GeometryElementMapNode[];
+  truncated: boolean;
+  total: number;
+}
 /** Детальное измерение одного маркера: честный layout-контур + причины выхода краски за него. */
 export interface GeometryDetail {
   key: string;
@@ -128,6 +153,8 @@ export interface GeometryDetail {
   clipChain: GeometryClipLink[];
   /** BR-05: узлы вне потока с pre-transform геометрией и ролью. Аддитивный факт, вне отпечатка. */
   outOfFlowNodes: GeometryOutOfFlowNode[];
+  /** BR-07 S1: карта узлов поддерева. Тоже аддитивный факт вне отпечатка (см. `ELEMENT_MAP_*`). */
+  elementMap: GeometryElementMap;
   /**
    * `"overlay"` — корнем измерения стала контентная обёртка host-примитива `Overlay`
    * (`[data-eui-overlay-content]`, план 2026-08-06 §W5 T5c.3). Поле присутствует только на этой
@@ -173,6 +200,9 @@ export const GEOMETRY_CONTRACT_VERSION: number;
  * версии 2 и сохраняет кадры байт-в-байт.
  */
 export const GEOMETRY_OWNERSHIP_CONTRACT_VERSION: number;
+/** BR-07 S1: потолок записей карты узлов на один маркер и на весь замер. */
+export const ELEMENT_MAP_NODE_LIMIT: number;
+export const ELEMENT_MAP_TOTAL_LIMIT: number;
 /**
  * BR-09: факт владения переливом одного маркера. Перелив не исчезает из замера — он перестаёт
  * быть безадресным обвинением экрана: `scrollContentBounds` хранит полный габарит поддерева,

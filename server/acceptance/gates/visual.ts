@@ -38,9 +38,16 @@ import { CAUSE_THRESHOLDS } from "../../visual/causes";
 import { cropIsApplied } from "../caseSets";
 import { putArtifact, readArtifact } from "../evidence";
 import { VIEWPORT_SURFACE_PAINT_MARGIN_PX } from "../../screenshot/service";
-import { captureV4Enabled } from "../../capture/captureV4";
+import { captureV4Enabled, COMPARISON_POLICY_VERSION } from "../../capture/captureV4";
 import { COMPARISON_PAINT_MARGIN_PX } from "../ids";
-import { geometryFactsKey, paintShaKey, type GeometryFacts } from "./geometry2";
+import { rendererReport } from "../../capture/renderer";
+import {
+  buildClusters, comparisonOwnershipEnabled, elementMapToCanvas, visualAttributionV2Enabled,
+  type AttributionCluster, type CaseElementMap, type ClusterInputs,
+} from "../../visual/attribution";
+import { applyRendererProfiles, type RendererProfileDecision } from "../rendererProfiles";
+import { elementMapKey, geometryFactsKey, paintShaKey, type GeometryFacts } from "./geometry2";
+import { renderReadinessKey } from "./render";
 import type { Gate, GateContext, GateResult } from "./types";
 
 /** Порог случая: per-case допуск манифеста (W2) перекрывает профильный (RFC §3.4). */
@@ -341,6 +348,81 @@ export function expectedReferenceSourceDims(
   };
 }
 
+/**
+ * **Квитанция сравнения** (BR-07, перечень E1 плана — поля, а не «расширить словами»).
+ *
+ * Отвечает на вопрос «чем и над чем этот вердикт получен», не заглядывая в образ: что сервер
+ * сделал с эталоном (matte и плоскостность после него), в каком цветовом пространстве считались
+ * пиксели, каким рендерером и каким шрифтовым стеком снят кадр, по какой версии политики сравнения.
+ *
+ * `colorProfile: "srgb"` — не украшение и не обещание конверсии: PNG обеих сторон читается как
+ * sRGB-байты без управления цветом, и это единственное честное имя тому, что происходит.
+ */
+export function comparisonReceiptOf(ctx: GateContext, matte: string | null, matteApplied: string | undefined): Record<string, unknown> {
+  const renderer = rendererReport();
+  return {
+    referenceMatte: matte,
+    matteApplied: matteApplied ?? null,
+    // После матирования альфа обеих картинок ≡ 255 по построению — картинка «плоская».
+    referenceFlattened: matteApplied !== undefined,
+    colorProfile: "srgb",
+    rendererFingerprint: renderer.fingerprint,
+    fontStackSha256: renderer.fontStackSha256,
+    appFontsSha256: renderer.appFontsSha256,
+    comparisonPolicyVersion: captureV4Enabled() ? COMPARISON_POLICY_VERSION : null,
+    deviceScaleFactor: ctx.surface.dsf,
+  };
+}
+
+/** Отпечаток шрифтов образа как одна строка — вход `expiry.fonts` профиля рендерера. */
+export const fontFingerprintOf = (): string | null => {
+  const renderer = rendererReport();
+  return renderer.fontStackSha256 === null && renderer.appFontsSha256 === null
+    ? null
+    : `${renderer.fontStackSha256 ?? ""}:${renderer.appFontsSha256 ?? ""}`;
+};
+
+/**
+ * **Два вердикта** одного сравнения (BR-08).
+ *
+ * `integration` — сегодняшняя семантика: вся канва, весь остаток, тот же бюджет. Он и остаётся
+ * вердиктом случая — ни одна строка свёртки (D10) не переезжает на субъектный.
+ * `subject` — тот же бюджет, но числитель без пикселей, которыми владеют поддеревья зависимостей.
+ * Исключённые пиксели никуда не деваются: они остаются в интеграционном диффе и группируются по
+ * компоненту зависимости (`byDependency`), потому что «у обёртки чисто» и «у экрана чисто» — два
+ * разных факта, и подменять второй первым было бы ровно тем, чего требует не делать §8.
+ */
+export interface OwnershipVerdicts {
+  subject: { rawDiffPct: number; aaDiffPct: number; failed: boolean };
+  integration: { rawDiffPct: number; aaDiffPct: number; failed: boolean };
+  byDependency: { markerKey: string; componentId: string | null; pixels: number }[];
+  subjectComponentId: string;
+}
+
+export function ownershipVerdictsOf(input: {
+  ownership: NonNullable<NormalizedDiffMetrics["attribution"]>["ownership"];
+  denominator: number;
+  judgedRawDiffPct: number;
+  aaDiffPct: number;
+  maxRawDiffPct: number;
+  subjectComponentId: string;
+}): OwnershipVerdicts | null {
+  const ownership = input.ownership;
+  if (ownership === undefined || input.denominator <= 0) return null;
+  const round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10_000) / 10_000;
+  const subjectRaw = round4((ownership.subjectRawDiffPixels / input.denominator) * 100);
+  const subjectAa = round4((ownership.subjectAaDiffPixels / input.denominator) * 100);
+  return {
+    subject: { rawDiffPct: subjectRaw, aaDiffPct: subjectAa, failed: subjectRaw > input.maxRawDiffPct },
+    integration: {
+      rawDiffPct: input.judgedRawDiffPct, aaDiffPct: input.aaDiffPct,
+      failed: input.judgedRawDiffPct > input.maxRawDiffPct,
+    },
+    byDependency: [...ownership.byDependency],
+    subjectComponentId: input.subjectComponentId,
+  };
+}
+
 export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNormalizedDiffWorker): Gate {
   return {
     name: "visual",
@@ -424,6 +506,18 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
       const surfaceDims = captureWaveOn && canvas !== null
         ? { width: Math.round(canvas.layoutRoot.width * ctx.surface.dsf), height: Math.round(canvas.layoutRoot.height * ctx.surface.dsf) }
         : null;
+      /**
+       * BR-07/BR-08: карта элементов кандидата в координатах канвы. Карту кладёт гейт `geometry`
+       * этой же съёмкой (`elementMapKey`); её отсутствие — не отказ, а честное «атрибуции нет»:
+       * re-diff сохранённого кадра свежих фактов не несёт, и выдумывать их нельзя.
+       */
+      const elementMap = ctx.shared.get(elementMapKey(ctx.case.caseId)) as CaseElementMap | undefined;
+      const attributionOn = visualAttributionV2Enabled() && elementMap !== undefined && elementMap.nodes.length > 0;
+      const ownershipOn = attributionOn && comparisonOwnershipEnabled()
+        && ctx.case.comparison?.ownership === "subject-and-integration";
+      const attributionNodes = attributionOn
+        ? elementMapToCanvas(elementMap!, { deviceScaleFactor: ctx.surface.dsf, candidateWindow })
+        : [];
       const diff: NormalizedDiffResult = await runDiff({
         mode: "normalize",
         referencePngBase64: Buffer.from(reference.bytes).toString("base64"),
@@ -441,6 +535,15 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           ...(captureWaveOn && canvas !== null ? { exactCanvas: true } : {}),
           ...(surfaceDims === null ? {} : { surfaceDims }),
           ...(matte === null ? {} : { matte }),
+          // BR-07: карта уезжает в воркер уже переведённой в координаты канвы (`elementMapToCanvas`
+          // — единственная точка перевода). Ключ условный: без карты задание доволновое.
+          ...(attributionNodes.length === 0 ? {} : {
+            attribution: {
+              nodes: attributionNodes,
+              truncated: elementMap!.truncated,
+              ...(ownershipOn ? { ownership: true } : {}),
+            },
+          }),
         },
       });
 
@@ -538,7 +641,92 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
       const preset = textAaPresetOf(ctx.case.textAaBudget);
       const presetApplied = overBudget && preset !== null
         && textAaBudgetApplies(preset, { ...metrics, rawDiffPct: judgedRawDiffPct });
-      const failed = overBudget && !presetApplied;
+
+      /**
+       * BR-07: кластеры §10 фидбэка. Считаются **всегда**, когда есть атрибуция, — они диагностика,
+       * а не вердикт: читатель отчёта обязан видеть владельца и класс краски и у прошедшего случая.
+       */
+      const attribution = metrics.attribution ?? null;
+      const denominator = metrics.surfacePixels ?? metrics.totalPixels;
+      const barrier = (ctx.shared.get(renderReadinessKey(ctx.case.caseId)) as
+        { evidence?: { resourceBarrier?: { resources?: ClusterInputs["resources"] } } } | undefined)
+        ?.evidence?.resourceBarrier;
+      // Сдвиг целиком — тот же критерий, что у классификатора `geometry-shift` (одна причина —
+      // один детектор): остаток после лучшего смещения кратно меньше исходного расхождения.
+      const shifted = (metrics.bestOffset.dx !== 0 || metrics.bestOffset.dy !== 0)
+        && metrics.rawDiffPct > 0 && metrics.bestOffset.residualPct <= metrics.rawDiffPct * 0.35;
+      const clusters: AttributionCluster[] = attribution === null ? [] : buildClusters({
+        regions: metrics.regions,
+        attribution: attribution.regions,
+        bestOffset: { dx: metrics.bestOffset.dx, dy: metrics.bestOffset.dy, residualPct: metrics.bestOffset.residualPct },
+        totalPixels: metrics.totalPixels,
+        surfacePixels: metrics.surfacePixels ?? null,
+        ...(barrier?.resources === undefined ? {} : { resources: barrier.resources }),
+        geometry: { shifted },
+        channelStats: metrics.channelStats ?? null,
+      });
+
+      /**
+       * BR-07, вторая инстанция: профили политики рендерера. Рассматриваются **после** пресета и
+       * только у случая, который иначе провалится, и только когда каждый кластер объяснён.
+       * Их результат — `exceptions[]` (первый в продукте продюсер `pass_with_exceptions`).
+       */
+      /**
+       * Профиль рассматривается **только там, где визуальный вердикт судит** (`required`).
+       * У advisory-гейта провал ран не роняет вовсе, поэтому «спасать» там нечего — а `exceptions[]`
+       * при `allowExceptions: false` ран как раз **роняют** (`foldRunVerdict`), и рескью advisory-
+       * случая обернулось бы падением рана, который до волны проходил. Ровно та тихая смена
+       * вердикта, которую волна обязана не допустить.
+       */
+      const profileDecision: RendererProfileDecision | null = required && overBudget && !presetApplied && attribution !== null
+        ? applyRendererProfiles({
+          clusters,
+          unknownPixels: attribution.unknownPixels,
+          judgedRawDiffPct,
+          fingerprints: {
+            renderer: rendererReport().fingerprint,
+            fonts: fontFingerprintOf(),
+            matte: matte ?? "none",
+            asset: reference.sha256,
+            geometry: String(ctx.surface.dsf),
+          },
+        })
+        : null;
+      const profileApplied = profileDecision?.applied === true;
+      const failed = overBudget && !presetApplied && !profileApplied;
+
+      // BR-08: два вердикта. Вердиктом случая остаётся интеграционный — субъектный едет фактом.
+      const ownershipVerdicts = ownershipOn
+        ? ownershipVerdictsOf({
+          ownership: attribution?.ownership,
+          denominator,
+          judgedRawDiffPct,
+          aaDiffPct: metrics.aaDiffPct,
+          maxRawDiffPct,
+          subjectComponentId: elementMap?.subjectComponentId ?? ctx.candidate.componentId,
+        })
+        : null;
+      const attributionMetrics = attribution === null ? {} : {
+        attribution: {
+          owners: attribution.owners,
+          attributedPixels: attribution.attributedPixels,
+          unknownPixels: attribution.unknownPixels,
+          totalMismatchedPixels: attribution.totalMismatchedPixels,
+          coveragePct: attribution.coveragePct,
+          truncated: attribution.truncated === true,
+        },
+        clusters,
+        ...(ownershipVerdicts === null ? {} : { ownership: ownershipVerdicts }),
+      };
+      const profileMetrics = profileDecision === null ? {} : {
+        rendererPolicy: {
+          applied: profileDecision.applied,
+          profileId: profileDecision.profileId,
+          reason: profileDecision.reason,
+          expiryChecked: profileDecision.expiryChecked,
+        },
+      };
+      const comparisonReceipt = comparisonReceiptOf(ctx, matte, metrics.matteApplied);
       const severityClass = visualSeverityClass(metrics, maxRawDiffPct);
       const presetMetrics = preset === null
         ? {}
@@ -573,6 +761,11 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
         referenceSource: { assetId, sha256: reference.sha256 },
         ...(normalizedReference === null ? {} : { normalizedReferenceSha256: normalizedReference.sha256 }),
         ...common,
+        // BR-07: квитанция сравнения (E1) и атрибуция — часть **доказательства** случая, а не
+        // украшение отчёта: без них «вердикт получен» неотличимо от «сравнили не тем».
+        comparisonReceipt,
+        ...attributionMetrics,
+        ...profileMetrics,
         metrics: metrics as unknown as Record<string, unknown>,
         diffSha256: diffPng.sha256,
         normalizedCandidateSha256: normalizedPng.sha256,
@@ -617,7 +810,16 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           // сигнала/без matte несёт ровно доволновой набор метрик.
           ...(metrics.edgeResidual === undefined ? {} : { edgeResidual: metrics.edgeResidual }),
           ...(metrics.matteApplied === undefined ? {} : { matteApplied: metrics.matteApplied }),
+          // BR-07/BR-08: атрибуция, кластеры, два вердикта, решение по профилю и квитанция
+          // сравнения. Все ключи условные — случай без карты элементов несёт доволновые метрики.
+          ...attributionMetrics,
+          ...profileMetrics,
+          comparisonReceipt,
         },
+        // BR-07: `exceptions[]` пишутся **только** при применённом профиле. Пустой список у
+        // прошедшего случая — не «нет исключений», а «исключения не понадобились», и класть его
+        // значило бы уронить ран под `allowExceptions:false` за отсутствие проблемы.
+        ...(profileApplied ? { exceptions: profileDecision!.exceptions } : {}),
         ...(failed
           ? {
             detail: `Visual diff ${judgedRawDiffPct}% exceeds the ${maxRawDiffPct}% budget`

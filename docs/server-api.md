@@ -314,12 +314,43 @@ Discovery (`GET /api/capabilities`):
   "url": "/p/<id>/s/<screen>",
   "revision": 3,
   "publishedVersion": 1,
-  "resolvedPins": [{ "id": "…", "name": "…", "version": 1, "bundleUrl": "…", "bundleHash": "…", "status": "active" }],
+  "resolvedPins": [{ "id": "…", "name": "…", "version": 1, "bundleUrl": "…", "bundleHash": "…", "status": "active",
+    "resolvedVersion": 1, "sourceHash": "…", "propsSchemaHash": "…" }],
   "bundleStatus": "ready",
   "warnings": [{ "code": "pin_deprecated", "message": "…" }],
   "errors": [{ "code": "route_not_ready", "message": "…" }]
 }
 ```
+
+#### Поля единого резолвера схемы (BR-01b)
+
+Схему опубликованного компонента резолвит **один** модуль — `ResolvedComponentGraph`
+(`server/components/resolvedGraph.ts`): пины композиции применяются только к элементам её
+раскрытия, `track:head` резолвит голову **в дизайн-системе закреплённой версии** и записывает в
+пины именно её (fallback на прежнюю active при успешно разрешённой новой запрещён), а конфликт
+«раскрытие пинует @M, авторский элемент требует активную @N» — типизированный
+`422 component_pin_conflict`. Его потребители — save, readiness, `render-status`,
+`bundleReadiness`, снап/geometry probe и `POST /compositions/:id/preview-tree`.
+
+Три ответа называют этот резолв **одинаковыми именами полей**, чтобы их можно было сверить:
+
+| Ответ | Где | Поля |
+|---|---|---|
+| `POST /prototypes`, `PUT /prototypes/:id` | блок `components[]` | `id`, `name`, `resolvedVersion`, `sourceHash`, `propsSchemaHash`, `origin` |
+| `GET …/render-status` | `resolvedPins[]` | `resolvedVersion`, `sourceHash`, `propsSchemaHash` |
+| `POST …/screenshot` (кадр и `probe:"geometry"`) | `componentPins[]` | те же три |
+
+`origin` — источник резолва: `head-active` (последняя active-публикация в ДС) либо
+`composition-pin` (пин манифеста композиции); значение `pinned` зарезервировано за пином ревизии
+на read-путях, save-ответ его не выдаёт (документ всегда резолвится заново). `sourceHash`/`propsSchemaHash` бывают `null`
+(компонент без исходника/без `propsJsonSchema`); `propsSchemaHash` — sha256 канонизированного
+`definition_meta.propsJsonSchema`. Гейт `schema` отчёта готовности несёт ту же проекцию в
+`resolvedComponents[]`, а `preview-tree` — в `components[]`.
+
+Все поля **опциональны и условны**: при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` ответы доволновые
+byte-for-byte (полей нет вовсе), а `features.prototypeSchemaResolverVersion` в
+`GET /api/capabilities` честно откатывается с `2` на `1`. У подменённого кандидата
+(`candidateOverrides`) полей нет: у неопубликованного исходника строки публикации не существует.
 
 `renderable` = document_ready ∧ bundles_ready (готовность контента, независимо от local route). Отсутствие ресурса — типизированный `404`: `prototype_not_found`, `screen_not_found`, `version_not_found`, `revision_not_found`. `bundle_failed` и `route_not_ready` — диагностические записи в `errors[]` тела с `200`. Внешний ingress-probe (доступность домена за прокси) вне scope MVP.
 
@@ -591,6 +622,38 @@ Warning `content-clipped-by-frame` считался union'ом **всех** ма
 - **Персистируемая форма.** Документ с полем старый образ не прочитает вовсе (строгий allowlist ⇒ 422), поэтому **запись** гейтится kill-switch'ем: `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` ⇒ `422 flow_overflow_ownership_disabled` на create/save. **Чтение** stored-документов не гейтится никогда — тот же канон, что у `doc.surfaces` (иначе откат образа превращал бы сохранённые прототипы в нечитаемые).
 
 Общий kill-switch с BR-05: под свитчем декларации не доезжают до сбора вовсе, и замер остаётся доволновым byte-for-byte.
+
+##### Атрибуция расхождения по элементам (EUI-BR-07, план 2026-08-08 §7, `features.visualAttributionV2`)
+
+До волны owner получали только те кластеры диффа, что пересеклись с `effectSources`, а гранулярность карты была **маркерной**: у одиночного компонента `rects[]` вырождается в один прямоугольник, и «весь диф принадлежит компоненту» было единственно возможным ответом. Волна заводит **новое измерение** — карту узлов — и считает владение по ней.
+
+- **Карта элементов (S1).** Каждое детальное измерение (`probe:"paint"`) несёт `elementMap {nodes, truncated, total}`: на узел — `path` (формат `elementPath`), `bbox` (CSS px поверхности), `hasText` (**собственные** непустые текстовые дети), `markerKey` (ближайший `data-eui-key`) и `depth`. Потолки — 512 записей на маркер и 2048 на замер; усечение всегда видимо флагом. Замер **аддитивен и вне отпечатков**: `GEOMETRY_CONTRACT_VERSION` остаётся `2`, `frameFingerprint` не двигается (дифференциальный тест). В evidence случая карта едет **своим** артефактом `element-map.json` (маркеры `markerKey → componentId` по slot-дереву, узлы с владением, субъект случая), а `geometry.json` остаётся байт-в-байт прежним — карта на порядок объёмнее всего остального замера.
+- **Контракт координат.** Карта живёт в CSS px поверхности, кластеры — в device px канвы сравнения. Перевод один и явный: `× deviceScaleFactor`, затем `− candidateWindow.{x,y}` (окно BR-02, приводящее кадр к канве); без окна второго шага нет. Точка перевода одна — `elementMapToCanvas`.
+- **Атрибуция — по полной diff-маске**, а не по усечённым `regions[]` (там максимум 12 областей). Per-pixel owner-растр **не строится**: канва легально до 20 Мпикс, поэтому владелец резолвится построчным индексом прямоугольников, отсортированных по глубине (побеждает **глубочайший** узел, содержащий пиксель). Пиксель, которого не покрыл ни один узел, честно уходит в `unknown`. Метрики: `attribution {owners[], attributedPixels, unknownPixels, totalMismatchedPixels, coveragePct, truncated}`; `coveragePct ≥ 95` — **цель** §10 фидбэка, а не порог вердикта: недостающее показывается честным `unknown`, а не назначается корню.
+- **Кластер (контракт §10 фидбэка).** `clusters[]`: `boundsDevicePx`, `mismatchedPixels`, `ownerElementKey`, `ownerComponentId` (по slot-карте), `paintClass`, `sourceAssetId`, `rawDiffPct`, `aaResidualPct`, `bestOffset`, `structural`, `basis[]`, `confidence`. Классы краски: `live-text` (остаток на контурах эталона внутри узла с `hasText`), `vector-edge` (тот же остаток вне текста), `registry-image` (пересечение с пер-ресурсными записями барьера BR-03 — по `ownerElementKey` записи; барьер адресует ресурс ключом владельца, поэтому совпадение возможно только на уровне маркера, и это ограничение названо здесь, а не спрятано), `geometry` (сдвиг целиком либо decoration-источник), `fill`/`stroke`/`effect` (по `channelStats`), `unknown` (остальное).
+- **`structural` не смягчается ничем.** Сдвиг геометрии, отсутствующий ассет, «не та» заливка/обводка/эффект, mismatch вне заявленного владельца и любой `unknown` — структурны, и ни профиль рендерера, ни бюджет их не прощают (негативный тест «structural-кластер + AA-кластер в одном случае ⇒ fail»).
+- **Квитанция сравнения (E1).** `comparisonReceipt` в метриках, `visual.json` и манифесте рана: `referenceMatte`, `matteApplied`, `referenceFlattened`, `colorProfile` (`srgb` — честное имя тому, что происходит: PNG читается как sRGB-байты без управления цветом), `rendererFingerprint`, `fontStackSha256`, `appFontsSha256`, `comparisonPolicyVersion`, `deviceScaleFactor`.
+- **Слой — report-only.** Ни один вердикт, отпечаток случая или `evidence_manifest_hash` от атрибуции не зависит; `suggestedPolicy` остаётся report-only. `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1` — карты, кластеров и квитанции нет, evidence и метрики доволновые byte-for-byte.
+
+##### Профили политики рендерера (EUI-BR-07, `features.rendererPolicyProfilesV2`)
+
+`pass_with_exceptions` до волны был недостижим: `exceptions[]` не писал никто, а `allowExceptions` выключен в обоих профилях. Профиль политики рендерера — единственный легальный способ сказать «этот остаток производит растеризатор», и сказать это **заранее**.
+
+- **Реестр server-owned и публикуется до рана** — `capabilities.acceptance.rendererPolicyProfiles`: `{profileId, rendererFingerprint, scope: {paintClass, region?}, maxResidualPct, expiry: {renderer, fonts, matte, asset, geometry}, description}`. Из рана профиль не создаётся никогда.
+- **Применение — вторая инстанция** визуального гейта (тот же приём, что у `textAaBudget`): рассматривается только у случая, уже провалившегося по бюджету, и только когда **все** кластеры — renderer-only класс в scope профиля, ни одного `structural`, ни одного `unknown`-пикселя. Общий процент к случаю профиль не применяет.
+- **Истечение.** Несовпадение любого из пяти отпечатков — типизированная причина (`renderer_expired`, `fonts_expired`, `matte_expired`, `asset_expired`, `geometry_expired`); объявленный, но не измеренный отпечаток считается **несовпавшим** («не измерено» ≠ «в допуске»). Не объявленный отпечаток не проверяется вовсе. Прочие отказы: `renderer_undeclared`, `scope_mismatch`, `residual_over_budget`, `structural_cluster`, `unknown_pixels`, `no_clusters`, `profiles_disabled`. Решение целиком едет в метрики (`rendererPolicy {applied, profileId, reason, expiryChecked}`).
+- **Промоутабельность.** Применённый профиль пишет `exceptions[]` — первый в продукте продюсер `pass_with_exceptions`. Ран с исключениями значит «прошёл» **только** под новым профилем политики `default-v1-exceptions` (дельта к `default-v1` ровно одна — `allowExceptions: true`); существующие профили не тронуты byte-for-byte, и под ними исключения по-прежнему роняют ран.
+- `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1` — **своя ось**, потому что меняет promote-eligibility: реестр пуст, исключений не пишет никто, `default-v1-exceptions` исчезает из `promotionPolicyProfiles`. Отпечаток рендерера профиля объявляется деплоем (`EASYUI_RENDERER_POLICY_FINGERPRINT`); без него профиль неприменим (`renderer_undeclared`).
+
+##### Субъектный и интеграционный вердикт (EUI-BR-08, план 2026-08-08 §8, `features.comparisonOwnershipV1`)
+
+`cases[].comparison` принимает три новых поля (все `optional` без дефолта, strict-схема): `ownership: "subject-and-integration"`, `subjectComponentId`, `dependencyPolicy: "require-eligible-acceptance"`. Слой у всех трёх — `comparison` (тотальность вложенных ключей держит отдельная таблица `COMPARISON_FIELD_LAYERS` и её тест: `satisfies` на `FIELD_LAYERS` вложенные ключи не ловит).
+
+- **Маска владения строится из карты элементов по slot-дереву**: узел, чей `markerKey` принадлежит биндингу компонента ≠ `subjectComponentId`, — dependency-owned; **всё прочее** субъектное, включая узлы вне маркеров (фон родителя, гэпы, маски). Это не упущение, а решение §8: mismatch в parent gap/background — провал субъекта, а не детей.
+- **Два вердикта.** `subject` — те же бюджет и знаменатель, но числитель без dependency-пикселей; `integration` — вся канва, сегодняшняя семантика. **Вердиктом случая остаётся интеграционный**: ни одна строка свёртки (D10) не переезжает на субъектный. Исключённые пиксели не исчезают — они остаются в интеграционном диффе и группируются по зависимости (`ownership.byDependency[{markerKey, componentId, pixels}]`).
+- **Гранулярность названа честно:** маска точна ровно настолько, насколько точна карта элементов (потолки узлов, `truncated`); карты нет (re-diff без свежих фактов) — субъектного вердикта нет вовсе, а не «по умолчанию pass».
+- **Promote.** Предикат `subjectPromotionEligible` (`server/acceptance/policies.ts`) объявлен и покрыт тестами; врезка в сагу promote — отдельный шаг (пересечение зон с BR-01), провальный интеграционный вердикт сохраняется в квитанции в любом случае.
+- `EASYUI_COMPARISON_OWNERSHIP_DISABLED=1` — вердикт случая не меняется ни в каком положении тумблера; гаснут subject-метрики и группировка по зависимостям, поле остаётся валидной декларацией без эффекта.
 
 ##### Точная канва content-hug сравнения (EUI-BR-04, план 2026-08-08 §4, `features.exactContentHugCanvasV1`)
 
@@ -2655,6 +2718,9 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `acceptanceRuns` | доступны `/acceptance-runs*` (постановка, poll, cases, evidence, cancel) | тот же флаг |
 | `acceptanceResumeV1` | доступен [`POST /acceptance-runs/:runId/resume`](#продолжение-остановленного-рана-eui-br-06-план-2026-08-08-6-featuresacceptanceresumev1) — продолжение остановленного рана новым раном с lineage | тот же флаг **и** `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` → `false` и `409 acceptance_resume_disabled`; наблюдаемость волны (`error` случая, шов allocate-renderer, circuit breaker) от флага не зависит |
 | `blockerFingerprintV1` | ран несёт `blockerFingerprint` и доступен [`GET /acceptance-runs/:runId/retry-disposition`](#отпечаток-блокера-и-disposition-повтора-eui-br-10a-план-2026-08-08-10-featuresblockerfingerprintv1) — read-only ответ «стоит ли повторять и насколько глубоко» | тот же флаг **и** `EASYUI_BLOCKER_FINGERPRINT_DISABLED=1` → `false`, ручка `404`, поле исчезает из рана, сводки и манифеста архива |
+| `visualAttributionV2` | [атрибуция расхождения по элементам](#атрибуция-расхождения-по-элементам-eui-br-07-план-2026-08-08-7-featuresvisualattributionv2): `element-map.json` в evidence, owner-тоталы по полной diff-маске с честным `unknown`, кластеры §10 (`ownerElementKey`/`ownerComponentId`/`paintClass`/`structural`/`basis[]`) и `comparisonReceipt` | матрица **и** `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1` → `false`; слой report-only, вердикты и отпечатки не зависят от тумблера |
+| `rendererPolicyProfilesV2` | [профили политики рендерера](#профили-политики-рендерера-eui-br-07-featuresrendererpolicyprofilesv2): реестр в `acceptance.rendererPolicyProfiles`, `exceptions[]` второй инстанцией визуального гейта, профиль политики `default-v1-exceptions` | матрица **и** `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1` → `false`, реестр пуст, `default-v1-exceptions` исчезает из `promotionPolicyProfiles` (**меняет promote-eligibility**) |
+| `comparisonOwnershipV1` | [субъектный и интеграционный вердикт](#субъектный-и-интеграционный-вердикт-eui-br-08-план-2026-08-08-8-featurescomparisonownershipv1): `comparison.{ownership,subjectComponentId,dependencyPolicy}`, метрики `ownership.{subject,integration,byDependency}`, предикат `subjectPromotionEligible` | матрица **и** `EASYUI_COMPARISON_OWNERSHIP_DISABLED=1` → `false`; вердикт случая — интеграционный в обоих положениях |
 | `paintCapturePaddingV1` | case-set принимает [`cases[].paintPaddingPx`](#поле-краски-случая-по-сторонам-eui-br-02-план-2026-08-08-2-featurespaintcapturepaddingv1) — поле краски по сторонам (кадровый слой этого случая) и `cases[].preloadAssets` (report-only) | матрицей **не** гейтится; `EASYUI_CAPTURE_V4_DISABLED=1` → `false` и `422 capture_padding_disabled` на манифест с полем |
 | `exactContentHugCanvasV1` | [объявленная канва сравнения сводится точно](#точная-канва-content-hug-сравнения-eui-br-04-план-2026-08-08-4-featuresexactcontenthugcanvasv1) (delta 0, без неявного zero-pad), бюджет судится по поверхности сравнения, эталон не того масштаба — `reference_scale_mismatch` | матрицей **не** гейтится; общий с BR-02 `EASYUI_CAPTURE_V4_DISABLED=1` → `false` и доволновая семантика byte-for-byte |
 | `geometryDecorationOwnershipV1` | [decoration-aware geometry](#decoration-aware-geometry-eui-br-05-план-2026-08-08-5-featuresgeometrydecorationownershipv1): факты `outOfFlowNodes` с pre-transform геометрией, `layout`-габарит рядом с `content`, авто-правило decoration и `cases[].geometryOwnership` (слой frame+verdict, `geometryContractVersion: 3`) | матрицей **не** гейтится; `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` → `false`, `422 geometry_ownership_disabled` на манифест с полем, сбор и вердикт доволновые byte-for-byte |

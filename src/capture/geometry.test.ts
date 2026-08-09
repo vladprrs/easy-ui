@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeGeometry, collectGeometry, GEOMETRY_CONTRACT_VERSION, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
+import { analyzeGeometry, collectGeometry, ELEMENT_MAP_NODE_LIMIT, GEOMETRY_CONTRACT_VERSION, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
 
 type Box = { left:number; top:number; right:number; bottom:number; width:number; height:number; x:number; y:number; toJSON():unknown };
 const box = (left:number, top:number, width:number, height:number):Box => ({ left, top, right:left+width, bottom:top+height, width, height, x:left, y:top, toJSON(){ return this; } });
@@ -477,5 +477,67 @@ describe("BR-09 · overflow ownership", () => {
     });
     // Окно взято у `rail-b` (та же ширина 390) — вклад `rail-a` обрезан по нему.
     expect(geometry.overflowOwners![0]).toMatchObject({ key: "rail-a", scrollportBounds: { x: 0, y: 300, width: 390 } });
+  });
+});
+
+// --- BR-07 S1 (план 2026-08-08 §7): карта узлов поддерева маркера ---------------------------
+
+describe("element map (BR-07 S1)", () => {
+  const surface = box(0, 0, 400, 400);
+
+  it("заводит запись на узел с путём, боксом, собственным текстом, маркером-владельцем и глубиной", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface">`
+      + `<span data-eui-key="c" style="display:contents">`
+      + `<div data-rect="card" class="card"><span data-rect="title" class="title">Купить</span>`
+      + `<span data-eui-key="s0" style="display:contents"><i data-rect="icon" class="icon"></i></span>`
+      + `</div></span></div>`;
+    const restore = installRects({
+      surface, card: box(10, 10, 200, 60), title: box(20, 20, 80, 20), icon: box(150, 25, 24, 24),
+    });
+    const restoreText = installTextRects({ "Купить": box(20, 20, 80, 20) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["c"] }).details![0]!;
+      const map = detail.elementMap;
+      expect(map.truncated).toBe(false);
+      expect(map.total).toBe(map.nodes.length);
+      const byPath = Object.fromEntries(map.nodes.map((node) => [node.path, node]));
+      expect(byPath["span>div.card"]).toMatchObject({ bbox: { x: 10, y: 10, width: 200, height: 60 }, hasText: false, markerKey: "c", depth: 1 });
+      // Собственная строка — только у узла, в котором она лежит; предок её не наследует.
+      expect(byPath["span>div.card>span.title"]).toMatchObject({ hasText: true, markerKey: "c", depth: 2 });
+      // Узел под вложенным маркером принадлежит **ему**, а не корню: это и есть ownership по слотам.
+      expect(byPath["span>div.card>span>i.icon"]).toMatchObject({ markerKey: "s0", depth: 3, hasText: false });
+    } finally { restoreText(); restore(); }
+  });
+
+  it("вырожденный узел записи не получает, а переполнение потолка видимо флагом truncated", () => {
+    const children = Array.from({ length: ELEMENT_MAP_NODE_LIMIT + 8 }, (_, index) => `<div data-rect="n${index}"></div>`).join("");
+    const zero = `<div data-rect="zero"></div>`;
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface">`
+      + `<span data-eui-key="c" style="display:contents"><div data-rect="card">${zero}${children}</div></span></div>`;
+    const rects: Record<string, ReturnType<typeof box>> = { surface, card: box(0, 0, 400, 400), zero: box(5, 5, 0, 0) };
+    for (let index = 0; index < ELEMENT_MAP_NODE_LIMIT + 8; index += 1) rects[`n${index}`] = box(1, 1, 2, 2);
+    const restore = installRects(rects);
+    try {
+      const map = collectGeometry({ detailKeys: ["c"] }).details![0]!.elementMap;
+      expect(map.nodes).toHaveLength(ELEMENT_MAP_NODE_LIMIT);
+      expect(map.truncated).toBe(true);
+      expect(map.total).toBeGreaterThan(ELEMENT_MAP_NODE_LIMIT);
+      // 0×0 — не факт владения: такой узел не может владеть ни одним пикселем.
+      expect(map.nodes.some((node) => node.path.endsWith("div") && node.bbox.width === 0)).toBe(false);
+    } finally { restore(); }
+  });
+
+  it("карта аддитивна: контракт измерения и существующие поля детали не двигаются", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface">`
+      + `<span data-eui-key="c" style="display:contents"><div data-rect="card"></div></span></div>`;
+    const restore = installRects({ surface, card: box(10, 10, 100, 50) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["c"] }).details![0]!;
+      expect(GEOMETRY_CONTRACT_VERSION).toBe(2);
+      expect(detail.layoutBounds).toEqual({ x: 10, y: 10, width: 100, height: 50 });
+      expect(detail.rootBounds).toEqual({ x: 10, y: 10, width: 100, height: 50 });
+      expect(detail.effectSources).toEqual([]);
+      expect(detail.outOfFlowNodes).toEqual([]);
+    } finally { restore(); }
   });
 });

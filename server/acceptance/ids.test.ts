@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AcceptanceCase } from "./cases";
 import {
-  CASE_FINGERPRINT_ALGO_VERSION, COMPARISON_PAINT_MARGIN_PX, FIELD_LAYERS,
+  CASE_FINGERPRINT_ALGO_VERSION, COMPARISON_FIELD_LAYERS, COMPARISON_PAINT_MARGIN_PX, FIELD_LAYERS,
   caseFingerprintsOf, comparisonFingerprintOf, frameFingerprint, readinessPolicyHashOf,
   verdictPolicyHashOf, verdictPolicySnapshotOf,
   type CaseSurface, type LayeredField,
@@ -9,6 +9,7 @@ import {
 import { ACCEPTANCE_POLICIES, withRequiredVisual, type AcceptancePolicy } from "./policies";
 import { barrierAwareReadinessPolicy } from "../capture/resourceBarrier";
 import { rendererFingerprint } from "../capture/renderer";
+import { caseSetComparisonSchema } from "../../src/acceptance/caseSetSchema";
 
 /**
  * Трёхслойный отпечаток случая (план `docs/plans/2026-08-04-acceptance-pipeline-feedback.md`,
@@ -726,4 +727,41 @@ test("§W3: overlay-ребёнок слота хэшируется candidateId, 
     ...GOLDEN_FRAME_INPUT,
     slotBindings: [{ slot: "items", index: 0, componentId: "pay-leaf", version: 0, bundleHash: "bh", propsHash: "ph" }],
   })).not.toBe(overlaid);
+});
+
+// --------------------------------------------- BR-08: слои вложенных ключей `comparison` (ревью A4)
+
+test("каждый ключ объекта comparison объявлен в слое — тотальность, которую satisfies не ловит", () => {
+  // `FIELD_LAYERS` объявляет слой у поля `comparison` **целиком**, поэтому добавить в схему
+  // `comparison.ownership`, не назвав его слой, тип бы позволил. Таблица `COMPARISON_FIELD_LAYERS`
+  // закрывает дыру на уровне типа, а этот тест — на уровне **рантайм-схемы**: тип не видит `zod`.
+  const schemaKeys = Object.keys(caseSetComparisonSchema.shape).sort();
+  expect(Object.keys(COMPARISON_FIELD_LAYERS).sort()).toEqual(schemaKeys);
+  expect(schemaKeys).toEqual(["dependencyPolicy", "matte", "ownership", "subjectComponentId"]);
+  for (const key of schemaKeys) {
+    const layers = (COMPARISON_FIELD_LAYERS as Record<string, readonly string[]>)[key]!;
+    expect(layers.length).toBeGreaterThan(0);
+    // Слой родителя обязан покрывать слои детей: иначе объявление «comparison — это comparison»
+    // означало бы разное для разных ключей одного объекта.
+    for (const layer of layers) expect(FIELD_LAYERS.comparison as readonly string[]).toContain(layer);
+  }
+});
+
+test("BR-08: ownership/subjectComponentId/dependencyPolicy двигают ровно слой сравнения", () => {
+  const paint = { ...PLAIN, referenceAssetId: ASSET_A };
+  const base = fingerprints(paint);
+  for (const comparison of [
+    { ownership: "subject-and-integration" },
+    { subjectComponentId: "wrapper" },
+    { dependencyPolicy: "require-eligible-acceptance" },
+  ] as const) {
+    const moved = fingerprints({ ...paint, comparison });
+    expect(moved.frame).toBe(base.frame);
+    expect(moved.verdictPolicy).toBe(base.verdictPolicy);
+    expect(moved.comparison).not.toBe(base.comparison);
+  }
+  // Инвариант неизменности: набор без новых ключей остаётся байт-в-байт доволновым.
+  expect(fingerprints({ ...paint, comparison: { matte: "#ffffff" } }).comparison)
+    .toBe(fingerprints({ ...paint, comparison: { matte: "#ffffff" } }).comparison);
+  expect(fingerprints(paint)).toEqual(base);
 });

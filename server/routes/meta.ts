@@ -34,8 +34,11 @@ import { VALIDATE_GLOBAL_CONCURRENT, VALIDATE_USER_CONCURRENT } from "../compone
 import { CANDIDATE_CACHE_MAX_BYTES, CANDIDATE_CACHE_TTL_MS } from "../components/candidates";
 import {
   ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, PROMOTION_POLICY_PROFILES, acceptanceCaseTtlHours,
-  acceptanceMaxCasesPerRun, evidenceMaxBytes,
+  acceptanceMaxCasesPerRun, evidenceMaxBytes, isPromotionPolicyProfile,
 } from "../acceptance/policies";
+// BR-07/BR-08 (план 2026-08-08 §7/§8): атрибуция, реестр профилей рендерера и второй вердикт.
+import { comparisonOwnershipEnabled, visualAttributionV2Enabled } from "../visual/attribution";
+import { rendererPolicyProfiles, rendererPolicyProfilesEnabled } from "../acceptance/rendererProfiles";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
   CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_OVERLAY_NODES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
@@ -377,6 +380,32 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // отвечает 404, а поле исчезает из представления рана и из манифеста evidence. Отпечаток
       // ничего не меняет в вердиктах и отпечатках случаев: слой полностью read-only.
       blockerFingerprintV1: options.acceptanceMatrix === true && blockerFingerprintEnabled(),
+      /**
+       * BR-07 (план 2026-08-08 §7): атрибуция расхождения **по элементам** — карта элементов кадра
+       * (`element-map.json` в evidence), owner-тоталы по полной diff-маске с честным `unknown`,
+       * контракт кластера §10 (владелец, компонент владельца, класс краски, `structural`, `basis[]`)
+       * и квитанция сравнения (matte/flattening, color profile, renderer + шрифтовые отпечатки,
+       * версия политики сравнения). Гейтится **матричной** приёмкой: и карта, и кластеры живут
+       * только в acceptance-evidence, вне её у них нет ни одного потребителя. Свой kill-switch —
+       * `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED=1`: под ним evidence и метрики доволновые
+       * byte-for-byte. Слой report-only — ни один вердикт от флага не зависит.
+       */
+      visualAttributionV2: options.acceptanceMatrix === true && visualAttributionV2Enabled(),
+      /**
+       * BR-07: профили политики рендерера (реестр — `acceptance.rendererPolicyProfiles`). Тумблер
+       * **свой**, а не общий с атрибуцией, ровно потому, что он меняет promote-eligibility: под
+       * `EASYUI_RENDERER_POLICY_PROFILES_DISABLED=1` реестр пуст, `exceptions[]` не пишет никто, а
+       * профиль политики `default-v1-exceptions` исчезает из `promotionPolicyProfiles`.
+       */
+      rendererPolicyProfilesV2: options.acceptanceMatrix === true && rendererPolicyProfilesEnabled(),
+      /**
+       * BR-08 (план 2026-08-08 §8): два вердикта одного сравнения — `subject` (пиксели, которыми
+       * владеет субъект) и `integration` (вся канва, сегодняшняя семантика). Вердикт случая не
+       * меняется вовсе: им остаётся интеграционный, субъектный едет дополнительным фактом в
+       * метрики, evidence и манифест. Гейтится матрицей и `EASYUI_COMPARISON_OWNERSHIP_DISABLED=1`
+       * (под ним `cases[].comparison.ownership` остаётся валидным полем-декларацией без эффекта).
+       */
+      comparisonOwnershipV1: options.acceptanceMatrix === true && comparisonOwnershipEnabled(),
       // §W5: `POST /api/prototypes/:id/snap-plan` — импакт-план галерейной съёмки (какие экраны
       // снимать и почему, какие переиспользуются с доказательством). Матричной приёмкой **не**
       // гейтится: галерея к ней не относится. false — при `EASYUI_IMPACTED_SNAP_DISABLED=1`, и
@@ -474,6 +503,8 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       /**
        * Версия контракта резолвера (фидбэк §4) — **число**, а не факт существования: клиенту нужно
        * знать, по какому контракту этот инстанс отвечает прямо сейчас, а не что умеет образ.
+       * На версии 2 (BR-01b) save-ответ, `render-status` и снап называют один резолв одинаковыми
+       * полями `resolvedVersion`/`sourceHash`/`propsSchemaHash`.
        */
       prototypeSchemaResolverVersion: schemaResolverV2Enabled() ? PROTOTYPE_SCHEMA_RESOLVER_VERSION : LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION,
       // §W6b: версия схемы агентской квитанции драйвера (`envelope: {schemaVersion, command, ok,
@@ -499,7 +530,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
     acceptance: {
       policyProfiles: Object.keys(ACCEPTANCE_POLICIES),
       defaultPolicyProfile: DEFAULT_ACCEPTANCE_POLICY_ID,
-      promotionPolicyProfiles: [...PROMOTION_POLICY_PROFILES],
+      // BR-07: состав считается предикатом, а не константой: `default-v1-exceptions` промоутабелен
+      // только при включённых профилях политики рендерера — иначе discovery обещал бы профиль,
+      // который promote отвергнет.
+      promotionPolicyProfiles: PROMOTION_POLICY_PROFILES.filter((id) => isPromotionPolicyProfile(id)),
       // План 2026-08-06 §1.3: версия контракта измерения геометрии — кадровый вход
       // frameFingerprint; её смена = полная пересъёмка затронутых наборов.
       geometryContractVersion: GEOMETRY_CONTRACT_VERSION,
@@ -516,6 +550,16 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
        * Пара с `features.resourceBarrier`: флаг говорит «барьер включён», версия — «чем снято».
        */
       readinessPolicyVersion: ACCEPTANCE_POLICIES[DEFAULT_ACCEPTANCE_POLICY_ID].readiness.version,
+      // BR-07: реестр профилей политики рендерера — объявлен **до** рана и читается клиентом
+      // вместе с `expiry`: чем профиль протухает, обязано быть видно снаружи образа.
+      rendererPolicyProfiles: rendererPolicyProfiles().map((profile) => ({
+        profileId: profile.profileId,
+        rendererFingerprint: profile.rendererFingerprint,
+        scope: profile.scope,
+        maxResidualPct: profile.maxResidualPct,
+        expiry: profile.expiry,
+        description: profile.description,
+      })),
     },
     // План renderer-contract-2 §5 R1: чем именно эта сборка рисует кадры. Агент (и приёмка
     // прода) обязаны иметь возможность сверить отпечаток с тем, что приехало в результате джобы,

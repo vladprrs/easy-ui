@@ -24,7 +24,7 @@ import { ComponentRepo } from "../repos/components";
 import { getCandidateForRev } from "../components/validate";
 import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
 import { buildCasesFromManifest, casesOfRun, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
-import { evidenceSlotsOf, writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
+import { evidenceSlotsOf, evidenceVisualReceiptOf, writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
 import type { RunInkBbox } from "./inkBbox";
 import type { RunNormalizedDiff } from "../visual/diff-runner";
 import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
@@ -1092,6 +1092,9 @@ export class AcceptanceOrchestrator {
       // Слот-поля — условным спредом: у slot-free случая (и у всего examples-пути) их нет вовсе,
       // и его запись остаётся побайтово прежней (golden §A7).
       ...evidenceSlotsOf(bySlotCase.get(execution.caseId)),
+      // BR-07/BR-08: квитанция сравнения и сводка атрибуции — часть доказательства случая.
+      // Условные ключи: доволновой случай остаётся побайтово прежним.
+      ...evidenceVisualReceiptOf(execution.gates),
       artifacts: execution.artifacts.map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
     }));
     return {

@@ -19,6 +19,7 @@ import { runtimeDefaultsDisabled } from "../components/runtimeDefaults";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { componentManifestHashOf, docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
+import { resolvedSchemaFields } from "../components/resolvedGraph";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
 import {
   impactedSnapEnabled, recordScreenFrame, screenFrameOf,
@@ -283,6 +284,19 @@ export function jobOutcomeOfError(error: unknown): Exclude<JobOutcome, "ok"> {
 }
 
 /**
+ * Пин кадра в ответе джобы + поля единого резолвера (BR-01b, план 2026-08-08 §1).
+ *
+ * `resolvedVersion` дублирует `version` намеренно: это контракт фидбэка §4, по которому мигратор
+ * сверяет save-ответ, `render-status` и снап **одинаковыми именами полей**. Поля опциональны —
+ * их нет при поднятом `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` и у подменённого кандидата
+ * (у неопубликованного исходника строки публикации нет).
+ */
+export type ResolvedCapturePin = {
+  id: string; version: number; bundleHash: string;
+  resolvedVersion?: number; sourceHash?: string | null; propsSchemaHash?: string | null;
+};
+
+/**
  * Статус джобы наружу. `error` — доволновая форма (её код остаётся из старого словаря ручек:
  * `capture_failed`, `renderer_mismatch`, ApiError-код постановки); `outcome` и `failure` —
  * **аддитивные** поля R3: таксономия исхода джобы (A3) и типизированная причина капчура (E3).
@@ -303,7 +317,11 @@ export interface ScreenshotImageResult extends CaptureQuality {
   bundleHash?: string;
   /** Draft head-revision target (P1b): the rendered rev, so clients can report "draft rev N". */
   draftRev?: number;
-  componentPins?: { id: string; version: number; bundleHash: string }[];
+  /**
+   * BR-01b: пины кадра + поля резолвера (`resolvedVersion`/`sourceHash`/`propsSchemaHash`).
+   * Условны — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` запись пина доволновая byte-for-byte.
+   */
+  componentPins?: ResolvedCapturePin[];
   rendererBuild: string | null; browserVersion: string;
   /** Объявленный рендерер джобы (R1): отпечаток и его входы. */
   renderer?: RendererOnJob;
@@ -328,7 +346,11 @@ export interface ScreenshotImageBytesResult extends CaptureQuality, CaptureReadi
   consoleErrors: string[]; pageErrors: string[];
   bundleHash?: string;
   draftRev?: number;
-  componentPins?: { id: string; version: number; bundleHash: string }[];
+  /**
+   * BR-01b: пины кадра + поля резолвера (`resolvedVersion`/`sourceHash`/`propsSchemaHash`).
+   * Условны — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` запись пина доволновая byte-for-byte.
+   */
+  componentPins?: ResolvedCapturePin[];
   rendererBuild: string | null; browserVersion: string;
   renderer?: RendererOnJob;
   /** Адрес capture-receipt'а этого кадра (R5). */
@@ -397,7 +419,7 @@ export interface ScreenshotPrototypeGeometryResult extends CaptureQuality, Geome
   surface: "prototype";
   resolvedRev: number;
   prototypeInstanceId: string;
-  componentPins: { id: string; version: number; bundleHash: string }[];
+  componentPins: ResolvedCapturePin[];
   designSystemMetaVersion: number | null;
   resolvedSpaceScale: Record<SpaceToken, string>;
   viewport: Viewport;
@@ -473,7 +495,11 @@ interface InternalJob {
   id: string; status: JobStatus["status"]; kind: "prototype" | "component";
   expected: CaptureExpected; allowedUrls: string[]; props?: Record<string, unknown>;
   captureUrl: string; viewport: Viewport; dsf: number; theme: "light" | "dark"; waitForFonts: boolean;
-  componentPins?: { id: string; version: number; bundleHash: string }[];
+  /**
+   * BR-01b: пины кадра + поля резолвера (`resolvedVersion`/`sourceHash`/`propsSchemaHash`).
+   * Условны — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` запись пина доволновая byte-for-byte.
+   */
+  componentPins?: ResolvedCapturePin[];
   /**
    * Полные пины, замороженные на enqueue, и их manifest-hash (план 2026-08-02, P2.3).
    * Едут в `bootstrap.target`, и поверхность рендерит именно их: для track:head-дока
@@ -916,7 +942,13 @@ export class ScreenshotService {
       ? undefined
       : capturePins.filter((pin) => pin.candidate !== undefined)
         .map((pin) => ({ componentId: pin.id, candidateId: pin.candidate!.candidateId, bundleHash: pin.bundleHash, sourceHash: pin.candidate!.sourceHash }));
-    const componentPins = capturePins.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
+    // BR-01b: запись пина снапа несёт ту же тройку резолва, что save-ответ и render-status —
+    // мигратор сверяет `resolvedVersion`/`sourceHash`/`propsSchemaHash` между тремя ручками.
+    // Подменённый кандидат опубликованной строки не имеет: его поля остаются пустыми.
+    const componentPins: ResolvedCapturePin[] = capturePins.map((p) => ({
+      id: p.id, version: p.version, bundleHash: p.bundleHash,
+      ...(p.candidate === undefined ? resolvedSchemaFields(this.deps.db, p.id, p.version) : {}),
+    }));
     // §W5: отпечаток кадра экрана — из тех же фактов, что уже резолвила постановка (пины ревизии,
     // тела композиций, пины темы, политика готовности). Второе чтение ревизии здесь было бы не
     // экономией, а риском: план и запись обязаны считать одну и ту же величину.

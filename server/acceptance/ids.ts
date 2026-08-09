@@ -29,6 +29,7 @@ import { captureV4Enabled, COMPARISON_POLICY_VERSION } from "../capture/captureV
 import { GEOMETRY_OWNERSHIP_POLICY_VERSION, geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { rendererFingerprint } from "../capture/renderer";
 import type { AcceptanceCase, RunOverlayNode } from "./cases";
+import type { CaseSetComparison } from "../../src/acceptance/caseSetSchema";
 import type { AcceptancePolicy, GateMode, GateName, GeometryTolerances, VisualTolerances } from "./policies";
 
 const sha256 = (value: string): string => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -388,7 +389,7 @@ export interface ComparisonFingerprintInput {
    * **входы** диффа — обе картинки кладутся на объявленный цвет до любой метрики, — поэтому его
    * смена обязана давать re-diff сохранённого кадра, а не пересчёт по старым числам.
    */
-  comparison?: { matte?: string } | null;
+  comparison?: ComparisonContract | null;
   /**
    * W4-слот: именованный пресет бюджета растрового текста. Тоже слой сравнения, хотя читает его
    * вердикт: пресет опирается на `edgeResidual`, которого в доволновых метриках нет вовсе, и
@@ -426,6 +427,35 @@ export interface ComparisonFingerprintInput {
   comparisonPolicyVersion?: number;
 }
 
+/**
+ * Объявление сравнения случая (`cases[].comparison`) — ровно форма схемы (`CaseSetComparison`),
+ * а не её копия: копия рано или поздно отстала бы от схемы на одно поле, и это поле молча не
+ * попало бы ни в один отпечаток.
+ */
+export type ComparisonContract = CaseSetComparison;
+
+/**
+ * **Слои вложенных ключей `comparison`** (BR-08, ревью A4).
+ *
+ * `FIELD_LAYERS` объявляет слой у поля `comparison` **целиком**, и тотальность `satisfies` на
+ * вложенные ключи не распространяется вовсе: добавить `comparison.ownership`, не назвав его слой,
+ * тип бы позволил. Здесь тотальность восстановлена явно — `Record<keyof CaseSetComparison, …>` не
+ * даст добавить ключ в схему, не назвав его слой, а тест `ids.test.ts` дополнительно сверяет
+ * таблицу с ключами **разобранного** манифеста (тип не видит рантайм-схему).
+ */
+export const COMPARISON_FIELD_LAYERS = {
+  // Матирование меняет входы диффа (обе картинки ложатся на цвет до метрик).
+  matte: ["comparison"],
+  // BR-08: два вердикта считаются по одной и той же паре картинок — меняется разбиение пикселей,
+  // то есть **что** сравнивается, а не чем судится. Кадр не двигается: слой один, `comparison`.
+  ownership: ["comparison"],
+  subjectComponentId: ["comparison"],
+  // Политика зависимостей читается promote-гейтом по уже посчитанным вердиктам, но объявлена она
+  // в том же объекте сравнения и обязана инвалидировать сравнение вместе с ним: иначе набор,
+  // сменивший требование к детям, переиспользовал бы метрики, снятые без него.
+  dependencyPolicy: ["comparison"],
+} as const satisfies Record<keyof CaseSetComparison, readonly FieldLayer[]>;
+
 const definedOnly = <T extends Record<string, unknown>>(value: T): Partial<T> =>
   Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>;
 
@@ -443,7 +473,14 @@ export function comparisonFingerprintOf(input: ComparisonFingerprintInput): stri
       }),
     comparison: input.comparison === null || input.comparison === undefined
       ? undefined
-      : definedOnly({ matte: input.comparison.matte }),
+      // BR-08: новые ключи объявления сравнения кладутся тем же условным спредом. Случай, их не
+      // объявивший, обязан давать байт-в-байт доволновой `comparisonFingerprint`.
+      : definedOnly({
+        matte: input.comparison.matte,
+        ownership: input.comparison.ownership,
+        subjectComponentId: input.comparison.subjectComponentId,
+        dependencyPolicy: input.comparison.dependencyPolicy,
+      }),
     textAaBudget: input.textAaBudget ?? undefined,
     expectedGeometry: input.expectedGeometry ?? undefined,
     // Проекция, а не всё поле: объявление одного лишь `root` обязано оставить сравнение нетронутым.
@@ -551,7 +588,7 @@ export interface CaseFingerprintCase {
   referenceSurface?: string | null;
   referencePlacement?: { x: number; y: number } | null;
   /** W4-слоты сравнения (см. `ComparisonFingerprintInput`); `textAaBudget` ещё и вердиктный. */
-  comparison?: { matte?: string } | null;
+  comparison?: ComparisonContract | null;
   textAaBudget?: string | null;
   /**
    * Поверхности геометрии (волна 2026-08-07). Двухслойное поле, но **не** двумя копиями значения:

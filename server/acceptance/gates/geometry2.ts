@@ -27,6 +27,9 @@ import { putArtifact } from "../evidence";
 import { spawnInkBboxWorker, type RunInkBbox } from "../inkBbox";
 import { captureV4Enabled } from "../../capture/captureV4";
 import { geometryOwnershipEnabled } from "../../capture/geometryOwnership";
+import {
+  caseElementMapOf, markerComponentMap, visualAttributionV2Enabled, type CaseElementMap,
+} from "../../visual/attribution";
 import { geometryOwnershipViolationCodes, type GeometryOwnershipViolation } from "./audit";
 import { captureCase } from "./capture";
 import type { Gate, GateContext, GateResult } from "./types";
@@ -41,6 +44,53 @@ export const paintShaKey = (caseId: string): string => `geometry.paint.sha:${cas
  * кадр. Пересчитывать margin из константы вместо факта съёмки нельзя — они обязаны совпадать.
  */
 export const geometryFactsKey = (caseId: string): string => `geometry.facts:${caseId}`;
+
+/**
+ * Ключ мемо: **карта элементов** случая (BR-07 S1). Её читает гейт `visual`, когда переводит узлы
+ * в координаты канвы и просит воркер атрибутировать diff-маску. Мемо, а не чтение артефакта из
+ * CAS: карта уже посчитана этой же съёмкой, и второй источник (артефакт) мог бы разойтись с ней на
+ * re-diff'е — а «атрибуция по чужой карте» хуже отсутствующей атрибуции.
+ */
+export const elementMapKey = (caseId: string): string => `geometry.elementMap:${caseId}`;
+
+/**
+ * Карта элементов случая: факт замера + разметка владения по slot-дереву.
+ *
+ * `subjectComponentId` — объявленный случаем (`comparison.subjectComponentId`, BR-08) либо
+ * компонент-субъект рана. Объявление сильнее: набор, снимающий обёртку с детьми, вправе назвать
+ * субъектом ровно тот компонент, приёмку которого он проводит.
+ */
+export function caseElementMapFor(ctx: GateContext, detail: GeometryDetail | null): CaseElementMap {
+  const subjectComponentId = ctx.case.comparison?.subjectComponentId ?? ctx.candidate.componentId;
+  return caseElementMapOf({
+    elementMap: detail?.elementMap ?? null,
+    subjectComponentId,
+    markers: markerComponentMap(ctx.candidate.componentId, ctx.case.slotBindings),
+  });
+}
+
+/**
+ * `geometry.json` без карты элементов (BR-07 S1).
+ *
+ * Карта живёт **своим** артефактом (`element-map.json`), а не внутри общего замера, по двум
+ * причинам: она на порядок объёмнее всего остального `geometry.json` (до 512 записей на маркер), и
+ * её появление не должно двигать байты артефакта, на котором стоят доволновые потребители. Сбор
+ * при этом ведётся безусловно — опция сбора потребовала бы менять контракт капчур-джобы ради
+ * факта, который на пиксели не влияет.
+ */
+function geometryWithoutElementMap(geometry: Record<string, unknown>): Record<string, unknown> {
+  const details = geometry.details;
+  if (!Array.isArray(details)) return geometry;
+  return {
+    ...geometry,
+    details: details.map((item) => {
+      if (item === null || typeof item !== "object" || !("elementMap" in item)) return item;
+      const rest = { ...(item as Record<string, unknown>) };
+      delete rest.elementMap;
+      return rest;
+    }),
+  };
+}
 export interface GeometryFacts {
   /**
    * Бокс layout-корня в CSS px **относительно внешнего `#eui-capture-surface`**, то есть вместе с
@@ -406,8 +456,16 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         ...surfaceFacts(policy),
         effectSources: detail?.effectSources ?? [],
         clipChain: detail?.clipChain ?? [],
-        geometry,
+        geometry: geometryWithoutElementMap(geometry),
       };
+      // BR-07 S1: карта элементов — отдельный артефакт и мемо для гейта `visual`. Под опущенным
+      // kill-switch'ем не пишется вовсе: evidence случая остаётся доволновым byte-for-byte.
+      if (visualAttributionV2Enabled()) {
+        const elementMap = caseElementMapFor(ctx, detail);
+        ctx.shared.set(elementMapKey(ctx.case.caseId), elementMap);
+        const mapArtifact = await putArtifact(ctx.dataDir, elementMap as unknown as Record<string, unknown>);
+        artifacts.push({ name: "element-map.json", sha256: mapArtifact.sha256, bytes: mapArtifact.bytes });
+      }
       // W5: факты кадра — вход канонической канвы визуального сравнения (см. `geometryFactsKey`).
       ctx.shared.set(geometryFactsKey(ctx.case.caseId), {
         layoutBounds: isRect(record.layoutBounds)

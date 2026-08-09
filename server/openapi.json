@@ -114,7 +114,8 @@
                   "policy": {
                     "enum": [
                       "default-v1",
-                      "pixel-strict-v1"
+                      "pixel-strict-v1",
+                      "default-v1-exceptions"
                     ],
                     "type": "string"
                   },
@@ -5223,6 +5224,99 @@
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991,
                           "type": "integer"
+                        },
+                        "rendererPolicyProfiles": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "description": {
+                                "type": "string"
+                              },
+                              "expiry": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "asset": {
+                                    "type": "string"
+                                  },
+                                  "fonts": {
+                                    "type": "string"
+                                  },
+                                  "geometry": {
+                                    "type": "string"
+                                  },
+                                  "matte": {
+                                    "type": "string"
+                                  },
+                                  "renderer": {
+                                    "type": "string"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "maxResidualPct": {
+                                "type": "number"
+                              },
+                              "profileId": {
+                                "type": "string"
+                              },
+                              "rendererFingerprint": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "scope": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "paintClass": {
+                                    "type": "string"
+                                  },
+                                  "region": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "height": {
+                                        "type": "number"
+                                      },
+                                      "width": {
+                                        "type": "number"
+                                      },
+                                      "x": {
+                                        "type": "number"
+                                      },
+                                      "y": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "x",
+                                      "y",
+                                      "width",
+                                      "height"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "paintClass"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "profileId",
+                              "rendererFingerprint",
+                              "scope",
+                              "maxResidualPct",
+                              "expiry",
+                              "description"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -5231,7 +5325,8 @@
                         "promotionPolicyProfiles",
                         "geometryContractVersion",
                         "comparisonSurfaces",
-                        "readinessPolicyVersion"
+                        "readinessPolicyVersion",
+                        "rendererPolicyProfiles"
                       ],
                       "type": "object"
                     },
@@ -5336,6 +5431,9 @@
                         "comparisonMatte": {
                           "type": "boolean"
                         },
+                        "comparisonOwnershipV1": {
+                          "type": "boolean"
+                        },
                         "componentDraftPreview": {
                           "type": "boolean"
                         },
@@ -5433,6 +5531,9 @@
                         "renderStatus": {
                           "type": "boolean"
                         },
+                        "rendererPolicyProfilesV2": {
+                          "type": "boolean"
+                        },
                         "repeat": {
                           "type": "boolean"
                         },
@@ -5478,6 +5579,9 @@
                           "type": "boolean"
                         },
                         "typedEvents": {
+                          "type": "boolean"
+                        },
+                        "visualAttributionV2": {
                           "type": "boolean"
                         },
                         "visualRegression": {
@@ -5543,6 +5647,9 @@
                         "migrationCommit",
                         "acceptanceResumeV1",
                         "blockerFingerprintV1",
+                        "visualAttributionV2",
+                        "rendererPolicyProfilesV2",
+                        "comparisonOwnershipV1",
                         "receiptEnvelopeVersion",
                         "prototypeSchemaResolverV2",
                         "prototypeSchemaResolverVersion",
@@ -27535,6 +27642,62 @@
                 "schema": {
                   "additionalProperties": {},
                   "properties": {
+                    "components": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "enum": [
+                              "head-active",
+                              "pinned",
+                              "composition-pin"
+                            ],
+                            "type": "string"
+                          },
+                          "propsSchemaHash": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "resolvedVersion": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "sourceHash": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "resolvedVersion",
+                          "sourceHash",
+                          "propsSchemaHash",
+                          "origin"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "id": {
                       "type": "string"
                     },
@@ -28870,6 +29033,62 @@
                 "schema": {
                   "additionalProperties": {},
                   "properties": {
+                    "components": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "enum": [
+                              "head-active",
+                              "pinned",
+                              "composition-pin"
+                            ],
+                            "type": "string"
+                          },
+                          "propsSchemaHash": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "resolvedVersion": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "sourceHash": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "resolvedVersion",
+                          "sourceHash",
+                          "propsSchemaHash",
+                          "origin"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "rev": {
                       "type": "number"
                     },
@@ -35808,6 +36027,31 @@
                           "name": {
                             "type": "string"
                           },
+                          "propsSchemaHash": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "resolvedVersion": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "sourceHash": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "status": {
                             "type": "string"
                           },
@@ -38719,6 +38963,34 @@
                 "schema": {
                   "$defs": {
                     "__schema0": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "__schema1": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema10": {
+                      "type": "string"
+                    },
+                    "__schema2": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema3": {
                       "additionalProperties": false,
                       "properties": {
                         "browserExecutableSha256": {
@@ -38816,7 +39088,7 @@
                       ],
                       "type": "object"
                     },
-                    "__schema1": {
+                    "__schema4": {
                       "additionalProperties": false,
                       "properties": {
                         "2xl": {
@@ -38860,7 +39132,7 @@
                       ],
                       "type": "object"
                     },
-                    "__schema2": {
+                    "__schema5": {
                       "additionalProperties": false,
                       "properties": {
                         "height": {
@@ -38880,10 +39152,10 @@
                       ],
                       "type": "object"
                     },
-                    "__schema3": {
+                    "__schema6": {
                       "type": "number"
                     },
-                    "__schema4": {
+                    "__schema7": {
                       "items": {
                         "additionalProperties": false,
                         "properties": {
@@ -38974,16 +39246,13 @@
                       },
                       "type": "array"
                     },
-                    "__schema5": {
+                    "__schema8": {
                       "type": "boolean"
                     },
-                    "__schema6": {
+                    "__schema9": {
                       "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
-                    },
-                    "__schema7": {
-                      "type": "string"
                     }
                   },
                   "additionalProperties": false,
@@ -39073,6 +39342,15 @@
                                   "id": {
                                     "type": "string"
                                   },
+                                  "propsSchemaHash": {
+                                    "$ref": "#/$defs/__schema2"
+                                  },
+                                  "resolvedVersion": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "sourceHash": {
+                                    "$ref": "#/$defs/__schema1"
+                                  },
                                   "version": {
                                     "type": "number"
                                   }
@@ -39117,7 +39395,7 @@
                               "type": "string"
                             },
                             "renderer": {
-                              "$ref": "#/$defs/__schema0"
+                              "$ref": "#/$defs/__schema3"
                             },
                             "rendererBuild": {
                               "anyOf": [
@@ -39170,6 +39448,15 @@
                                   "id": {
                                     "type": "string"
                                   },
+                                  "propsSchemaHash": {
+                                    "$ref": "#/$defs/__schema2"
+                                  },
+                                  "resolvedVersion": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "sourceHash": {
+                                    "$ref": "#/$defs/__schema1"
+                                  },
                                   "version": {
                                     "type": "number"
                                   }
@@ -39217,7 +39504,7 @@
                               "type": "string"
                             },
                             "renderer": {
-                              "$ref": "#/$defs/__schema0"
+                              "$ref": "#/$defs/__schema3"
                             },
                             "rendererBuild": {
                               "anyOf": [
@@ -39262,6 +39549,15 @@
                                       "id": {
                                         "type": "string"
                                       },
+                                      "propsSchemaHash": {
+                                        "$ref": "#/$defs/__schema2"
+                                      },
+                                      "resolvedVersion": {
+                                        "$ref": "#/$defs/__schema0"
+                                      },
+                                      "sourceHash": {
+                                        "$ref": "#/$defs/__schema1"
+                                      },
                                       "version": {
                                         "exclusiveMinimum": 0,
                                         "maximum": 9007199254740991,
@@ -39290,7 +39586,7 @@
                                   ]
                                 },
                                 "dpr": {
-                                  "$ref": "#/$defs/__schema3"
+                                  "$ref": "#/$defs/__schema6"
                                 },
                                 "kind": {
                                   "const": "geometry",
@@ -39300,10 +39596,10 @@
                                   "type": "string"
                                 },
                                 "receiptSha256": {
-                                  "$ref": "#/$defs/__schema7"
+                                  "$ref": "#/$defs/__schema10"
                                 },
                                 "rects": {
-                                  "$ref": "#/$defs/__schema4"
+                                  "$ref": "#/$defs/__schema7"
                                 },
                                 "resolvedRev": {
                                   "exclusiveMinimum": 0,
@@ -39311,20 +39607,20 @@
                                   "type": "integer"
                                 },
                                 "resolvedSpaceScale": {
-                                  "$ref": "#/$defs/__schema1"
+                                  "$ref": "#/$defs/__schema4"
                                 },
                                 "surface": {
                                   "const": "prototype",
                                   "type": "string"
                                 },
                                 "total": {
-                                  "$ref": "#/$defs/__schema6"
+                                  "$ref": "#/$defs/__schema9"
                                 },
                                 "truncated": {
-                                  "$ref": "#/$defs/__schema5"
+                                  "$ref": "#/$defs/__schema8"
                                 },
                                 "viewport": {
-                                  "$ref": "#/$defs/__schema2"
+                                  "$ref": "#/$defs/__schema5"
                                 }
                               },
                               "required": [
@@ -39365,7 +39661,7 @@
                                   ]
                                 },
                                 "dpr": {
-                                  "$ref": "#/$defs/__schema3"
+                                  "$ref": "#/$defs/__schema6"
                                 },
                                 "draftRev": {
                                   "exclusiveMinimum": 0,
@@ -39377,23 +39673,23 @@
                                   "type": "string"
                                 },
                                 "receiptSha256": {
-                                  "$ref": "#/$defs/__schema7"
+                                  "$ref": "#/$defs/__schema10"
                                 },
                                 "rects": {
-                                  "$ref": "#/$defs/__schema4"
+                                  "$ref": "#/$defs/__schema7"
                                 },
                                 "resolvedSpaceScale": {
-                                  "$ref": "#/$defs/__schema1"
+                                  "$ref": "#/$defs/__schema4"
                                 },
                                 "surface": {
                                   "const": "component",
                                   "type": "string"
                                 },
                                 "total": {
-                                  "$ref": "#/$defs/__schema6"
+                                  "$ref": "#/$defs/__schema9"
                                 },
                                 "truncated": {
-                                  "$ref": "#/$defs/__schema5"
+                                  "$ref": "#/$defs/__schema8"
                                 },
                                 "version": {
                                   "exclusiveMinimum": 0,
@@ -39401,7 +39697,7 @@
                                   "type": "integer"
                                 },
                                 "viewport": {
-                                  "$ref": "#/$defs/__schema2"
+                                  "$ref": "#/$defs/__schema5"
                                 }
                               },
                               "required": [

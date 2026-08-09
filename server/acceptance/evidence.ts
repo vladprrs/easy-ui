@@ -177,7 +177,50 @@ export interface EvidenceCaseEntry {
    * одним значением сверяются строка случая, кадр и evidence.
    */
   slotsHash?: string;
+  /**
+   * **Квитанция сравнения случая** (BR-07, перечень E1 плана): чем и над чем получен визуальный
+   * вердикт — matte и плоскостность эталона после него, цветовое пространство, отпечаток
+   * рендерера и шрифтового стека, версия политики сравнения. Условный ключ: случай без визуального
+   * измерения (нет эталона, `indeterminate` до диффа) его не несёт, и запись остаётся прежней.
+   */
+  comparisonReceipt?: Record<string, unknown>;
+  /**
+   * **Сводка атрибуции** (BR-07) и **два вердикта** (BR-08). В манифест едет именно сводка, а не
+   * весь список владельцев: полный набор лежит в `visual.json` случая, а доказательству нужен
+   * ответ «сколько пикселей нашли владельца и сколько осталось ничьими» — по нему читается, можно
+   * ли вообще верить кластерам. Оба ключа условные.
+   */
+  attribution?: Record<string, unknown>;
+  ownership?: Record<string, unknown>;
   artifacts: EvidenceEntry[];
+}
+
+/**
+ * Визуальные квитанции случая для манифеста (BR-07/BR-08). Возвращает **пустой объект**, когда
+ * гейт не считал ни атрибуции, ни квитанции: спред пустого объекта не добавляет ключей, и запись
+ * доволнового случая остаётся побайтово прежней.
+ */
+export function evidenceVisualReceiptOf(
+  gates: readonly { gate: string; metrics?: Record<string, unknown> }[],
+): { comparisonReceipt?: Record<string, unknown>; attribution?: Record<string, unknown>; ownership?: Record<string, unknown> } {
+  const metrics = gates.find((gate) => gate.gate === "visual")?.metrics;
+  if (metrics === undefined) return {};
+  const receipt = metrics.comparisonReceipt;
+  const attribution = metrics.attribution as Record<string, unknown> | undefined;
+  const ownership = metrics.ownership as Record<string, unknown> | undefined;
+  return {
+    ...(receipt === undefined ? {} : { comparisonReceipt: receipt as Record<string, unknown> }),
+    ...(attribution === undefined ? {} : {
+      attribution: {
+        attributedPixels: attribution.attributedPixels,
+        unknownPixels: attribution.unknownPixels,
+        totalMismatchedPixels: attribution.totalMismatchedPixels,
+        coveragePct: attribution.coveragePct,
+        truncated: attribution.truncated,
+      },
+    }),
+    ...(ownership === undefined ? {} : { ownership }),
+  };
 }
 
 /**
