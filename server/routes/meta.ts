@@ -52,8 +52,8 @@ import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
 import { blockerFingerprintEnabled } from "../acceptance/disposition";
 import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
 import { suggestedPolicyEnabled } from "../acceptance/suggest";
-import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled } from "../capture/captureV4";
-import { geometryOwnershipEnabled } from "../capture/geometryOwnership";
+import { CAPTURE_FRAME_BUDGET_MPX, captureV4Enabled, COMPARISON_POLICY_VERSION } from "../capture/captureV4";
+import { GEOMETRY_OWNERSHIP_POLICY_VERSION, geometryOwnershipEnabled } from "../capture/geometryOwnership";
 import { RESOURCE_BARRIER_DISABLED, resourceBarrierPolicyVersion, resourceBarrierV4Enabled } from "../capture/resourceBarrier";
 import { LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION, PROTOTYPE_SCHEMA_RESOLVER_VERSION, schemaResolverV2Enabled } from "../validation";
 import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../../src/capture/readinessPolicy";
@@ -465,6 +465,14 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
        */
       exactContentHugCanvasV1: captureV4Enabled(),
       /**
+       * BR-04/BR-10b: **версия семантики сравнения** этого инстанса — `2` под волной, `1`
+       * доволново. Пара к `exactContentHugCanvasV1` того же вида, что `resourceBarrierV4` ↔
+       * `resourceBarrierPolicyVersion`: флаг отвечает «включено ли», число — «по каким правилам
+       * сведены метрики». То же число публикует `basis.comparisonPolicyVersion`
+       * retry-disposition'а, и его смена стоит **re-diff'а**, а не пересъёмки.
+       */
+      comparisonPolicyVersion: captureV4Enabled() ? COMPARISON_POLICY_VERSION : 1,
+      /**
        * BR-03 (план 2026-08-08 §3): полный registry-resource barrier — фаза `registry` до первого
        * манифеста (реестр иконок темы), каналы `img-srcset`/псевдоэлементы/`font`/`icon-registry`,
        * ожидаемый манифест ассетов кандидата, пер-ресурсные записи контракта §6 и сужение вердикта
@@ -492,6 +500,13 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
        * на save (чтение stored-документов не гейтится никогда — канон `doc.surfaces`).
        */
       flowOverflowOwnershipV1: geometryOwnershipEnabled(),
+      /**
+       * BR-05/BR-10b: **версия политики владения геометрией** — `1` под волной и `null` доволново
+       * (до волны политики владения не существовало вовсе, и `0` был бы выдумкой). Число входит в
+       * вердиктный снимок случая, поэтому его смена стоит **recompute'а** без пересъёмки; то же
+       * значение публикует `basis.geometryOwnershipPolicyVersion` retry-disposition'а.
+       */
+      geometryOwnershipPolicyVersion: geometryOwnershipEnabled() ? GEOMETRY_OWNERSHIP_POLICY_VERSION : null,
       resourceBarrierV4: resourceBarrierV4Enabled(),
       /**
        * Фактическая версия политики барьера — **число**, а не факт: клиенту нужно знать, чем этот

@@ -80,18 +80,24 @@ services:
       # (`runtime_defaults_disabled` в accept-status); штатный откат компонента — републикация
       # исходника без `capabilities.runtimeSchemaDefaults`.
       EASYUI_RUNTIME_DEFAULTS_DISABLED: ${EASYUI_RUNTIME_DEFAULTS_DISABLED:-}
+      # BR-01 (план 2026-08-08 §1): единый резолвер схем published-компонентов
+      # (`features.prototypeSchemaResolverV2`, версия 2→1 под свитчём). Один тумблер на обе фазы
+      # (01a-фиксы H1/H2/H4 + 01b-граф) — включить «только 01a» средствами env невозможно.
+      # Дефолт волны — выключено (deploy all-off, §13 плана): включение — поставить `0` в env
+      # Dokploy (`${VAR:-1}` подставляет `1` и на пустое значение).
+      EASYUI_SCHEMA_RESOLVER_V2_DISABLED: ${EASYUI_SCHEMA_RESOLVER_V2_DISABLED:-1}
       # BR-06 (план 2026-08-08 §6): продолжение остановленного рана приёмки
       # (`POST /api/acceptance-runs/:id/resume`, `features.acceptanceResumeV1`). Гасит **только**
       # ручку: наблюдаемость волны — причина падения случая (`error_json`, миграция v37), шов
       # `allocate-renderer` и circuit breaker аллокации — работает всегда, это фиксы дефектов.
       # Rollback-window v37: пока откат образа возможен без восстановления тома — держать `1`.
-      EASYUI_ACCEPTANCE_RESUME_DISABLED: ${EASYUI_ACCEPTANCE_RESUME_DISABLED:-}
+      EASYUI_ACCEPTANCE_RESUME_DISABLED: ${EASYUI_ACCEPTANCE_RESUME_DISABLED:-1}
       # BR-10a (план 2026-08-08 §10): отпечаток блокера и read-only
       # `GET /api/acceptance-runs/:id/retry-disposition` (`features.blockerFingerprintV1`). Слой
       # целиком read-only — ни вердиктов, ни отпечатков случаев, ни `evidence_manifest_hash` он не
       # меняет, — поэтому тумблер безопасен в обе стороны: гаснут ручка (404) и поле
       # `blockerFingerprint` в ране, сводке и манифесте архива. Миграций у волны нет.
-      EASYUI_BLOCKER_FINGERPRINT_DISABLED: ${EASYUI_BLOCKER_FINGERPRINT_DISABLED:-}
+      EASYUI_BLOCKER_FINGERPRINT_DISABLED: ${EASYUI_BLOCKER_FINGERPRINT_DISABLED:-1}
       # BR-02 + BR-04 (план 2026-08-08 §2/§4): **общий** тумблер capture-группы
       # (`features.paintCapturePaddingV1` + `features.exactContentHugCanvasV1`). Одно значение на две
       # фичи — они делят одну зону (кадр капчура ↔ канва сравнения) и одно окно пересъёмки/re-diff'а.
@@ -103,7 +109,7 @@ services:
       # обратное включение возвращает их к доволновым отпечаткам. Персистируемых форм у волны две
       # (`paintPaddingPx`/`preloadAssets` в case-set): пока открыто окно отката нового образа —
       # не публиковать наборы с этими полями (старый образ ответит на них 422).
-      EASYUI_CAPTURE_V4_DISABLED: ${EASYUI_CAPTURE_V4_DISABLED:-}
+      EASYUI_CAPTURE_V4_DISABLED: ${EASYUI_CAPTURE_V4_DISABLED:-1}
       # BR-07 (план 2026-08-08 §7): атрибуция расхождения **по элементам**
       # (`features.visualAttributionV2`). Слой целиком **report-only**: карта элементов кадра
       # (`element-map.json`), owner-тоталы по полной diff-маске с честным `unknown`, кластеры §10
@@ -111,7 +117,7 @@ services:
       # сравнения. Ни один вердикт, отпечаток случая или `evidence_manifest_hash` от тумблера не
       # зависит, поэтому он безопасен в обе стороны и миграций у него нет. `1` — evidence и метрики
       # доволновые byte-for-byte.
-      EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED: ${EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED:-}
+      EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED: ${EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED:-1}
       # BR-07: профили политики рендерера (`features.rendererPolicyProfilesV2`, реестр —
       # `capabilities.acceptance.rendererPolicyProfiles`). **Отдельная ось от атрибуции именно
       # потому, что меняет promote-eligibility**: при снятом свитче визуальный гейт впервые
@@ -133,7 +139,7 @@ services:
       # `cases[].comparison.{ownership,subjectComponentId,dependencyPolicy}` в case-set: пока
       # открыто окно отката нового образа — не публиковать наборы с этими полями (старый образ
       # ответит на них `422` strict-схемой).
-      EASYUI_COMPARISON_OWNERSHIP_DISABLED: ${EASYUI_COMPARISON_OWNERSHIP_DISABLED:-}
+      EASYUI_COMPARISON_OWNERSHIP_DISABLED: ${EASYUI_COMPARISON_OWNERSHIP_DISABLED:-1}
       # BR-05 + BR-09 (план 2026-08-08 §5/§9): **общий** тумблер группы владения геометрией
       # (`features.geometryDecorationOwnershipV1` + `features.flowOverflowOwnershipV1`). Одно
       # значение на две фичи — обе меняют интерпретацию одних и тех же фактов замера (что входит в
@@ -151,7 +157,7 @@ services:
       # Персистируемых форм у волны две (`cases[].geometryOwnership` в case-set и
       # `overflowOwnership` в документе прототипа): пока открыто окно отката нового образа — не
       # публиковать наборы и документы с этими полями (старый образ ответит на них 422).
-      EASYUI_GEOMETRY_OWNERSHIP_DISABLED: ${EASYUI_GEOMETRY_OWNERSHIP_DISABLED:-}
+      EASYUI_GEOMETRY_OWNERSHIP_DISABLED: ${EASYUI_GEOMETRY_OWNERSHIP_DISABLED:-1}
       # BR-03 (план 2026-08-08 §3): **младший этаж** тумблера барьера ресурсов
       # (`features.resourceBarrierV4`). `1` — барьер остаётся включённым, но исполняется по политике
       # v3 **byte-for-byte**: без фазы `registry` (ожидание реестра иконок темы), без каналов
@@ -162,7 +168,7 @@ services:
       # (`policyProfileHash`, `readinessPolicyHash`, `rendererFingerprint`). Снятие свитча меняет
       # `readinessPolicyHash` — то есть стоит **пересъёмки** затронутых кейсов; смоук-ключ —
       # `acceptance.readinessPolicyVersion` (4) и `features.resourceBarrierPolicyVersion`.
-      EASYUI_RESOURCE_BARRIER_V4_DISABLED: ${EASYUI_RESOURCE_BARRIER_V4_DISABLED:-}
+      EASYUI_RESOURCE_BARRIER_V4_DISABLED: ${EASYUI_RESOURCE_BARRIER_V4_DISABLED:-1}
     expose:
       - "8787"
     volumes:

@@ -2408,11 +2408,24 @@ const retryDispositionBasisSchema = z.looseObject({
   readinessPolicyHash: z.string().nullable(),
   policyProfileHash: z.string(),
   caseFingerprintAlgoVersion: z.number(),
+  // ── BR-10b (план 2026-08-08 §10, форма basis фидбэка §13): версии политик волны. Все четыре —
+  // **производные** (собственных колонок у них нет), поэтому они отчёт «под какими политиками этот
+  // сервер судил бы ран сейчас», а не сохранённое состояние: в `changed[]` они не появляются
+  // никогда, зато их значение (и, через него, `blockerFingerprint`) меняется при снятии
+  // kill-switch'а волны — именно так агент узнаёт, что кэшированный блокер пора перечитать.
+  /** BR-01: контрактная версия резолвера схемы — 2 под волной, 1 под `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1`. Слоя отпечатка не имеет: кандидат приёмки резолвером не параметризован. */
+  schemaResolverVersion: z.number(),
+  /** BR-03: версия readiness-политики ПРОФИЛЯ РАНА — 4 / 3 (v4-свитч) / 1 (барьера нет); `null` — профиль неизвестен этому серверу. Кадровый слой (через `rendererFingerprint`). */
+  resourceBarrierPolicyVersion: z.number().nullable(),
+  /** BR-04: версия семантики сравнения — 2 под волной, 1 доволново. Слой сравнения (re-diff). */
+  comparisonPolicyVersion: z.number(),
+  /** BR-05: версия политики владения геометрией — 1 под волной, `null` доволново (политики не существовало). Вердиктный слой (recompute). */
+  geometryOwnershipPolicyVersion: z.number().nullable(),
 });
 
 export const acceptanceRetryDispositionContract = registerContract({
   method: "GET", path: "/api/acceptance-runs/{runId}/retry-disposition",
-  summary: "Answer, WITHOUT capturing a single pixel, whether repeating this run can produce a different verdict, and how deep the replay would have to go (`capabilities.features.blockerFingerprintV1`). The server recomputes the WOULD-BE case fingerprints of the same cases under its CURRENT state — with the same function the scheduler and the runner use — and compares them layer by layer with the fingerprints persisted on the run: nothing moved → disposition \"unchanged\" (do-not-retry); the verdict layer moved → \"recompute\"; the comparison layer moved → \"rediff\"; the frame layer moved → \"recapture\"; the component head no longer hashes to the candidate's sourceHash → \"rebuild\" (update-source), because the run was taken from source the author has already replaced. The run-level disposition is the MAXIMUM over cases, `changed[]`/`unchanged[]` name the basis fields, and `cases[]` carries the per-case verdict with the layers that moved. `blockerFingerprint` is `blk_<sha256>` over the canonicalized basis plus the SORTED terminal gate codes — neither runId nor timestamps enter the pre-image, so an unchanged blocker keeps its fingerprint across runs and across servers, and the same value is served by GET /api/acceptance-runs/{runId} and by the evidence manifest. When the basis cannot be completed — the candidate was evicted by TTL/GC, the case set is gone or no longer reconstructible, the policy profile is unknown to this server, or the case rows predate the fingerprint layers of migration v29 — the answer is a TYPED `disposition:\"unchanged\"` + `suggestedAction:\"do-not-retry\"` with `basisIncomplete` naming the reason, never a 500. `suggestedAction` is `update-source` for rebuild, `resume-run` when the run declared itself resumable (BR-06), `do-not-retry` when nothing changed, `new-run` otherwise. Optional `candidateId`/`caseSetId` query parameters are ASSERTIONS about the run, not filters: a mismatch is a typed 409 rather than silent agreement. The handle is strictly read-only (no-store): it creates no run, touches no state, and never writes to the CAS.",
+  summary: "Answer, WITHOUT capturing a single pixel, whether repeating this run can produce a different verdict, and how deep the replay would have to go (`capabilities.features.blockerFingerprintV1`). The server recomputes the WOULD-BE case fingerprints of the same cases under its CURRENT state — with the same function the scheduler and the runner use — and compares them layer by layer with the fingerprints persisted on the run: nothing moved → disposition \"unchanged\" (do-not-retry); the verdict layer moved → \"recompute\"; the comparison layer moved → \"rediff\"; the frame layer moved → \"recapture\"; the component head no longer hashes to the candidate's sourceHash → \"rebuild\" (update-source), because the run was taken from source the author has already replaced. The run-level disposition is the MAXIMUM over cases, `changed[]`/`unchanged[]` name the basis fields, and `cases[]` carries the per-case verdict with the layers that moved. `blockerFingerprint` is `blk_<sha256>` over the canonicalized basis plus the SORTED terminal gate codes — neither runId nor timestamps enter the pre-image, so an unchanged blocker keeps its fingerprint across runs and across servers, and the same value is served by GET /api/acceptance-runs/{runId} and by the evidence manifest. When the basis cannot be completed — the candidate was evicted by TTL/GC, the case set is gone or no longer reconstructible, the policy profile is unknown to this server, or the case rows predate the fingerprint layers of migration v29 — the answer is a TYPED `disposition:\"unchanged\"` + `suggestedAction:\"do-not-retry\"` with `basisIncomplete` naming the reason, never a 500. `suggestedAction` is `update-source` for rebuild, `resume-run` when the run declared itself resumable (BR-06), `do-not-retry` when nothing changed, `new-run` otherwise. Optional `candidateId`/`caseSetId` query parameters are ASSERTIONS about the run, not filters: a mismatch is a typed 409 rather than silent agreement. The handle is strictly read-only (no-store): it creates no run, touches no state, and never writes to the CAS. The `basis` also carries the four POLICY VERSIONS of the blocker-removal wave — `schemaResolverVersion` (BR-01), `resourceBarrierPolicyVersion` (BR-03), `comparisonPolicyVersion` (BR-04) and `geometryOwnershipPolicyVersion` (BR-05): they are DERIVED from this server's current state, not persisted on the run, so they never appear in `changed[]` (there is no stored value to compare them with, exactly as for `readinessPolicyHash`); what they do is name the policies a repeat would run under, and each of them enters exactly one fingerprint layer — barrier → frame (recapture), comparison → comparison (rediff), geometry ownership → verdict (recompute), while the schema resolver enters NONE (an acceptance candidate is one component's source and is not parameterised by the prototype schema resolver; only a moved component head produces `rebuild`). Flipping a wave kill-switch therefore changes that basis field and, with it, `blockerFingerprint` — a cached blocker must be re-read rather than trusted.",
   responseSchema: z.looseObject({
     runId: z.string(),
     blockerFingerprint: z.string().nullable(),
@@ -3698,6 +3711,13 @@ export const capabilitiesResponseSchema = z.object({
      */
     exactContentHugCanvasV1: z.boolean(),
     /**
+     * Версия семантики сравнения этого инстанса (BR-04/BR-10b): `2` — волна, `1` — доволновые
+     * правила под `EASYUI_CAPTURE_V4_DISABLED=1`. Пара к `exactContentHugCanvasV1` того же вида,
+     * что `resourceBarrierV4` ↔ `resourceBarrierPolicyVersion`: флаг говорит «включено», число —
+     * «по каким правилам сведены метрики». Смена стоит re-diff'а (слой сравнения), не пересъёмки.
+     */
+    comparisonPolicyVersion: z.number().int().positive(),
+    /**
      * Полный registry-resource barrier (план 2026-08-08 §3, BR-03): фаза `registry`, каналы
      * srcset/псевдоэлементов/шрифтов/`icon-registry`, ожидаемый манифест ассетов кандидата,
      * пер-ресурсные записи и сужение вердикта до `indeterminate` (`resource_barrier_incomplete`)
@@ -3721,6 +3741,13 @@ export const capabilitiesResponseSchema = z.object({
      * на записи документа с полем (чтение stored-документов не гейтится).
      */
     flowOverflowOwnershipV1: z.boolean(),
+    /**
+     * Версия политики владения геометрией (BR-05/BR-10b): `1` — волна, **`null`** — доволновое
+     * состояние под `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` (политики владения до волны не
+     * существовало вовсе, поэтому `0` был бы выдумкой). Входит в вердиктный снимок случая, поэтому
+     * её смена стоит recompute'а без пересъёмки.
+     */
+    geometryOwnershipPolicyVersion: z.number().int().positive().nullable(),
     resourceBarrierV4: z.boolean(),
     /** Фактическая версия политики барьера этого инстанса: `4` / `3` (v4-свитч) / `1` (барьера нет). */
     resourceBarrierPolicyVersion: z.number().int().positive(),

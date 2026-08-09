@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
+import { BARRIER_READINESS_POLICY_V3 } from "../../src/capture/readinessPolicy";
 import { migrate } from "../migrations";
 import { ApiError } from "../http";
 import { sha256 } from "../components/pipeline";
@@ -15,8 +16,8 @@ import { AcceptanceOrchestrator } from "./orchestrator";
 import { ACCEPTANCE_POLICIES, policyProfileHash } from "./policies";
 import { AcceptanceRepo, type AcceptanceRunRow, type CandidateRow } from "./repo";
 import {
-  BASIS_FIELDS, blockerCodesOf, blockerFingerprintEnabled, blockerFingerprintOf,
-  retryDispositionOf, runHasBlocker, storedBasisOf, suggestedActionOf,
+  BASIS_FIELDS, DERIVED_BASIS_FIELDS, WAVE_POLICY_LAYER, blockerCodesOf, blockerFingerprintEnabled,
+  blockerFingerprintOf, retryDispositionOf, runHasBlocker, storedBasisOf, suggestedActionOf,
 } from "./disposition";
 
 /**
@@ -388,7 +389,161 @@ test("продолжаемость читается из resume_json рана", 
   harness.db.close();
 });
 
-// ------------------------------------------------------------- 9. kill-switch
+// ------------------------------------------- 9. BR-10b: версии политик волны
+//
+// Предмет блока — **дифференциальный AC фидбэка §13**: «rollout EUI-BR-02…07 меняет только
+// соответствующие fingerprint fields и выдаёт правильную глубину retry». Проверяется по одному
+// тумблеру за тест, и каждый тест утверждает три вещи сразу:
+//
+//   1. в basis двинулось **ровно одно** поле (остальные — байт-в-байт прежние);
+//   2. глубина повтора — та, что объявлена в `WAVE_POLICY_LAYER` (кадр → recapture, сравнение →
+//      rediff, вердикт → recompute, «слоя нет» → unchanged);
+//   3. само поле версии в `changed[]` **не** появилось: сервер его не хранит, сравнивать не с чем,
+//      и назвать его «изменившимся» значило бы соврать (`DERIVED_BASIS_FIELDS`).
+
+/** Basis с подменённым одним полем — форма утверждения «двинулось ровно оно». */
+const basisWith = (
+  basis: ReturnType<typeof storedBasisOf>,
+  patch: Partial<ReturnType<typeof storedBasisOf>>,
+) => ({ ...basis, ...patch });
+
+/** Тумблер волны на время тела: env читается по месту вызова, поэтому рестарт не нужен. */
+function withSwitch<T>(name: string, body: () => T): T {
+  process.env[name] = "1";
+  try { return body(); } finally { delete process.env[name]; }
+}
+
+test("BR-10b: полный basis несёт четыре версии политик волны и объявляет их слои", async () => {
+  const harness = await setup();
+  const run = await queueRun(harness);
+  const view = dispositionOf(harness, run);
+
+  // Форма §13 фидбэка: версии — часть basis, а не отдельная ручка.
+  expect(view.basis).toMatchObject({
+    schemaResolverVersion: 2,
+    resourceBarrierPolicyVersion: 4,
+    comparisonPolicyVersion: 2,
+    geometryOwnershipPolicyVersion: 1,
+  });
+  // Все четыре объявлены полями basis (порядок `changed`/`unchanged` — тот же список).
+  for (const field of ["schemaResolverVersion", "resourceBarrierPolicyVersion", "comparisonPolicyVersion", "geometryOwnershipPolicyVersion"] as const) {
+    expect(BASIS_FIELDS).toContain(field);
+    expect(view.unchanged).toContain(field);
+  }
+  // Карта слоёв — контракт модуля: у резолвера слоя нет, у остальных трёх он свой и разный.
+  expect(WAVE_POLICY_LAYER).toEqual({
+    schemaResolverVersion: null,
+    resourceBarrierPolicyVersion: "frame",
+    comparisonPolicyVersion: "comparison",
+    geometryOwnershipPolicyVersion: "verdict",
+  });
+  harness.db.close();
+});
+
+test("BR-10b/BR-03: версия барьера падает до 3 и стоит пересъёмки, но в changed её нет", async () => {
+  const harness = await setup();
+  const run = await queueRun(harness);
+  const before = storedBasisOf(run, harness.repo.cases(run.run_id), harness.repo.candidate(harness.candidateId));
+
+  // Двойник `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`: свитч читается один раз на процесс и делает
+  // ровно это — подставляет профилю политику v3 byte-for-byte.
+  const view = withProfile((profile) => {
+    const restore = profile.readiness;
+    profile.readiness = BARRIER_READINESS_POLICY_V3;
+    return () => { profile.readiness = restore; };
+  }, () => dispositionOf(harness, run));
+
+  // Двинулись ровно два отчётных поля политики барьера — её версия и её хэш; ни кандидат, ни
+  // сохранённые агрегаты случаев в basis не поехали (basis остаётся отчётом о сохранённом).
+  expect(view.basis).toEqual(basisWith(before, {
+    resourceBarrierPolicyVersion: 3,
+    readinessPolicyHash: view.basis.readinessPolicyHash,
+  }));
+  expect(view.basis.readinessPolicyHash).not.toBe(before.readinessPolicyHash);
+  expect(view.disposition).toBe("recapture");
+  expect(view.cases.every((item) => item.layers.includes("frame"))).toBe(true);
+  // Кадр объяснён сохранёнными именами: отпечаток рендерера (политика — его вход) и хэш профиля.
+  expect(view.changed).toEqual(["rendererFingerprint", "policyProfileHash"]);
+  expect(view.changed).not.toContain("resourceBarrierPolicyVersion");
+  harness.db.close();
+});
+
+test("BR-10b/BR-04: версия сравнения падает до 1 и стоит ровно re-diff'а", async () => {
+  const harness = await setup();
+  const run = await queueRun(harness);
+  const before = storedBasisOf(run, harness.repo.cases(run.run_id), harness.repo.candidate(harness.candidateId));
+
+  const view = withSwitch("EASYUI_CAPTURE_V4_DISABLED", () => dispositionOf(harness, run));
+
+  expect(view.basis).toEqual(basisWith(before, { comparisonPolicyVersion: 1 }));
+  expect(view.disposition).toBe("rediff");
+  expect(view.suggestedAction).toBe("new-run");
+  // Слой сравнения — и только он: кадр не двигается, вердиктная политика не двигается.
+  expect(view.cases.every((item) => item.layers.join() === "comparison")).toBe(true);
+  expect(view.changed).toEqual(["comparisonFingerprint"]);
+  expect(view.changed).not.toContain("comparisonPolicyVersion");
+  harness.db.close();
+});
+
+test("BR-10b/BR-05: версия владения геометрией исчезает и стоит recompute'а, не пересъёмки", async () => {
+  const harness = await setup();
+  const run = await queueRun(harness);
+  const before = storedBasisOf(run, harness.repo.cases(run.run_id), harness.repo.candidate(harness.candidateId));
+
+  const view = withSwitch("EASYUI_GEOMETRY_OWNERSHIP_DISABLED", () => dispositionOf(harness, run));
+
+  // `null`, а не `0`: доволново политики владения не существовало вовсе — ровно это и кодирует
+  // условный спред вердиктного снимка.
+  expect(view.basis).toEqual(basisWith(before, { geometryOwnershipPolicyVersion: null }));
+  expect(view.disposition).toBe("recompute");
+  expect(view.cases.every((item) => item.layers.join() === "verdict")).toBe(true);
+  // Профиль приёмки при этом не трогали — значит `policyProfileHash` обязан остаться прежним:
+  // авто-правило владения меняет прочтение фактов, а не политику рана.
+  expect(view.changed).toEqual(["verdictPolicyFingerprint"]);
+  expect(view.changed).not.toContain("policyProfileHash");
+  harness.db.close();
+});
+
+test("BR-10b/BR-01: резолвер схемы меняет basis, но не даёт ни одного слоя — глубина остаётся unchanged", async () => {
+  const harness = await setup();
+  const run = await queueRun(harness);
+  const rows = harness.repo.cases(run.run_id);
+  const before = storedBasisOf(run, rows, harness.repo.candidate(harness.candidateId));
+
+  const view = withSwitch("EASYUI_SCHEMA_RESOLVER_V2_DISABLED", () => dispositionOf(harness, run));
+
+  expect(view.basis).toEqual(basisWith(before, { schemaResolverVersion: 1 }));
+  // Честный маппинг: кандидат приёмки — исходник одного компонента, резолвером прототипных пинов
+  // он не параметризован, поэтому ни кадр, ни канва, ни вердикт от тумблера не зависят. Rebuild
+  // появился бы только при смене самого резолва кандидата, а он наблюдаем `candidateSourceHash`.
+  expect(view.disposition).toBe("unchanged");
+  expect(view.changed).toEqual([]);
+  expect(view.suggestedAction).toBe("do-not-retry");
+  harness.db.close();
+});
+
+test("BR-10b: смена версии политики двигает отпечаток блокера — кэшированный блокер обязан перечитаться", async () => {
+  const harness = await setup();
+  const run = await queueRun(harness);
+  harness.repo.sweepNonTerminalRuns();
+  const interrupted = harness.repo.requireRun(run.run_id);
+  const rows = () => harness.repo.cases(run.run_id);
+  const candidate = harness.repo.candidate(harness.candidateId);
+
+  const base = blockerFingerprintOf(interrupted, rows(), candidate);
+  expect(base).toMatch(/^blk_[0-9a-f]{64}$/);
+  // Каждая из четырёх версий входит в пре-образ отпечатка: иначе rollout волны был бы невидим
+  // агенту, кэширующему блокеры по отпечатку, и «do-not-retry» пережил бы включение фичи.
+  for (const name of ["EASYUI_SCHEMA_RESOLVER_V2_DISABLED", "EASYUI_CAPTURE_V4_DISABLED", "EASYUI_GEOMETRY_OWNERSHIP_DISABLED"]) {
+    expect(withSwitch(name, () => blockerFingerprintOf(interrupted, rows(), candidate))).not.toBe(base);
+  }
+  // …а производные поля по-прежнему не попадают в `changed`: их не с чем сравнивать.
+  const view = dispositionOf(harness, interrupted);
+  for (const field of DERIVED_BASIS_FIELDS) expect(view.changed).not.toContain(field);
+  harness.db.close();
+});
+
+// ------------------------------------------------------------ 10. kill-switch
 
 test("kill-switch читается по месту вызова и гасит отпечаток", async () => {
   const harness = await setup();

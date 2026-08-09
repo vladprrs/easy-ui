@@ -24,9 +24,15 @@
  *    `GET /retry-disposition` — чистое чтение (`no-store`), и всё, что модуль умеет делать с БД, —
  *    это `SELECT` через уже существующие read-хелперы репозитория.
  *
- * Чего модуль **не** делает (BR-10b, волна V5): не добавляет в basis `schemaResolverVersion`,
- * `resourceBarrierPolicyVersion` и `capturePolicyVersion` — эти величины появятся вместе со своими
- * фичами, и объявлять их сейчас значило бы хэшировать константу ради вида.
+ * **BR-10b (волна V5)** дополнил basis четырьмя версиями политик волны — `schemaResolverVersion`,
+ * `resourceBarrierPolicyVersion`, `comparisonPolicyVersion`, `geometryOwnershipPolicyVersion`.
+ * Все четыре — **производные**, а не сохранённые (собственных колонок у них нет), поэтому у них
+ * тот же статус, что у `geometryContractVersion` и `readinessPolicyHash`: они **отчёт** о том, под
+ * какими политиками этот сервер судил бы ран сейчас, и в `changed[]` не попадают никогда (см.
+ * `DERIVED_BASIS_FIELDS` — там же написано, почему это не пропуск, а единственная честная форма).
+ * Наблюдаемость включения волны они дают через **значение**: смена тумблера меняет ровно своё
+ * поле basis, а глубину повтора называют слои — и это проверяется дифференциально
+ * (`retry-disposition.test.ts`, §BR-10b).
  */
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
@@ -41,6 +47,11 @@ import {
   CASE_FINGERPRINT_ALGO_VERSION, caseFingerprintsOf, readinessPolicyHashOf,
   type CaseSurface, type FieldLayer,
 } from "./ids";
+import { captureV4Enabled, COMPARISON_POLICY_VERSION } from "../capture/captureV4";
+import { GEOMETRY_OWNERSHIP_POLICY_VERSION, geometryOwnershipEnabled } from "../capture/geometryOwnership";
+import {
+  LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION, PROTOTYPE_SCHEMA_RESOLVER_VERSION, schemaResolverV2Enabled,
+} from "../components/resolvedGraph";
 import { effectivePolicy } from "./orchestrator";
 import { acceptancePolicy, policyProfileHash, type AcceptancePolicy } from "./policies";
 import { isTerminalRunStatus, type AcceptanceCaseRow, type AcceptanceRepo, type AcceptanceRunRow, type CandidateRow } from "./repo";
@@ -93,9 +104,74 @@ export const BASIS_FIELDS = [
   "readinessPolicyHash",
   "policyProfileHash",
   "caseFingerprintAlgoVersion",
+  // ── BR-10b (V5): версии политик волны. Порядок — по слоям, которые они описывают: резолвер
+  // (ни одного слоя), барьер (кадр), сравнение (comparison), владение геометрией (вердикт).
+  "schemaResolverVersion",
+  "resourceBarrierPolicyVersion",
+  "comparisonPolicyVersion",
+  "geometryOwnershipPolicyVersion",
 ] as const;
 
 export type BasisField = (typeof BASIS_FIELDS)[number];
+
+/**
+ * Поля basis, которые сервер **не хранит**, а выводит из текущего кода и профиля рана.
+ *
+ * Такое поле не может попасть в `changed[]` **by construction**, и это не пропуск, а единственная
+ * честная форма: сравнивать производное значение было бы сравнением значения с самим собой (тот же
+ * аргумент, что у `readinessPolicyHash`, см. `retryDispositionOf`). Наблюдаемость у них другая и
+ * не менее сильная:
+ *
+ * - **значение** поля говорит, под какой политикой ран пошёл бы сейчас; после снятия kill-switch'а
+ *   волны оно меняется, и вместе с ним меняется `blockerFingerprint` — то есть агент, кэшировавший
+ *   блокер, обязан перечитать его, а не поверить старому «do-not-retry»;
+ * - **глубину** повтора называют слои (`cases[].layers`) и сохранённые агрегаты
+ *   (`rendererFingerprint`/`comparisonFingerprint`/`verdictPolicyFingerprint`), потому что каждая
+ *   из версий входит в свой отпечаток и двигает именно его.
+ *
+ * `geometryContractVersion` производен ровно так же, но в этот список **сознательно не включён**:
+ * он единственный кадровый вход basis, у которого нет ни одного сохранённого имени-заместителя,
+ * поэтому необъяснённое кадровое расхождение атрибутируется именно ему (см. `retryDispositionOf`).
+ * У версий волны заместители есть — `rendererFingerprint` у барьера, `comparisonFingerprint` у
+ * сравнения, `verdictPolicyFingerprint` у владения геометрией, — и называть вместо них версию
+ * значило бы гадать о причине, а не сообщать факт.
+ */
+export const DERIVED_BASIS_FIELDS = [
+  "readinessPolicyHash",
+  "schemaResolverVersion",
+  "resourceBarrierPolicyVersion",
+  "comparisonPolicyVersion",
+  "geometryOwnershipPolicyVersion",
+] as const satisfies readonly BasisField[];
+
+/**
+ * Слой отпечатка, в который входит версия политики волны, — то есть **глубина**, которой стоит её
+ * переключение. Таблица декларативна и проверяется дифференциальным тестом: переключение тумблера
+ * обязано двинуть ровно объявленный здесь слой и ни один другой.
+ *
+ * `schemaResolverVersion` — единственная версия волны **без слоя**, и это содержательный факт, а не
+ * дыра. Резолвер схемы published component работает на путях save/readiness прототипа: он решает,
+ * какая публикация встанет в пин документа и какой схемой судится prop. Кандидат приёмки — это
+ * **исходник одного компонента**, и его резолв от тумблера не зависит: ни кадр, ни канва сравнения,
+ * ни вердиктный снимок случая резолвером не параметризованы. Поэтому переключение резолвера само по
+ * себе не даёт ни recompute, ни rebuild — `rebuild` появится только если изменится сам резолв
+ * кандидата, а он наблюдаем ровно одним способом, который у disposition уже есть: `sourceHash`
+ * головы компонента против `sourceHash` кандидата. Версия остаётся в basis, чтобы отпечаток блокера
+ * различал «422 неизвестного prop'а получен доволновым резолвером» и «…получен резолвером v2».
+ */
+export const WAVE_POLICY_LAYER: Readonly<Record<
+  "schemaResolverVersion" | "resourceBarrierPolicyVersion" | "comparisonPolicyVersion" | "geometryOwnershipPolicyVersion",
+  Exclude<FieldLayer, "report-only"> | null
+>> = Object.freeze({
+  // BR-01: не входит ни в один отпечаток случая (см. выше).
+  schemaResolverVersion: null,
+  // BR-03: версия readiness-политики профиля → `readinessPolicyHash` → `rendererFingerprint` → кадр.
+  resourceBarrierPolicyVersion: "frame",
+  // BR-04: условный вход `comparisonFingerprint` (`captureV4.ts`).
+  comparisonPolicyVersion: "comparison",
+  // BR-05: условный вход `VerdictPolicySnapshot` (`geometryOwnership.ts`).
+  geometryOwnershipPolicyVersion: "verdict",
+});
 
 /**
  * Basis блокера — **сохранённое** состояние входов вердикта (форма §13 фидбэка).
@@ -123,6 +199,31 @@ export interface BlockerBasis {
   readinessPolicyHash: string | null;
   policyProfileHash: string;
   caseFingerprintAlgoVersion: number;
+  /**
+   * BR-01/BR-10b: контрактная версия резолвера схемы published component — `2` под волной, `1` под
+   * `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1`. Слоя у неё нет (см. `WAVE_POLICY_LAYER`).
+   */
+  schemaResolverVersion: number;
+  /**
+   * BR-03/BR-10b: версия readiness-политики **профиля рана** — `4` под волной, `3` под
+   * `EASYUI_RESOURCE_BARRIER_V4_DISABLED=1`, доволновое значение профиля (`default-v1` → `1`) при
+   * выключенном барьере целиком. `null` — профиль этому серверу неизвестен (тот же случай, что у
+   * `readinessPolicyHash`: выдумывать число вместо признания незнания нельзя).
+   */
+  resourceBarrierPolicyVersion: number | null;
+  /**
+   * BR-04/BR-10b: версия семантики сравнения — `2` под волной, `1` под
+   * `EASYUI_CAPTURE_V4_DISABLED=1`. Доволновое значение именно `1`, а не `null`: сравнение было и
+   * до волны, просто было неверсионированным, и «версии нет» читалось бы как «сравнения нет».
+   */
+  comparisonPolicyVersion: number;
+  /**
+   * BR-05/BR-10b: версия политики владения геометрией — `1` под волной и **`null`** под
+   * `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1`. Здесь `null`, а не `0`: до волны никакой политики
+   * владения не существовало вовсе, и это ровно то, что кодирует условный спред в
+   * `VerdictPolicySnapshot` (поля в пре-образе нет).
+   */
+  geometryOwnershipPolicyVersion: number | null;
 }
 
 /**
@@ -199,6 +300,16 @@ export function storedBasisOf(
     readinessPolicyHash: profile ? readinessPolicyHashOf(profile.readiness) : null,
     policyProfileHash: run.policy_profile_hash,
     caseFingerprintAlgoVersion: CASE_FINGERPRINT_ALGO_VERSION,
+    // ── BR-10b: версии политик волны. Все четыре выводятся из текущего состояния сервера — у них
+    // нет колонок, и притворяться, что это «сохранённое», модуль не будет. Читаются они **по месту
+    // вызова**, поэтому смена тумблера видна сразу и без рестарта (кроме барьера, чья политика по
+    // построению фиксируется на процесс — она берётся из профиля рана).
+    schemaResolverVersion: schemaResolverV2Enabled()
+      ? PROTOTYPE_SCHEMA_RESOLVER_VERSION
+      : LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION,
+    resourceBarrierPolicyVersion: profile ? profile.readiness.version : null,
+    comparisonPolicyVersion: captureV4Enabled() ? COMPARISON_POLICY_VERSION : 1,
+    geometryOwnershipPolicyVersion: geometryOwnershipEnabled() ? GEOMETRY_OWNERSHIP_POLICY_VERSION : null,
   };
 }
 
@@ -476,6 +587,11 @@ export function retryDispositionOf(input: RetryDispositionInput): RetryDispositi
   if (sortedDistinct(wouldBeVerdict).join(" ") !== basis.verdictPolicyFingerprint.join(" ")) {
     changed.add("verdictPolicyFingerprint");
   }
+  // BR-10b: ни одно производное поле (`DERIVED_BASIS_FIELDS`) в `changed` не попадает — ниже
+  // объяснено, почему на примере `readinessPolicyHash`, и ровно тот же аргумент держит четыре
+  // версии политик волны: сравнивать их не с чем, сервер их не хранит. Их изменение читается по
+  // **значению** basis (и по сменившемуся `blockerFingerprint`), а глубина повтора приходит слоями.
+  //
   // `readinessPolicyHash` в `changed` не появляется **никогда**, и это не пропуск: собственного
   // хэша readiness строка рана не хранит, а выводится он из профиля — то есть из текущего кода, и
   // сравнивать его было бы сравнением значения с самим собой. Смена readiness видна двумя другими
@@ -503,8 +619,8 @@ export function retryDispositionOf(input: RetryDispositionInput): RetryDispositi
  * доиграть его, и он дешевле нового рана даже когда basis не двигался), и только потом обычная
  * пара «ничего не изменилось ⇒ не ретраить / изменилось ⇒ новый ран».
  *
- * `resume-run` формально принадлежит BR-10b (V5), но отдаётся уже сейчас: `resume_json` появился в
- * BR-06, ручка `/resume` работает, и молчать о ней ради номера волны значило бы советовать агенту
+ * `resume-run` — пункт BR-10b (V5); он отдавался уже с BR-10a, потому что `resume_json` появился в
+ * BR-06 вместе с ручкой `/resume`, и молчать о ней ради номера волны значило бы советовать агенту
  * более дорогой путь при существующем дешёвом.
  */
 export function suggestedActionOf(disposition: RetryDispositionKind, resumable: boolean): RetrySuggestedAction {

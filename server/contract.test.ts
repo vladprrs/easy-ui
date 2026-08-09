@@ -793,11 +793,16 @@ describe("route contracts", () => {
       // общим `EASYUI_CAPTURE_V4_DISABLED=1` — отдельный тест ниже.
       paintCapturePaddingV1: true,
       exactContentHugCanvasV1: true,
+      // BR-10b: «включено ли» и «по каким правилам сведено» — разные вопросы, поэтому рядом с
+      // парой флагов стоит число версии сравнения (доволновое значение под capture-свитчём — 1).
+      comparisonPolicyVersion: 2,
       // BR-03 (план 2026-08-08 §3): барьер волны и **фактическая** версия политики этого инстанса.
       // Пара, а не один флаг: «включено» и «чем снято» — разные вопросы (под v4-свитчём флаг
       // false, а версия честно 3).
       geometryDecorationOwnershipV1: true,
       flowOverflowOwnershipV1: true,
+      // BR-10b: версия политики владения геометрией — вердиктный вход; доволново её нет вовсе.
+      geometryOwnershipPolicyVersion: 1,
       resourceBarrierV4: true,
       resourceBarrierPolicyVersion: 4,
       renderStatus: true,

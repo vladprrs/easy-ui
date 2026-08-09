@@ -117,6 +117,59 @@ No new telemetry was built — every number below comes out of data that already
 
 "Premature publications = 0" has no server-side proxy and is measured by hand off the coordinator's `BUILD_ORDER.md` (share of lanes where a leaf was published only to accept its parent).
 
+### Wave EUI-BR (blocker removal, plan `docs/plans/2026-08-08-blocker-removal-eui-br.md`)
+
+> **Not deployed yet.** The whole wave lives on branch `wave/eui-br`; the single merge into `main` (= auto-deploy) happens **after the v32–v36 rollback window is closed**, or on an explicit instruction. Release package for the migration coordinator: `docs/EASYUI_BLOCKER_REMOVAL_RELEASE_PACKAGE.md`.
+
+One migration (**v37**, BR-06) and **nine kill-switches**. The wave ships **all-off**: every switch is set to `1` in the Dokploy env at deploy time and is cleared one at a time afterwards. There is no staging — the ordered clearing below *is* the canary, and each step is a `redeploy` without a rebuild.
+
+**Compose defaults are OFF (`:-1`) for all nine wave switches** — the plain merge deploys all-off with no Dokploy prep. To *enable* a step, set its variable to `0` in the Dokploy env (an empty value does **not** enable: `${VAR:-1}` substitutes `1` for both unset and empty). To roll a step back, set it back to `1` (or remove the override).
+
+**Deploy all-off, then clear one switch at a time.** After every step: `GET /api/capabilities` with a session cookie (see above) and check the named smoke key; the rollback of a step is putting its switch back.
+
+| # | Step | Switch to clear | Smoke key | Cost |
+|---|---|---|---|---|
+| 0 | deploy all-off | — | every wave flag `false`; `acceptance.readinessPolicyVersion: 3`, `features.prototypeSchemaResolverVersion: 1`, `features.comparisonPolicyVersion: 1`, `features.geometryOwnershipPolicyVersion: null`, `acceptance.geometryContractVersion: 2` | none — the image must be indistinguishable from the pre-wave one (proved by `server/kill-switch-matrix.test.ts`) |
+| 1 | BR-10a/10b — blocker fingerprint + retry disposition | `EASYUI_BLOCKER_FINGERPRINT_DISABLED` | `features.blockerFingerprintV1: true`; `GET /api/acceptance-runs/<terminal run>/retry-disposition` answers 200 | read-only, no invalidation. First, so every later step can be checked with `driver.mjs retry-disposition` |
+| 2 | BR-01a **and BR-01b** — schema resolver | `EASYUI_SCHEMA_RESOLVER_V2_DISABLED` | `features.prototypeSchemaResolverV2: true`, `prototypeSchemaResolverVersion: 2` | save/readiness path of **all** documents. **Trap: 01a and 01b share one switch** — the plan's "01a early, 01b late" is not achievable by env, only by build, so this step ships the full resolver. Verify with a save of a composition document + `GET …/render-status` naming the same `resolvedVersion`/`sourceHash`/`propsSchemaHash` |
+| 3 | BR-06 — resumable acceptance | `EASYUI_ACCEPTANCE_RESUME_DISABLED` | `features.acceptanceResumeV1: true`; `POST /acceptance-runs/<terminal>/resume` → typed `409 run_not_resumable` | v37 columns only; no fingerprint moves |
+| 4 | **Window 1 — re-capture.** BR-02+BR-04 (capture group) and BR-03 (barrier v4) | `EASYUI_CAPTURE_V4_DISABLED`, then `EASYUI_RESOURCE_BARRIER_V4_DISABLED` (**restart required**) | `features.paintCapturePaddingV1/exactContentHugCanvasV1: true`, `comparisonPolicyVersion: 2`; then `resourceBarrierV4: true`, `resourceBarrierPolicyVersion: 4` **and** `acceptance.readinessPolicyVersion: 4` | capture: **re-diff** of every case (comparison layer). Barrier: **full re-capture** of the acceptance corpus — the readiness policy is an input of `readinessPolicyHash`/`policyProfileHash`/`rendererFingerprint`. Do the go/no-go below **before** this step |
+| 5 | **Window 2 — geometry semantics.** BR-05+BR-09 | `EASYUI_GEOMETRY_OWNERSHIP_DISABLED` | `features.geometryDecorationOwnershipV1/flowOverflowOwnershipV1: true`, `geometryOwnershipPolicyVersion: 1` | **recompute** (verdict layer), not a re-capture: the auto decoration rule changes the reading of facts, not a single pixel. A pre-wave frame that lacks `preTransformBounds` refuses recompute and honestly asks for a re-capture of that case |
+| 6 | BR-07 attribution (S1 + element-level ownership) | `EASYUI_VISUAL_ATTRIBUTION_V2_DISABLED` | `features.visualAttributionV2: true`; `element-map.json` appears in evidence | report-only layer: no verdict depends on it |
+| 7 | BR-07 renderer policy profiles — **changes promote-eligibility** | `EASYUI_RENDERER_POLICY_PROFILES_DISABLED` | `features.rendererPolicyProfilesV2: true`, `acceptance.promotionPolicyProfiles` gains `default-v1-exceptions`, `acceptance.rendererPolicyProfiles[]` non-empty | **the only step that widens the set of promotable runs** (`pass_with_exceptions`). Its own axis, its own window: clear it separately and audit what became promotable |
+| 8 | BR-08 comparison ownership (subject/integration) | `EASYUI_COMPARISON_OWNERSHIP_DISABLED` | `features.comparisonOwnershipV1: true` | comparison layer, and only for case-sets that declare `comparison.ownership` |
+
+**Planned-but-superseded: there is no `CASE_FINGERPRINT_ALGO_VERSION` bump.** §13 of the plan asked for 7→8 in window 1 as the anti-silent-reuse mechanism. The implementation replaced it with two **conditional** per-layer versions — `comparisonPolicyVersion` (BR-04, comparison layer) and `geometryOwnershipPolicyVersion` (BR-05, verdict layer). The result is strictly better and must not be "fixed" back: an ALGO bump invalidates reuse for the **whole** corpus including cases the wave never touches, whereas the conditional inputs move exactly the cases that are now judged by new rules. `CASE_FINGERPRINT_ALGO_VERSION` stays **7**.
+
+**Rollback window of the new persisted forms** (the window is "the image can still be rolled back without restoring the volume"). Migration **v37** (BR-06) adds `acceptance_cases.error_json`, `acceptance_runs.resumed_from_run_id/attempt/resume_json` and a partial index — additive columns, so a rolled-back image still reads the rows and only loses the lineage.
+
+| Form | Appears with | Forbidden while the window is open | Held off by |
+|---|---|---|---|
+| case-set with `cases[].paintPaddingPx` / `cases[].preloadAssets` | BR-02 / BR-03 | do not publish such manifests — the old image answers `422 validation_failed` (strictObject), and a set published in the window becomes unrepublishable after a rollback | `EASYUI_CAPTURE_V4_DISABLED=1` (`422 capture_padding_disabled` on `case-sets put`) |
+| case-set with `comparison.ownership`/`subjectComponentId`/`dependencyPolicy` | BR-08 | same | `EASYUI_COMPARISON_OWNERSHIP_DISABLED=1` |
+| **document** with `elements[].overflowOwnership` (and the composition layout token) | BR-09 | **write only after the window closes** — the old server cannot parse the revision at all (precedent: `region`). Reads are never gated | `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` (`422 flow_overflow_ownership_disabled` on save) |
+| definition meta with `geometryOwnership` (case-set declarations) | BR-05 | do not publish components/manifests carrying the declaration in the window | `EASYUI_GEOMETRY_OWNERSHIP_DISABLED=1` (`422 geometry_ownership_disabled`) |
+| v37 lineage rows (resume) | BR-06 | do not run `resume` in the window — the columns survive a rollback, the lineage does not | `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` |
+
+**Two-push corpus gate arming.** Any change that moves `rendererFingerprint` (window 1 is exactly that) must go through the two-push procedure, not a single push:
+
+1. **push 1** — the change lands with the `renderer-corpus` gate in **bootstrap** mode: it compares nothing and only records the new expectations as a CI artifact;
+2. review the bootstrap artifact by hand — diff the pixel-sha of the old and new expectations and confirm every moved case has a reason;
+3. **adopt** the expectations in a separate commit;
+4. **push 2** — the gate is armed and now actually compares.
+
+**Deploying is forbidden while the job summary still carries `::warning:: bootstrap`** — an unarmed gate proves nothing, and shipping under it converts a review step into a silent adopt.
+
+**Family rule (unchanged canon of the 2026-08-07 wave, extended by this one).** A family is promoted **wholly from pre-wave artifacts, or wholly re-built** — never half of each. Mixed sets refuse with `422 acceptance_renderer_mismatch`. This wave adds a second boundary of the same kind: window 1 moves the **re-diff** boundary (`comparisonPolicyVersion`), so a family whose cases were partly judged under `comparisonPolicyVersion: 1` and partly under `2` is mixed even though its renderer never moved. A pre-deploy audit of mixed families on the restored volume copy is a **go/no-go** step, not paperwork. `EASYUI_PROMOTE_POLICY_STRICT` stays off for the whole re-capture window (same argument as the 2026-08-07 wave: `policyProfileHash` and `rendererFingerprint` move on two independent axes).
+
+**Backup before the merge.** `.backups/prod-eui-br-<YYYYMMDD>/` by the current canon — **no SSH**: `GET /api/admin/db-snapshot` with an admin session (a `VACUUM INTO` standalone file, no `-wal`/`-shm` needed) plus a per-asset pull of `GET /api/assets/:id` for every id in the snapshot's `assets` table (verify sha256). The same snapshot is the `--db` input of the pre-deploy audits. Note the logical-export trap: bulk `GET /api/bundles/export` refuses wholesale with `422 prototype_head_tracking` while the caller owns any `track:"head"` document.
+
+**Go/no-go before window 1:**
+
+- **Re-capture cost.** Estimate on the restored prod copy, not by guess: `POST /api/prototypes/:id/snap-plan` and the `impact` verb say how many cases/screens a barrier switch actually re-captures. Barrier v4 invalidates the **whole** acceptance corpus by construction — the number to produce is "how many cases × ~6 s + barrier", checked against `runDeadlineMs` (30 min per run) so that a family still fits one run.
+- **Barrier cost per case — GO on the V0 measurement (V0-D5, real chromium):** the widened crawl costs **+7…32 ms/case** against the 2000 ms/case gate (a pessimistic upper bound of 0.12 s/case at the retained cap of 400 elements). The number was measured on the diagnostic fixture, **not** on the real cascade, so it must be re-measured end-to-end (`settleResourceBarrier` with the `registry` phase) at window 1 before the switch is cleared. Hold the step if a case pays more than ~2 s.
+- **`retry-disposition` as the step's own check.** After each step, ask a terminal pre-wave run: `node .claude/skills/author/driver.mjs retry-disposition <runId>`. The expected answer is exactly the invalidation the step promises — `rediff` after capture-v4, `recapture` after barrier-v4, `recompute` after geometry-ownership, `unchanged` after the read-only steps. A step that moves more than it promised is visible here before any corpus is spent.
+
 ## Manual deploy / redeploy (no new commit)
 
 ```bash
