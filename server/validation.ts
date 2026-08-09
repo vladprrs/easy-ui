@@ -10,6 +10,38 @@ import { collectCompositionRefs, expandCompositions, type CompositionCatalogEntr
 import { resolveCompositionPins, type ComponentDependencyPin, type CompositionDependencyPin } from "./repos/compositions";
 import { docSurfaces, surfaceDesignSystem, surfaceOf } from "../src/prototype/surfaces";
 import type { ComponentLayout } from "../src/designSystems/types";
+import { COMPOSITION_KEY_SEPARATOR } from "../src/catalog/hostPrimitives/composition.definition";
+import { canonicalStringify } from "../src/capture/canonicalJson";
+import { currentCatalogRevision } from "./migrationRunner";
+import type { ComponentSchemaContext } from "../src/prototype/validate";
+
+/**
+ * Kill-switch BR-01a (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §1):
+ * `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` возвращает **все четыре** фикса волны в доволновое
+ * состояние byte-for-byte:
+ *
+ * 1. composition-пины снова применяются по имени ко всему документу (H1);
+ * 2. readiness снова резолвит определения по нераскрытому документу (H2);
+ * 3. `headPin` снова резолвит голову без фильтра дизайн-системы (H4);
+ * 4. неизвестный prop снова даёт нетипизированный issue без диагностического контекста.
+ *
+ * Env читается по месту вызова (прецедент `sourcePackageEnabled`), поэтому параметр `raw`
+ * существует для тестов и переключение не требует рестарта процесса.
+ */
+export const schemaResolverV2Enabled = (raw: string | undefined = process.env.EASYUI_SCHEMA_RESOLVER_V2_DISABLED): boolean =>
+  raw !== "1";
+
+/** Версия контракта резолвера схемы, публикуемая в `/api/capabilities` (фидбэк §4). */
+export const PROTOTYPE_SCHEMA_RESOLVER_VERSION = 2;
+export const LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION = 1;
+
+/**
+ * `422 component_pin_conflict` (BR-01a): один тип нужен документу в двух версиях — раскрытие
+ * композиции пинует @M, авторский элемент вне композиции требует активную @N. Карта определений
+ * name-keyed (`components.name` глобально UNIQUE), двух схем одного имени в ней не выразить,
+ * поэтому единственный честный исход — типизированный отказ с обеими версиями и путями.
+ */
+export const COMPONENT_PIN_CONFLICT_CODE = "component_pin_conflict";
 
 // Walks every element prop looking for {"$asset":"<id>"} directives, returning the referenced ids.
 export function collectAssetIds(doc:PrototypeDoc):string[] {
@@ -170,6 +202,39 @@ export function themesForDoc(db:Database,doc:PrototypeDoc):Record<string,{fonts?
 }
 
 export type ComponentPin={id:string;name:string;version:number;bundleHash:string;sourcePath:string};
+
+type PublishRow={id:string;name:string;version:number;rev:number;bundleHash:string;source:string;sourceHash:string|null;definitionMeta:string|null};
+
+/** Ключи, которые схема props компонента действительно принимает (`acceptedKeys` фидбэка §4). */
+function acceptedPropKeys(definitionMeta:string|null,definition:ComponentDefinition|undefined):string[] {
+  const fromJsonSchema=(()=>{
+    if(!definitionMeta) return null;
+    try {
+      const meta=JSON.parse(definitionMeta) as {propsJsonSchema?:unknown};
+      const schema=meta.propsJsonSchema;
+      if(!schema||typeof schema!=="object"||Array.isArray(schema)) return null;
+      const properties=(schema as {properties?:unknown}).properties;
+      if(!properties||typeof properties!=="object"||Array.isArray(properties)) return null;
+      return Object.keys(properties as Record<string,unknown>).sort();
+    } catch { return null; }
+  })();
+  if(fromJsonSchema) return fromJsonSchema;
+  // Фолбэк — живая zod-схема, по которой валидация и отвергла prop (у неё shape есть всегда,
+  // когда определение объявлено объектом; иначе честный пустой список).
+  const shape=(definition?.props as {shape?:unknown}|undefined)?.shape;
+  if(shape&&typeof shape==="object"&&!Array.isArray(shape)) return Object.keys(shape as Record<string,unknown>).sort();
+  return [];
+}
+
+/** `propsSchemaHash` — sha256 канонизированного `definition_meta.propsJsonSchema`; `null` при отсутствии. */
+export function propsSchemaHashOf(definitionMeta:string|null):string|null {
+  if(!definitionMeta) return null;
+  try {
+    const meta=JSON.parse(definitionMeta) as {propsJsonSchema?:unknown};
+    if(meta.propsJsonSchema===undefined||meta.propsJsonSchema===null) return null;
+    return new Bun.CryptoHasher("sha256").update(canonicalStringify(meta.propsJsonSchema)).digest("hex");
+  } catch { return null; }
+}
 /**
  * Снимок определений документа (план multi-surface-flows §4, «резолв компонентов при сохранении»).
  *
@@ -181,31 +246,73 @@ export type ComponentPin={id:string;name:string;version:number;bundleHash:string
  * Документ без `surfaces` даёт ровно одну группу (все экраны, ДС документа) — поведение,
  * порядок пинов и содержимое `definitions` байт-в-байт как раньше.
  */
-export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:string):Promise<{definitions:Record<string,ComponentDefinition>;pins:ComponentPin[];definitionsBySurface:Record<string,Record<string,ComponentDefinition>>}> {
+export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:string):Promise<{definitions:Record<string,ComponentDefinition>;pins:ComponentPin[];definitionsBySurface:Record<string,Record<string,ComponentDefinition>>;componentMeta:Record<string,ComponentSchemaContext>}> {
   const surfaces=docSurfaces(doc);
   const compositionPins=compositionComponentPins.get(doc);
+  const resolverV2=schemaResolverV2Enabled();
   const pins:ComponentPin[]=[]; const pinnedIds=new Set<string>();
   const builtinBySurface=new Map<string,Record<string,ComponentDefinition>>();
   const customBySurface=new Map<string,Record<string,ComponentDefinition>>();
   const allCustom:Record<string,ComponentDefinition>={};
+  const componentMeta:Record<string,ComponentSchemaContext>={};
+  // Ревизия каталога — вход ключа кэша схемы (фидбэк §4). Считается **лениво**: она нужна
+  // только тому issue, который реально отвергает prop, и полный скан каталога на каждом save
+  // был бы платой за диагностику, которой в норме нет.
+  let catalogRevisionCache:string|null|undefined;
+  const readCatalogRevision=():string|null => {
+    if(catalogRevisionCache===undefined) { try { catalogRevisionCache=currentCatalogRevision(db); } catch { catalogRevisionCache=null; } }
+    return catalogRevisionCache;
+  };
+  const pinnedRowOf=(pin:ComponentDependencyPin,designSystem:string):PublishRow|null =>
+    db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source,cp.source_hash sourceHash,cp.definition_meta definitionMeta
+      FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.version=?
+      JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+      WHERE c.id=? AND cr.design_system=?`).get(pin.version,pin.id,designSystem) as PublishRow|null;
+  const activeRowOf=(name:string,designSystem:string):PublishRow|null =>
+    db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source,cp.source_hash sourceHash,cp.definition_meta definitionMeta
+      FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
+      JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+      WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL ORDER BY cp.version DESC LIMIT 1`).get(name,designSystem) as PublishRow|null;
   for(const surface of surfaces) {
     const designSystem=surfaceDesignSystem(surface,doc)??doc.designSystem;
     const builtin=requireActiveDesignSystem(db,designSystem,["designSystem"]).definitions;
     builtinBySurface.set(surface.id,builtin);
     const screens=doc.screens.filter(screen=>surfaceOf(doc,screen.id).id===surface.id);
-    const types=new Set(screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)).filter(t=>!Object.hasOwn(builtin,t)&&!hostPrimitiveNames.has(t)));
+    // H1: разделяем элементы, **порождённые раскрытием композиции** (ключ вида `<host>$<inner>`),
+    // и авторские. Пин композиции легитимен только для первых — по имени он бы навязал схему
+    // манифеста всему документу, включая элементы, которых композиция не создавала.
+    const usage=new Map<string,{expanded:string[];authored:string[]}>();
+    for(const screen of screens) {
+      const screenIndex=doc.screens.indexOf(screen);
+      for(const [key,element] of Object.entries(screen.spec.elements)) {
+        if(Object.hasOwn(builtin,element.type)||hostPrimitiveNames.has(element.type)) continue;
+        const entry=usage.get(element.type)??{expanded:[],authored:[]};
+        (key.includes(COMPOSITION_KEY_SEPARATOR)?entry.expanded:entry.authored).push(`/screens/${screenIndex}/spec/elements/${key}`);
+        usage.set(element.type,entry);
+      }
+    }
     const custom:Record<string,ComponentDefinition>={};
-    for(const name of [...types].sort()) {
+    for(const name of [...usage.keys()].sort()) {
       const pinned=compositionPins?.get(name);
-      const row=pinned
-        ? db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
-            FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.version=?
-            JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-            WHERE c.id=? AND cr.design_system=?`).get(pinned.version,pinned.id,designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null
-        : db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
-            FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
-            JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-            WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL ORDER BY cp.version DESC LIMIT 1`).get(name,designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null;
+      const use=usage.get(name)!;
+      // Доволновое поведение: пин по имени применяется ко всему документу.
+      const usePin=pinned!==undefined&&(!resolverV2||use.expanded.length>0);
+      let row=usePin?pinnedRowOf(pinned!,designSystem):activeRowOf(name,designSystem);
+      if(resolverV2&&usePin&&use.authored.length>0) {
+        const active=activeRowOf(name,designSystem);
+        // Компонент без active-публикации в этой ДС резолвится пином: «нет головы» не повод
+        // отказать документу, который раньше сохранялся (деградацию видит гейт `pins`).
+        if(active&&row&&active.version!==row.version) {
+          throw new ApiError(422,COMPONENT_PIN_CONFLICT_CODE,
+            `Component '${name}' is required in two versions by the same document: the composition pins v${row.version}, an authored element resolves the active v${active.version}`,
+            {componentId:row.id,componentName:name,
+              issues:[
+                ...use.expanded.map(path=>({path,message:`composition-expanded element requires ${name}@${row!.version} (composition pin)`})),
+                ...use.authored.map(path=>({path,message:`authored element resolves ${name}@${active.version} (active publication)`})),
+              ]});
+        }
+        if(active&&!row) row=active;
+      }
       if(!row) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Unknown or unpublished component type in design system '${designSystem}': ${name}`}]});
       const {materializeSource}=await import("./components/pipeline"); const path=await materializeSource(dataDir,row.id,row.rev,row.source);
       const mod=await importPublished(row.id,row.rev,path);
@@ -213,6 +320,14 @@ export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:s
       const {events,eventPayloadSchemas}=normalizeEvents(raw.events as Parameters<typeof normalizeEvents>[0]);
       custom[name]={...raw,events,...(eventPayloadSchemas?{eventPayloadSchemas}:{})} as ComponentDefinition;
       allCustom[name]=custom[name]!;
+      if(resolverV2) componentMeta[name]=Object.defineProperty({
+        componentId:row.id,
+        resolvedVersion:row.version,
+        sourceHash:row.sourceHash??null,
+        propsSchemaHash:propsSchemaHashOf(row.definitionMeta),
+        catalogRevision:null as string|null,
+        acceptedKeys:acceptedPropKeys(row.definitionMeta,custom[name]),
+      },"catalogRevision",{enumerable:true,configurable:true,get:readCatalogRevision});
       if(!pinnedIds.has(row.id)) { pinnedIds.add(row.id); pins.push({id:row.id,name:row.name,version:row.version,bundleHash:row.bundleHash,sourcePath:path}); }
     }
     customBySurface.set(surface.id,custom);
@@ -222,5 +337,5 @@ export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:s
     {...hostPrimitiveDefinitions,...builtinBySurface.get(surface.id)!,...normalizeDefinitions(customBySurface.get(surface.id)!)}]));
   // Объединение для доковых линтов: при совпадении имени побеждает primary (surfaces[0]).
   const builtinUnion=Object.assign({},...[...surfaces].reverse().map(surface=>builtinBySurface.get(surface.id)!)) as Record<string,ComponentDefinition>;
-  return {definitions:{...hostPrimitiveDefinitions,...builtinUnion,...normalizeDefinitions(allCustom)},pins,definitionsBySurface};
+  return {definitions:{...hostPrimitiveDefinitions,...builtinUnion,...normalizeDefinitions(allCustom)},pins,definitionsBySurface,componentMeta};
 }

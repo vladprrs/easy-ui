@@ -5,7 +5,7 @@ import { builtinCatalogHashFor, emptyComponentManifestHash } from "../builtinHas
 import { getDesignSystemVersion, latestDesignSystemMetaVersion, requireActiveDesignSystem } from "../designSystems";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import { ApiError } from "../http";
-import type { ComponentPin, CompositionPin } from "../validation";
+import { schemaResolverV2Enabled, type ComponentPin, type CompositionPin } from "../validation";
 import { pinnedCompositionDocs } from "./compositions";
 import { collectCompositionRefs } from "../../src/prototype/composition";
 import { latestValidatedRev } from "../validationRecords";
@@ -143,8 +143,20 @@ export class PrototypeRepo {
    * трекающий док в док без компонента.
    */
   private headPin<T extends { id: string; version: number; bundleHash: string; status: string }>(pin: T): T {
-    const head = this.db.query("SELECT version,bundle_hash bundleHash,status FROM component_publishes WHERE component_id=? AND status='active' ORDER BY version DESC LIMIT 1")
-      .get(pin.id) as { version: number; bundleHash: string; status: string } | null;
+    // BR-01a (H4): голова резолвится **в той же дизайн-системе**, что закреплённая версия — тем же
+    // фильтром `cr.design_system`, что save-SQL (`snapshotDefinitions`). Без него перенос компонента
+    // в другую ДС + publish разводил два пути: save видел последнюю версию своей ДС, а трекающий
+    // документ перескакивал на версию чужой — и рендерил не то, что принял бы save.
+    const head = schemaResolverV2Enabled()
+      ? this.db.query(`SELECT cp.version,cp.bundle_hash bundleHash,cp.status
+          FROM component_publishes cp JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+          WHERE cp.component_id=?1 AND cp.status='active'
+            AND cr.design_system=(SELECT cr0.design_system FROM component_publishes cp0
+              JOIN component_revisions cr0 ON cr0.component_id=cp0.component_id AND cr0.rev=cp0.rev
+              WHERE cp0.component_id=?1 AND cp0.version=?2)
+          ORDER BY cp.version DESC LIMIT 1`).get(pin.id, pin.version) as { version: number; bundleHash: string; status: string } | null
+      : this.db.query("SELECT version,bundle_hash bundleHash,status FROM component_publishes WHERE component_id=? AND status='active' ORDER BY version DESC LIMIT 1")
+        .get(pin.id) as { version: number; bundleHash: string; status: string } | null;
     return head ? { ...pin, version: head.version, bundleHash: head.bundleHash, status: head.status } : pin;
   }
   /**

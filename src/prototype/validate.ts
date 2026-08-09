@@ -8,7 +8,7 @@ import { applyComputed, computedKeys, isComputedPath } from "./computed";
 import { isAssetId, type PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
 import { lintPrototypeLayouts } from "./layoutLints";
-import type { PrototypeValidationResult, ValidationIssue } from "./types";
+import type { ComponentSchemaContext, PrototypeValidationResult, ValidationIssue } from "./types";
 import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../catalog/hostPrimitives/definitions";
 import { validateOverlayRules } from "./overlayRules";
 import { buildNavigationGraph, verifyEdge } from "./navigationGraph";
@@ -261,6 +261,10 @@ function checkActionCondition(value: unknown, path: (string | number)[], errors:
   if ("not" in value && value.not !== true) issue(errors, [...path, "not"], "not must be true");
 }
 
+export type { ComponentSchemaContext };
+/** Стабильный код issue «prop не объявлен схемой резолвнутой версии» (BR-01a, фидбэк §4). */
+export const COMPONENT_PROP_UNKNOWN_CODE = "component_prop_unknown";
+
 export function validateElementProps({
   definition,
   props,
@@ -268,6 +272,7 @@ export function validateElementProps({
   path,
   insideRepeat = false,
   computedPaths = [],
+  schemaContext,
 }: {
   definition: ComponentDefinition;
   props: Obj;
@@ -280,6 +285,12 @@ export function validateElementProps({
    * computed режется на save-пути.
    */
   computedPaths?: readonly string[];
+  /**
+   * Контекст резолвера схемы этого типа (BR-01a). Передаёт только сервер: без него неизвестный
+   * prop даёт доволновой нетипизированный issue (kill-switch `EASYUI_SCHEMA_RESOLVER_V2_DISABLED`
+   * просто перестаёт заполнять карту контекстов, и байты ответа возвращаются к прежним).
+   */
+  schemaContext?: ComponentSchemaContext;
 }): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   if (isDynamicValue(props)) {
@@ -310,6 +321,20 @@ export function validateElementProps({
   if (!parsed.success) for (const zIssue of parsed.error?.issues ?? []) {
     const zPath = zIssue.path.map(String).join("/");
     if ([...dynamicPaths].some((dynamicPath) => zPath === dynamicPath || zPath.startsWith(dynamicPath + "/"))) continue;
+    // BR-01a: неизвестный prop — типизированный issue с фактически применённой схемой. Zod
+    // рапортует `unrecognized_keys` на самом объекте, поэтому путь достраивается до ключа:
+    // потребителю нужен адрес prop'а, а не контейнера.
+    if (schemaContext && zIssue.code === "unrecognized_keys" && Array.isArray(zIssue.keys) && zIssue.keys.length) {
+      for (const key of zIssue.keys) {
+        errors.push({
+          path: pathString([...path, ...zIssue.path.map(String), key]),
+          message: zIssue.message,
+          code: COMPONENT_PROP_UNKNOWN_CODE,
+          ...schemaContext,
+        });
+      }
+      continue;
+    }
     issue(errors, [...path, ...zIssue.path.map(String)], zIssue.message);
   }
   return { errors, warnings };
@@ -373,6 +398,12 @@ export function validatePrototype(
     compositions?: Record<string, CompositionDoc>;
     definitionsBySurface?: Record<string, Record<string, ComponentDefinition>>;
     themes?: Record<string, SurfaceThemeInput>;
+    /**
+     * BR-01a: «чем именно резолвлен тип» по имени типа (`components.name` глобально UNIQUE,
+     * поэтому карта плоская). Заполняет только `snapshotDefinitions`; её отсутствие возвращает
+     * доволновую форму issue'ов неизвестного prop'а.
+     */
+    componentMeta?: Record<string, ComponentSchemaContext>;
   },
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
@@ -529,7 +560,8 @@ export function validatePrototype(
       // inapplicable: named-slot custom parents may not also repeat.
       if (element.repeat && definition.capabilities?.namedSlots === true) issue(errors, [...ep, "repeat"], "repeat is not allowed on a custom component with named slots");
       const elementInsideRepeat = insideRepeat.has(key);
-      const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"], insideRepeat: elementInsideRepeat, computedPaths });
+      const schemaContext = options?.componentMeta?.[element.type];
+      const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"], insideRepeat: elementInsideRepeat, computedPaths, ...(schemaContext ? { schemaContext } : {}) });
       errors.push(...propIssues.errors);
       warnings.push(...propIssues.warnings);
       if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, effectiveState, elementInsideRepeat);
