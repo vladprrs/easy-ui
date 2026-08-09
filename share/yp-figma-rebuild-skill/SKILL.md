@@ -254,3 +254,29 @@ Probe/ref-прототипы живут драфтами; `publish` протот
 | `reference/easy-ui-authoring.md` | грамматика документа, директивы, регионы, troubleshooting — секциями |
 | `reference/canonical-roles.md` | если обсуждается `canonicalFor` |
 | `templates/`, `examples/` | шаблон атома, probe-док, образцы TSX/доков |
+
+## 10. Migration note — волна EUI-BR (сервер ≥ 2026-08-09)
+
+Сервер получил 11 capability по твоему же backlog'у блокеров (`EUI-BR-01…10`). Все — за kill-switch'ами: **сначала читай `GET /api/capabilities`** и опирайся на флаги, не на дату; выключенный флаг = доволновая семантика byte-for-byte. Полная карта «blocker → что снимает» — `docs/EASYUI_BLOCKER_REMOVAL_RELEASE_PACKAGE.md` в репо easy-ui.
+
+**Новые verbs драйвера (уже в этом пакете):**
+
+- `retry-disposition <runId>` — спроси сервер **до** любого повтора: `do-not-retry | resume-run | new-run | update-source` + `blockerFingerprint` (стабильный отпечаток блокера — неизменившийся stop не жги повторами). Флаг: `features.blockerFingerprintV1`.
+- `accept-resume <runId>` — продолжение упавшего рана (typed timeout теперь называет фазу: `phase_timeout`/`renderer_unavailable`/`interrupted`, `resumable:true` в ответе рана). Не переисполняет contract/defaults/audit при совпавших отпечатках. Флаг: `features.acceptanceResumeV1`.
+
+**Новые поля case-set (strict: на сервере без флага — 422, проверяй capability до записи):**
+
+- `cases[].paintPaddingPx {top,right,bottom,left}` — merить полный paint clipped-декораций (Payment Schedule-класс) **без** смены канвы сравнения: visual остаётся на `referenceExport`, недостаток поля теперь typed `paint_capture_clipped` с требуемым минимумом. Флаг: `features.paintCapturePaddingV1`. Внимание: поле per-case (не в `capture`-блоке набора, как было в требовании §5) — так recapture затрагивает только объявленные кейсы.
+- `cases[].geometryOwnership {"<elementKey>": {role:"decoration", participatesIn:["paint"]}}` — декорация (tail) исключается из layout/root, остаётся в paint/visual. Большинству кейсов не нужно: **авто-правило** уже классифицирует transform/out-of-flow узел, чья pre-transform коробка вложена в union остального. Флаг: `features.geometryDecorationOwnershipV1`.
+- `comparison.ownership:"subject-and-integration"` + `subjectComponentId` + `dependencyPolicy:"require-eligible-acceptance"` — два вердикта (`subject`/`integration`); promote субъекта возможен при чистом субъекте и eligible-зависимостях, integration-fail честно фиксируется в квитанции. Флаг: `features.comparisonOwnershipV1`.
+- Документы прототипов: `elements[].overflowOwnership {axis,mode:"scroll",…}` — намеренные горизонтальные rails больше не дают FlowRoot-warning. Флаг: `features.flowOverflowOwnershipV1`.
+
+**Изменения, которые увидишь без каких-либо полей:**
+
+- **422 `Unrecognized key` на живом prop снят** (`prototypeSchemaResolverV2`): save/status/snap резолвят одну схему и называют одинаковые `resolvedVersion`/`sourceHash`/`propsSchemaHash`; unknown prop теперь typed `component_prop_unknown` с `acceptedKeys`; конфликт пина композиции с авторским элементом — typed `component_pin_conflict` (это решение человека, не ретрай).
+- **`probe geometry` печатает два габарита**: `layout=` (клади в `expectedGeometry`!) и `paint=` (с декорациями). Декорированные числа в манифесте — источник ложных `layout-overflow` прошлых итераций.
+- **Барьер ресурсов v4** (`resourceBarrierV4`): registry-иконки темы ждутся до первого кадра (фаза `registry`), недогруз — `indeterminate resource_barrier_incomplete` с `assetId`/owner/channel, кадр не становится evidence. `cases[].preloadAssets` — необязательный hint.
+- **16 px hug-кейсы судятся честно** (`exactContentHugCanvasV1`): `rawDiffPctOfSurface` вместо разведённого канвой процента; эталон не того масштаба — typed `reference_scale_mismatch` (частая причина «странных pass» на 1×-экспортах).
+- **Атрибуция кластеров** (`visualAttributionV2`): `element-map.json` + owner/`paintClass`/`structural` per cluster — residual больше не требует серии source-agnostic экспериментов, receipt называет владельца. `structural` не прощается ничем; renderer-only остаток может пройти `pass_with_exceptions` только под заранее опубликованным server-owned профилем (`rendererPolicyProfilesV2`, истекает по 5 отпечаткам).
+
+**Правило ретраев с этой волны:** перед любым повтором упавшей приёмки — `retry-disposition`; `unchanged` = не трать renderer queue, жди включения нужной capability или чини source.
