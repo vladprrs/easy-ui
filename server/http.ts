@@ -37,7 +37,13 @@ export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRe
    */
   runIds?: string[]; policyProfileIds?: string[]; rendererFingerprints?: string[];
   overlap?: string[]; overlapCount?: number;
-  expectedCases?: number; coveredCases?: number; runs?: unknown[] };
+  expectedCases?: number; coveredCases?: number; runs?: unknown[];
+  /**
+   * План 2026-08-08 §8 (BR-08, субъектный promote): какой набор объявил владение
+   * (`caseSetId`), какой половины контракта не хватает (`missing`), какие случаи мешают
+   * (`cases`) и какие runtime-зависимости не имеют собственной приёмки (`dependencies`).
+   */
+  caseSetId?: string; missing?: string; cases?: unknown[]; dependencies?: unknown[] };
 
 export class ApiError extends Error {
   constructor(public status: 400|401|403|404|405|409|413|415|422|429|501|503, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }
