@@ -308,6 +308,9 @@ function orderedCases(): [string, Case][] {
     ["GET /api/acceptance-runs/{runId}/cases", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/cases`), expected: err(404, "not_found") }],
     ["GET /api/acceptance-runs/{runId}/evidence", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/evidence`), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs/{runId}/cancel", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/cancel`, {}), expected: err(404, "not_found") }],
+    // BR-06: resume — тот же 404-конверт несуществующего рана; продолжаемость, lineage, reuse
+    // гейтов и все 409 живут в `server/acceptance/resume.test.ts` и `acceptance-routes.test.ts`.
+    ["POST /api/acceptance-runs/{runId}/resume", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/resume`, {}), expected: err(404, "not_found") }],
     // Сага миграционного коммита (план 2026-08-07 §W4). Покрытие — по отказу, как у соседей:
     // happy path саги (все шесть фаз поверх реальных мутаций, идемпотентность, watchdog, cancel)
     // живёт в `server/migration-commit.test.ts`, а здесь проверяется форма ручек и 404-конверт.
@@ -839,9 +842,14 @@ describe("route contracts", () => {
       figmaSourcePackage: true,
       runtimeSchemaDefaults: true,
       captureNoiseSummary: true,
+      // BR-06 (план 2026-08-08 §6): продолжение остановленного рана приёмки.
+      acceptanceResumeV1: true,
       // План 2026-08-07 §W6b: версия схемы агентской квитанции драйвера (`envelope`) — число,
       // а не булев флаг: конверт печатается всегда, клиенту нужна его форма. Kill-switch'а нет.
       receiptEnvelopeVersion: 1,
+      // BR-01a (план 2026-08-08 §1): единый резолвер схемы published component и его контрактная версия.
+      prototypeSchemaResolverV2: true,
+      prototypeSchemaResolverVersion: 2,
     });
     // §W11: версия readiness-политики — **чем снято**, а не «что умеет образ». Барьер W2 поднял
     // дефолтный профиль до v3; `geometryContractVersion` при этом сознательно остаётся 2 (замеры
@@ -863,6 +871,7 @@ describe("route contracts", () => {
     const switches = {
       EASYUI_GEOMETRY_SURFACES_DISABLED: "geometrySurfacesV3",
       EASYUI_CANDIDATE_OVERLAY_DISABLED: "candidateDependencyOverlay",
+      EASYUI_ACCEPTANCE_RESUME_DISABLED: "acceptanceResumeV1",
       EASYUI_SUGGESTED_POLICY_DISABLED: "suggestedPolicy",
       EASYUI_SOURCE_PACKAGE_DISABLED: "figmaSourcePackage",
       EASYUI_RUNTIME_DEFAULTS_DISABLED: "runtimeSchemaDefaults",
@@ -884,6 +893,8 @@ describe("route contracts", () => {
     const withoutMatrix = capabilities(db, "shadow", {}).features as Record<string, unknown>;
     expect(withoutMatrix.geometrySurfacesV3).toBe(false);
     expect(withoutMatrix.candidateDependencyOverlay).toBe(false);
+    // BR-06: resume живёт внутри матричной приёмки — без неё ручки нет вовсе.
+    expect(withoutMatrix.acceptanceResumeV1).toBe(false);
     expect(withoutMatrix.suggestedPolicy).toBe(false);
     expect(withoutMatrix.migrationCommit).toBe(false);
     expect(withoutMatrix.resourceBarrier).toBe(true);

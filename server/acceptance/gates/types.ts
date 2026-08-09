@@ -93,6 +93,16 @@ export interface AcceptanceCaptureService {
   get(jobId: string): JobStatus;
   outcome(jobId: string): JobOutcome | undefined;
   hasBackgroundCapacity(): boolean;
+  /**
+   * Есть ли у сервиса рендерер вообще (BR-06): `SERVE_DIST` + установленный chromium. Оркестратор
+   * спрашивает это **один раз до цикла случаев** — «браузера нет» обязано терминализовать ран за
+   * секунды с названной причиной, а не превращаться в N×`maxInfraRetries`×дедлайн 501-х.
+   *
+   * Опционально: не всякая реализация сервиса (тестовые двойники, стенды) обязана знать про
+   * бинарь браузера, и отсутствие метода читается как «спросить не у кого» — прекондиция тогда
+   * просто не срабатывает, а поведение остаётся доволновым.
+   */
+  available?(): boolean;
 }
 
 export interface GateContext {

@@ -92,8 +92,21 @@ export interface AcceptanceRunRow {
   status: AcceptanceRunStatus;
   /** Алгебра refresh рана (v29): `{requested, impact, effective}`; NULL — ран до-миграционный. */
   refresh_json: string | null;
-  /** Причина терминального статуса (`refresh_scope_empty`, D2). */
+  /** Причина терминального статуса (`refresh_scope_empty`, D2; `interrupted`/`phase_timeout`, BR-06). */
   status_reason: string | null;
+  /**
+   * Происхождение рана (v37, BR-06): ран, продолжением которого он является. NULL — ран
+   * самостоятельный. Плоская ссылка без FK — по канону A9-receipts: терминальный ран неизменяем,
+   * продолжение — **новая** строка, а lineage не имеет права держать GC предка.
+   */
+  resumed_from_run_id: string | null;
+  /** Номер попытки в цепочке продолжений (v37): 1 — исходный ран. */
+  attempt: number;
+  /**
+   * Отчёт об остановке рана (v37): `{resumable, phase, lastCompletedPhase, elapsedMs, resumeFrom,
+   * jobIds, resumedFrom}`. NULL — ран остановки не описывал (успешный либо до-миграционный).
+   */
+  resume_json: string | null;
   policy_profile_hash: string;
   case_set_id: string | null;
   policy_profile_id: string;
@@ -158,6 +171,13 @@ export interface AcceptanceCaseRow {
    * (в том числе любая до-миграционная строка), а не «неизвестно»: слотов до v31 не было.
    */
   slots_hash: string | null;
+  /**
+   * Причина инфраструктурного падения случая (v37, BR-06): `{outcome, message, attempts,
+   * elapsedMs}`. NULL — случай инфраструктурно не падал (в том числе любая до-миграционная
+   * строка). До волны причина жила только в памяти процесса и после рестарта исчезала, из-за чего
+   * resume не мог отличить инфраструктурный отказ от продуктового.
+   */
+  error_json: string | null;
 }
 
 export interface AcceptanceCaseResultRow {
@@ -212,6 +232,12 @@ export interface CreateRunInput {
    * обязан быть побайтово тем же, чем был до волны.
    */
   overlay?: readonly RunOverlayNode[];
+  /** Происхождение рана (v37, BR-06): ран, продолжением которого он является. */
+  resumedFromRunId?: string | null;
+  /** Номер попытки в цепочке продолжений (v37); опущен — 1. */
+  attempt?: number;
+  /** Lineage-отчёт продолжения (v37): прежние `statusReason`/`phase`/`lastCompletedPhase`. */
+  resume?: unknown;
 }
 
 export interface NewCaseInput {
@@ -244,6 +270,11 @@ export interface CasePatch {
   finishedAt?: string | null;
   /** Квитанция reuse случая (W8-форма, пишется с W1). */
   reuseReceipt?: unknown;
+  /**
+   * Причина инфраструктурного падения случая (v37, BR-06). `null` очищает колонку (случай
+   * переснят и на этот раз дошёл), `undefined` — не трогает.
+   */
+  error?: unknown;
 }
 
 export interface TerminalizeRunInput {
@@ -255,6 +286,12 @@ export interface TerminalizeRunInput {
   finishedAt?: string;
   /** Названная причина терминального статуса (`refresh_scope_empty`, D2). */
   statusReason?: string | null;
+  /**
+   * Отчёт об остановке (v37, BR-06): `{resumable, phase, lastCompletedPhase, elapsedMs,
+   * resumeFrom, jobIds}`. Пишется `COALESCE`-ом, как и остальные поля терминализации: повторный
+   * вызов не переписывает уже записанный отчёт.
+   */
+  resume?: unknown;
 }
 
 export interface PutCaseResultInput {
@@ -446,11 +483,14 @@ export class AcceptanceRepo {
         this.db.query(`INSERT INTO acceptance_runs
           (run_id,candidate_id,component_id,idempotency_key,status,policy_profile_hash,case_set_id,policy_profile_id,
            progress_json,impact_json,gates_json,evidence_manifest_hash,started_at,finished_at,created_by,created_at,refresh_json,
-           renderer_fingerprint,overlay_manifest_json,overlay_hash)
-          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?,?,?,?,?)`)
+           renderer_fingerprint,resumed_from_run_id,attempt,resume_json,overlay_manifest_json,overlay_hash)
+          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?,?,?,?,?,?,?,?)`)
           .run(id, input.candidateId, input.componentId, key, input.policyProfileHash, input.caseSetId ?? null,
             input.policyProfileId, json(input.progress ?? {}), json(input.gates ?? {}), input.createdBy, createdAt,
             jsonOrNull(input.refresh), input.rendererFingerprint ?? null,
+            // v37 (BR-06): lineage продолжения пишется **одной** записью с раном — «второй ран
+            // того же кандидата» обязан быть отличим от независимого повтора с первого мгновения.
+            input.resumedFromRunId ?? null, input.attempt ?? 1, jsonOrNull(input.resume),
             // §W3: durable-граф и его хэш пишутся **одной** записью с раном — пин GC обязан
             // существовать с первого мгновения жизни рана, иначе окно между INSERT и апдейтом
             // остаётся временем, в которое `gcCandidates` законно вытеснит бандл зависимости.
@@ -483,6 +523,31 @@ export class AcceptanceRepo {
   inFlightRun(candidateId: string): AcceptanceRunRow | undefined {
     return (this.db.query("SELECT * FROM acceptance_runs WHERE candidate_id=? AND status IN ('queued','running') LIMIT 1")
       .get(candidateId) as AcceptanceRunRow | null) ?? undefined;
+  }
+
+  /**
+   * Продолжения рана (v37, BR-06). Терминальный ран неизменяем, поэтому «продолжен ли он» —
+   * вопрос к другим строкам, а не к его собственной: ответ даёт partial index по
+   * `resumed_from_run_id`. Порядок — по попытке: последний элемент и есть живое/последнее
+   * продолжение, на которое ссылается `409 run_already_resumed`.
+   */
+  resumptionsOf(runId: string): AcceptanceRunRow[] {
+    return this.db.query("SELECT * FROM acceptance_runs WHERE resumed_from_run_id=? ORDER BY attempt, created_at, run_id")
+      .all(runId) as AcceptanceRunRow[];
+  }
+
+  /**
+   * Отчёт об остановке рана (v37) как объект. Битый JSON — `null`: колонка отчётная, и ронять на
+   * ней чтение рана нельзя (тот же принцип, что у `runOverlay`).
+   */
+  runResume(run: AcceptanceRunRow): Record<string, unknown> | null {
+    if (run.resume_json === null || run.resume_json === "") return null;
+    try {
+      const parsed = JSON.parse(run.resume_json) as unknown;
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch { return null; }
   }
 
   runsForCandidate(candidateId: string): AcceptanceRunRow[] {
@@ -533,10 +598,11 @@ export class AcceptanceRepo {
       this.db.query(`UPDATE acceptance_runs SET status=?, finished_at=?,
           gates_json=COALESCE(?,gates_json), progress_json=COALESCE(?,progress_json),
           impact_json=COALESCE(?,impact_json), evidence_manifest_hash=COALESCE(?,evidence_manifest_hash),
-          status_reason=COALESCE(?,status_reason)
+          status_reason=COALESCE(?,status_reason), resume_json=COALESCE(?,resume_json)
         WHERE run_id=? AND status IN ('queued','running')`)
         .run(input.status, input.finishedAt ?? now(), jsonOrNull(input.gates), jsonOrNull(input.progress),
-          jsonOrNull(input.impact), input.evidenceManifestHash ?? null, input.statusReason ?? null, id);
+          jsonOrNull(input.impact), input.evidenceManifestHash ?? null, input.statusReason ?? null,
+          jsonOrNull(input.resume), id);
       return this.requireRun(id);
     })();
   }
@@ -547,8 +613,19 @@ export class AcceptanceRepo {
    * повтор переиспользует результаты случаев по `case_fingerprint`.
    */
   sweepNonTerminalRuns(at = now()): number {
-    return this.db.query("UPDATE acceptance_runs SET status='error', finished_at=? WHERE status IN ('queued','running')")
-      .run(at).changes;
+    // v37 (BR-06, путь B диагностики V0-D4): рестарт процесса — **самая частая** причина, по
+    // которой ран уходит в `error` без единой строчки диагностики: кейсы залипают `running`/
+    // `pending` навсегда, манифест не пишется, а `status_reason` до волны оставался NULL, и
+    // «ран убила уборка» было неотличимо от «ран упал сам». Теперь уборка называет себя и
+    // объявляет ран **продолжаемым**: залипшие строки незавершены по определению — их никто не
+    // закрывал, — поэтому resume имеет право переисполнить их с первой незавершённой фазы.
+    // `COALESCE` защищает уже названную причину: ран, успевший записать свою (`phase_timeout`,
+    // `renderer_unavailable`), уборкой не переименовывается.
+    return this.db.query(`UPDATE acceptance_runs SET status='error', finished_at=?,
+        status_reason=COALESCE(status_reason,'interrupted'),
+        resume_json=COALESCE(resume_json,?)
+      WHERE status IN ('queued','running')`)
+      .run(at, JSON.stringify({ resumable: true, reason: "interrupted" })).changes;
   }
 
   /**
@@ -595,6 +672,9 @@ export class AcceptanceRepo {
     if (patch.captureQuality !== undefined) push("capture_quality_json", jsonOrNull(patch.captureQuality));
     if (patch.reuseReason !== undefined) push("reuse_reason", patch.reuseReason);
     if (patch.reuseReceipt !== undefined) push("reuse_receipt_json", jsonOrNull(patch.reuseReceipt));
+    // v37 (BR-06): причина инфраструктурного падения. Явный `null` **очищает** колонку —
+    // случай, переснятый успешно, не должен нести прошлую причину как текущую.
+    if (patch.error !== undefined) push("error_json", jsonOrNull(patch.error));
     if (patch.startedAt !== undefined) push("started_at", patch.startedAt);
     if (patch.finishedAt !== undefined) push("finished_at", patch.finishedAt);
     if (sets.length) {

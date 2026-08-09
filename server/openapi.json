@@ -924,6 +924,9 @@
                     {
                       "additionalProperties": {},
                       "properties": {
+                        "attempt": {
+                          "type": "number"
+                        },
                         "candidateId": {
                           "type": "string"
                         },
@@ -1341,6 +1344,113 @@
                           },
                           "type": "array"
                         },
+                        "resume": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": {},
+                              "properties": {
+                                "elapsedMs": {
+                                  "type": "number"
+                                },
+                                "jobIds": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "lastCompletedPhase": {
+                                  "type": "string"
+                                },
+                                "phase": {
+                                  "type": "string"
+                                },
+                                "resumable": {
+                                  "type": "boolean"
+                                },
+                                "resumeFrom": {
+                                  "type": "string"
+                                },
+                                "resumedFrom": {
+                                  "additionalProperties": {},
+                                  "properties": {
+                                    "attempt": {
+                                      "type": "number"
+                                    },
+                                    "jobIds": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "lastCompletedPhase": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "phase": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "runId": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "type": "string"
+                                    },
+                                    "statusReason": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "runId",
+                                    "attempt",
+                                    "status",
+                                    "statusReason",
+                                    "phase",
+                                    "lastCompletedPhase",
+                                    "jobIds"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "resumable"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "resumedFromRunId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "runId": {
                           "type": "string"
                         },
@@ -1498,6 +1608,9 @@
                           },
                           "type": "object"
                         },
+                        "lineage": {
+                          "type": "string"
+                        },
                         "progress": {
                           "$ref": "#/$defs/__schema1"
                         },
@@ -1536,6 +1649,9 @@
                             "type": "string"
                           },
                           "type": "object"
+                        },
+                        "resume": {
+                          "type": "string"
                         },
                         "runId": {
                           "type": "string"
@@ -1966,6 +2082,9 @@
                   },
                   "additionalProperties": {},
                   "properties": {
+                    "attempt": {
+                      "type": "number"
+                    },
                     "candidateId": {
                       "type": "string"
                     },
@@ -2436,6 +2555,113 @@
                         "type": "object"
                       },
                       "type": "array"
+                    },
+                    "resume": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "elapsedMs": {
+                              "type": "number"
+                            },
+                            "jobIds": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "lastCompletedPhase": {
+                              "type": "string"
+                            },
+                            "phase": {
+                              "type": "string"
+                            },
+                            "resumable": {
+                              "type": "boolean"
+                            },
+                            "resumeFrom": {
+                              "type": "string"
+                            },
+                            "resumedFrom": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "attempt": {
+                                  "type": "number"
+                                },
+                                "jobIds": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "lastCompletedPhase": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "phase": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "runId": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string"
+                                },
+                                "statusReason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "runId",
+                                "attempt",
+                                "status",
+                                "statusReason",
+                                "phase",
+                                "lastCompletedPhase",
+                                "jobIds"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "resumable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resumedFromRunId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "runId": {
                       "type": "string"
@@ -2956,6 +3182,38 @@
                             },
                             "type": "array"
                           },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "attempts": {
+                                    "type": "number"
+                                  },
+                                  "elapsedMs": {
+                                    "type": "number"
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "string"
+                                  },
+                                  "phase": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "outcome",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "finishedAt": {
                             "anyOf": [
                               {
@@ -3333,6 +3591,309 @@
           }
         },
         "summary": "Download the run evidence archive (ZIP): manifest.json, SHA256SUMS and every CAS artifact under <caseId>/<name>. The manifest is written when the run terminalizes (409 evidence_not_ready before that); artifacts already reclaimed by the evidence GC stay listed in SHA256SUMS but are absent from the archive. Owner or admin only.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/acceptance-runs/{runId}/resume": {
+      "post": {
+        "operationId": "post_acceptance_runs_runId_resume",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "frame": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "verdict": {
+                          "$ref": "#/$defs/__schema1"
+                        }
+                      },
+                      "required": [
+                        "frame",
+                        "verdict"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "all": {
+                          "type": "boolean"
+                        },
+                        "caseIds": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "failed": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "all",
+                        "failed",
+                        "caseIds"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "attempt": {
+                      "type": "number"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "candidateId": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "type": "number"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "policy": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "hash": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "progress": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "completed": {
+                          "type": "number"
+                        },
+                        "eta": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "basis": {
+                              "enum": [
+                                "measured",
+                                "estimate"
+                              ],
+                              "type": "string"
+                            },
+                            "secondsRemaining": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "secondsRemaining",
+                            "basis"
+                          ],
+                          "type": "object"
+                        },
+                        "failed": {
+                          "type": "number"
+                        },
+                        "frameReused": {
+                          "type": "number"
+                        },
+                        "rediffed": {
+                          "type": "number"
+                        },
+                        "reused": {
+                          "type": "number"
+                        },
+                        "running": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "verdictRecomputed": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "completed",
+                        "reused",
+                        "failed",
+                        "running"
+                      ],
+                      "type": "object"
+                    },
+                    "refresh": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "effective": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "impact": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "requested": {
+                          "$ref": "#/$defs/__schema0"
+                        }
+                      },
+                      "required": [
+                        "requested",
+                        "impact",
+                        "effective"
+                      ],
+                      "type": "object"
+                    },
+                    "resumedFrom": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {},
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resumedFromRunId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "queued",
+                        "running",
+                        "pass",
+                        "pass_with_exceptions",
+                        "fail",
+                        "error",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "status",
+                    "candidateId",
+                    "componentId",
+                    "policy",
+                    "progress",
+                    "cases",
+                    "cached",
+                    "resumedFromRunId",
+                    "attempt",
+                    "resumedFrom"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "acceptance_resume_disabled (EASYUI_ACCEPTANCE_RESUME_DISABLED=1 on this server) | run_not_resumable (the run is still going, or it stopped in a state that is not resumable (verdict, cancel, refresh_scope_empty)) | run_already_resumed (a continuation of this run already exists; its id is in error.runId) | acceptance_run_in_flight (the candidate already has a queued/running run)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "maintenance_in_progress (a catalog migration holds the maintenance lock)"
+          }
+        },
+        "summary": "Resume a run that STOPPED without a verdict (`capabilities.features.acceptanceResumeV1`). Resume is a NEW RUN, not a resurrection: a terminal run is immutable because publishes, `evidence_manifest_hash` and the promote invariants reference it, so the server queues a fresh run over the same candidate, case set and policy profile and answers 202 with its id, `resumedFromRunId`, `attempt` and `resumedFrom {runId, attempt, status, statusReason, phase, lastCompletedPhase, jobIds}` — the previous error travels with the lineage instead of requiring a second request. Only a run that declared itself resumable can be resumed: after a process restart the startup sweep marks non-terminal runs `error` with `statusReason: \"interrupted\"` (their `running`/`pending` cases are unfinished BY DEFINITION — nobody closed them), a typed infrastructure timeout terminalizes with `statusReason: \"phase_timeout\"` naming the phase, and the allocate circuit breaker terminalizes with `renderer_unavailable` / `capture_budget_exhausted` / `queue_starvation` after three consecutive allocation-class case outcomes. Anything else — a verdict, a cancel, `refresh_scope_empty` — is 409 run_not_resumable; queue an ordinary run instead. WHAT IS REUSED: completed gates of the `validate` phase (contract/defaults/audit) whose PER-GATE FINGERPRINT still matches are carried over verbatim and are not re-executed; everything from `capture` onward is captured again, because the ancestor's frame may not exist at all. A partially executed case carries exactly its finished structural gates. Idempotency is deterministic — `idempotency_key = \"resume:<sourceRunId>:<attempt>\"` — so repeating the call returns the same run, and a second concurrent resume of the same candidate is refused by the one-in-flight index (409 acceptance_run_in_flight). Resuming an already resumed run is 409 run_already_resumed with the successor's id in `error.runId`. The body must be `{}`: the case set, surface, policy and candidate come from the ancestor — overriding them would be a new run, not a continuation. With EASYUI_ACCEPTANCE_RESUME_DISABLED=1 the handle answers 409 acceptance_resume_disabled (the observability half of the wave — per-case `error`, the allocate-renderer seam and the circuit breaker — stays on regardless: those are defect fixes, not a feature).",
         "x-easyui-validated": false
       }
     },
@@ -4447,6 +5008,9 @@
                         "acceptanceProvenance": {
                           "type": "boolean"
                         },
+                        "acceptanceResumeV1": {
+                          "type": "boolean"
+                        },
                         "acceptanceRuns": {
                           "type": "boolean"
                         },
@@ -4551,6 +5115,14 @@
                         },
                         "prototypeHeadTracking": {
                           "type": "boolean"
+                        },
+                        "prototypeSchemaResolverV2": {
+                          "type": "boolean"
+                        },
+                        "prototypeSchemaResolverVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
                         },
                         "readinessProfile": {
                           "type": "boolean"
@@ -4663,7 +5235,10 @@
                         "captureNoiseSummary",
                         "impactedSnap",
                         "migrationCommit",
-                        "receiptEnvelopeVersion"
+                        "acceptanceResumeV1",
+                        "receiptEnvelopeVersion",
+                        "prototypeSchemaResolverV2",
+                        "prototypeSchemaResolverVersion"
                       ],
                       "type": "object"
                     },

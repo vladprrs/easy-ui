@@ -42,6 +42,7 @@ import { maintenanceLockHeld } from "../maintenance";
 import { writeAuditEvent } from "../audit";
 import { ComponentRepo } from "../repos/components";
 import { zipResponse } from "./bundles";
+import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
 import type { AcceptanceOrchestrator, RefreshSpec } from "../acceptance/orchestrator";
 import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateDecisionRow, CandidateRow } from "../acceptance/repo";
 import { isCandidateId, isRunId } from "../acceptance/ids";
@@ -306,7 +307,16 @@ function runView(
     status: run.status,
     // Названная причина терминального статуса (D2): сегодня это `refresh_scope_empty` — форс был
     // задан, но ни один случай не переоценён. `null` у обычного исхода, а не пустая строка.
+    // BR-06 добавил к словарю `interrupted` (ран убила стартовая уборка после рестарта),
+    // `phase_timeout`, `renderer_unavailable`, `capture_budget_exhausted`, `queue_starvation`.
     statusReason: run.status_reason,
+    // BR-06: происхождение и продолжаемость рана. Все три поля — аддитивные и опциональные по
+    // контракту; `resumedFromRunId: null` у самостоятельного рана, `attempt: 1` у первой попытки.
+    resumedFromRunId: run.resumed_from_run_id,
+    attempt: run.attempt,
+    // Отчёт об остановке: `{resumable, phase, lastCompletedPhase, elapsedMs, resumeFrom, jobIds}`
+    // либо lineage продолжения (`resumedFrom`). `null` — ран остановки не описывал.
+    resume: orchestrator.repo.runResume(run),
     policy: { id: run.policy_profile_id, hash: run.policy_profile_hash },
     caseSetId: run.case_set_id,
     idempotencyKey: run.idempotency_key,
@@ -428,6 +438,19 @@ function summaryRefreshPlan(plan: unknown): string {
  * 3. **Метрики случая не повторяются**: `raw`/`aa` — два числа визуального гейта, всё остальное
  *    (regions, bestOffset, thresholds) берётся точечно через `/cases?case=<id>`.
  */
+/**
+ * Отчёт об остановке одной строкой (BR-06) для компактной сводки: `phase_timeout@capture
+ * last=validate resumable` — фаза, докуда ран дошёл, и продолжаем ли он. `null` — останавливаться
+ * рану было не на чем (обычный терминальный исход).
+ */
+function resumeSummaryOf(run: AcceptanceRunRow, orchestrator: AcceptanceOrchestrator): string | null {
+  const resume = orchestrator.repo.runResume(run);
+  if (resume === null) return null;
+  const phase = typeof resume.phase === "string" ? resume.phase : "-";
+  const last = typeof resume.lastCompletedPhase === "string" ? resume.lastCompletedPhase : "-";
+  return `${run.status_reason ?? "stopped"}@${phase} last=${last}${resume.resumable === true ? " resumable" : ""}`;
+}
+
 function runSummaryView(
   run: AcceptanceRunRow,
   cases: AcceptanceCaseRow[],
@@ -457,6 +480,12 @@ function runSummaryView(
     runId: run.run_id,
     status: run.status,
     statusReason: run.status_reason,
+    // BR-06: сводка называет попытку и точку продолжения одной строкой — «где ран встал» обязано
+    // читаться и в компактном отчёте, ради которого она заводилась.
+    ...(run.resumed_from_run_id === null && run.attempt <= 1
+      ? {}
+      : { lineage: `attempt ${run.attempt}${run.resumed_from_run_id ? ` after ${run.resumed_from_run_id}` : ""}` }),
+    ...(resumeSummaryOf(run, orchestrator) === null ? {} : { resume: resumeSummaryOf(run, orchestrator)! }),
     progress,
     gates: summaryGates(run),
     refresh: isObject(refresh)
@@ -720,6 +749,59 @@ function requireOwnedRun(db: Database, runId: string, principal: Principal, orch
   return run;
 }
 
+/**
+ * `POST /api/acceptance-runs/:runId/resume` (BR-06, план 2026-08-08 §6) — продолжение
+ * остановленного рана.
+ *
+ * Врезка стоит рядом с `cancel` и по той же причине: обе ручки — про **жизненный цикл** рана, а
+ * не про его содержимое. Отличие принципиальное и видно уже по ответу: `cancel` возвращает тот же
+ * ран, `resume` — **новый** (202 + `Location`), потому что терминальный ран неизменяем.
+ *
+ * Тело — `{}`: набор, поверхность, профиль и кандидат берутся у предка. Разрешить их переопределять
+ * значило бы разрешить «продолжить другой ран», а это постановка нового, а не продолжение.
+ */
+async function resumeRun(request: Request, db: Database, runId: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Promise<Response> {
+  if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  const run = requireOwnedRun(db, runId, principal, orchestrator);
+  // Kill-switch — **до** любых проверок состояния: агент обязан получить один и тот же
+  // типизированный отказ независимо от того, продолжаем ли мы вообще что-то способное.
+  if (!acceptanceResumeEnabled()) {
+    throw new ApiError(409, "acceptance_resume_disabled",
+      "Resumable acceptance is disabled on this server (EASYUI_ACCEPTANCE_RESUME_DISABLED=1); queue a new run instead",
+      { runId: run.run_id });
+  }
+  // Тело читается **по факту**, а не по `content-length`: прокси и клиенты его не всегда шлют, а
+  // молча проигнорированное `{"policy": …}` выглядело бы как «сервер меня понял».
+  const raw = (await request.text()).trim();
+  if (raw.length > 0) {
+    let body: unknown;
+    try { body = JSON.parse(raw); }
+    catch { throw new ApiError(400, "invalid_request", "Request body must be valid JSON"); }
+    if (!isObject(body) || Object.keys(body).length > 0) {
+      throw new ApiError(400, "invalid_request", "Resume takes no fields; the body must be {}");
+    }
+  }
+  const actor = requireUser(principal);
+  const started = await orchestrator.resumeRun(runId, { createdBy: actor.userId });
+  const lineage = orchestrator.repo.runResume(started.run);
+  return json({
+    runId: started.run.run_id,
+    status: started.run.status,
+    candidateId: started.run.candidate_id,
+    componentId: started.run.component_id,
+    policy: { id: started.run.policy_profile_id, hash: started.run.policy_profile_hash },
+    progress: parseJson(started.run.progress_json) ?? {},
+    cases: started.cases.length,
+    cached: started.cached,
+    refresh: started.refresh,
+    // Lineage — часть ответа, а не только строки: агент, получивший 202, обязан видеть, чей это
+    // повтор и какой попыткой, не делая второго запроса.
+    resumedFromRunId: started.run.resumed_from_run_id,
+    attempt: started.run.attempt,
+    resumedFrom: isObject(lineage?.resumedFrom) ? lineage.resumedFrom : null,
+  }, 202, { ...noStore, location: `/api/acceptance-runs/${started.run.run_id}` });
+}
+
 function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<string, unknown> {
   const entry = manifest?.cases.find((item) => item.caseId === row.case_id);
   return {
@@ -733,6 +815,10 @@ function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<
     aliasOfCaseId: row.alias_of_case_id,
     reuseReason: row.reuse_reason,
     reused: row.reuse_reason === "case_fingerprint",
+    // BR-06: причина инфраструктурного падения случая (`{outcome, message, attempts, elapsedMs,
+    // phase}`). `null` — случай инфраструктурно не падал; до волны это поле не существовало
+    // вовсе, и «почему кейс не дал кадра» не отвечалось нигде.
+    error: parseJson(row.error_json),
     // Квитанция reuse по уровням (P2-10): `{reuse:{candidate,frame,readiness,geometry,
     // visualMetrics,verdict}, fingerprints:{frame,comparison,verdictPolicy,case}}`. `reuseReason`
     // остаётся производной сводкой одной строкой; квитанция отвечает уровень за уровнем — иначе
@@ -856,6 +942,9 @@ export async function routeAcceptance(
     const cancelled = orchestrator.cancelQueuedRun(runId);
     return json(runView(cancelled, orchestrator.repo.cases(runId), orchestrator,
       await extraRunWarnings(dataDir, cancelled, orchestrator)), 200, noStore);
+  }
+  if (segments.length === 3 && segments[2] === "resume") {
+    return resumeRun(request, db, runId, principal, orchestrator);
   }
   throw new ApiError(404, "not_found", "API route not found");
 }

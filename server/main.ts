@@ -47,7 +47,9 @@ import { routeCaseSets } from "./routes/caseSets";
 import { RESOURCE_BARRIER_DISABLED } from "./capture/resourceBarrier";
 import { geometrySurfacesEnabled } from "./acceptance/gates/geometry2";
 import { runtimeDefaultsDisabled } from "./components/runtimeDefaults";
+import { schemaResolverV2Enabled } from "./validation";
 import { candidateOverlayEnabled } from "./acceptance/caseSets";
+import { acceptanceResumeEnabled } from "./acceptance/orchestrator";
 import { suggestedPolicyEnabled } from "./acceptance/suggest";
 import { impactedSnapEnabled } from "./prototypes/screenFrames";
 import { migrationCommitEnabled, sweepStaleMigrationCommits } from "./migration/commit";
@@ -282,6 +284,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // создавать нельзя — старый образ промоутит такой ран **без** верификации графа зависимостей.
     if(!candidateOverlayEnabled()) console.warn("[acceptance] EASYUI_CANDIDATE_OVERLAY_DISABLED=1: candidate dependency overlay off, case-set manifests with candidateOverlay are refused (422 candidate_overlay_disabled)");
     if(RESOURCE_BARRIER_DISABLED) console.warn("[capture] EASYUI_RESOURCE_BARRIER_DISABLED=1: resource barrier off, profiles fall back to their pre-wave readiness policies (default-v1 → v1, pixel-strict-v1 → v2, reference → v2)");
+    // BR-06 (план 2026-08-08 §6): kill-switch продолжения приёмки. Гасит **только** ручку
+    // `/resume` и её флаг; наблюдаемость волны (error_json случая, шов allocate-renderer,
+    // circuit breaker, per-gate отпечатки) остаётся включённой — это фиксы дефектов.
+    // Rollback-window миграции v37: пока откат образа возможен без восстановления тома,
+    // продолжения создавать нельзя — старый образ о lineage не знает.
+    if(!acceptanceResumeEnabled()) console.warn("[acceptance] EASYUI_ACCEPTANCE_RESUME_DISABLED=1: resumable acceptance off, POST /api/acceptance-runs/:id/resume answers 409 acceptance_resume_disabled");
     // W5 (план 2026-08-07 §1.7/§W5): kill-switch импакт-съёмки. Гасит **обе** половины фичи —
     // ручку плана (404) и запись кадров экранов на горячем пути съёмки, — потому что писать в
     // таблицу v34 при откате образа некуда. Уже записанные кадры не трогаются: включение обратно
@@ -308,6 +316,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // W9 (план 2026-08-07 §1.6): **render-affecting** аварийный kill-switch — он меняет пиксели,
     // не входя ни в один отпечаток, поэтому ран, снятый при поднятом флаге, внешне неотличим от
     // честного. Отсюда предупреждение в логе старта и `runtime_defaults_disabled` в accept-status.
+    // BR-01a (план 2026-08-08 §1): kill-switch резолвера схемы. Возвращает **все четыре** фикса
+    // разом — пины композиции снова текут по имени на весь документ, readiness снова судит о
+    // нераскрытом дереве, `track:head` снова перескакивает в чужую ДС, а неизвестный prop теряет
+    // диагностический контекст. Ничего не мигрирует и не инвалидирует: путь save/readiness
+    // персистентных форм не заводит, поэтому тумблер безопасен в обе стороны.
+    if(!schemaResolverV2Enabled()) console.warn("[prototypes] EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1: prototype schema resolver v2 off, composition pins apply document-wide by type name, readiness resolves the unexpanded document, head-tracking pins ignore the design-system filter and unknown props answer without component_prop_unknown context");
     if(runtimeDefaultsDisabled()) console.warn("[components] EASYUI_RUNTIME_DEFAULTS_DISABLED=1: schema defaults are NOT applied at render; acceptance of families declaring capabilities.runtimeSchemaDefaults is invalid while this is set");
     // Watchdog фаз саги (триаж O-M7, R7): периодических таймеров в сервере нет, поэтому зависшая
     // фаза подметается на старте процесса — рядом с `failStagingPublishes` — и на каждом запросе

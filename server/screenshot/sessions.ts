@@ -37,6 +37,18 @@ export function matchAllowed(path: string, allowedUrls: readonly string[]): bool
 
 /** Job hard deadline (ms) plus the extra token lifetime beyond it. */
 export const JOB_DEADLINE_MS = 60_000;
+/**
+ * Дедлайн **аллокации рендерера** (BR-06, план 2026-08-08 §6): от спавна воркера до вехи
+ * `{"type":"allocated"}`, которую он пишет сразу после `chromium.launch`.
+ *
+ * Отдельная константа, а не доля `JOB_DEADLINE_MS`, потому что это другая фаза с другой ценой:
+ * «браузер не достался за 15 s» — почти всегда отсутствующий бинарь или исчерпанная память хоста,
+ * и ждать под это полную минуту капчура бессмысленно. Job-дедлайн стартует **после** вехи, то
+ * есть съёмка получает свои 60 s целиком независимо от того, сколько стоил запуск браузера.
+ */
+export const ALLOCATE_DEADLINE_MS = 15_000;
+// TTL не расширен вместе со швом намеренно: худший случай раскола — `ALLOCATE_DEADLINE_MS`
+// (15 s) плюс `JOB_DEADLINE_MS` (60 s) = 75 s, и он по-прежнему помещается в прежние 90 s.
 const TOKEN_TTL_MS = JOB_DEADLINE_MS + 30_000;
 
 export class CaptureSessionStore {

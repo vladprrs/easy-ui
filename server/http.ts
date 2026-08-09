@@ -19,6 +19,12 @@ export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRe
    * срок жизни кандидата в отказе по протуханию.
    */
   componentId?: string; expiresAt?: string;
+  /**
+   * План 2026-08-08 §1 (BR-01a): `422 component_pin_conflict` — имя типа, которое один документ
+   * требует в двух версиях (пин раскрытой композиции против активной публикации авторского
+   * элемента). Обе версии и пути элементов приезжают в `issues`; `componentId` — уже объявлен выше.
+   */
+  componentName?: string;
   /** План 2026-08-07 §W4: id саги в `409 migration_commit_in_flight`. */
   commitId?: string;
   /** `422 overlay_hash_mismatch` мультиран-promote: какие графы разошлись. */

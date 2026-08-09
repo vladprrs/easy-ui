@@ -80,6 +80,12 @@ services:
       # (`runtime_defaults_disabled` в accept-status); штатный откат компонента — републикация
       # исходника без `capabilities.runtimeSchemaDefaults`.
       EASYUI_RUNTIME_DEFAULTS_DISABLED: ${EASYUI_RUNTIME_DEFAULTS_DISABLED:-}
+      # BR-06 (план 2026-08-08 §6): продолжение остановленного рана приёмки
+      # (`POST /api/acceptance-runs/:id/resume`, `features.acceptanceResumeV1`). Гасит **только**
+      # ручку: наблюдаемость волны — причина падения случая (`error_json`, миграция v37), шов
+      # `allocate-renderer` и circuit breaker аллокации — работает всегда, это фиксы дефектов.
+      # Rollback-window v37: пока откат образа возможен без восстановления тома — держать `1`.
+      EASYUI_ACCEPTANCE_RESUME_DISABLED: ${EASYUI_ACCEPTANCE_RESUME_DISABLED:-}
     expose:
       - "8787"
     volumes:

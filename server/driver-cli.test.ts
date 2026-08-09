@@ -31,6 +31,7 @@ import {
   buildBaselinePlan,
   parseDiffArguments,
   parseArgs,
+  lineageLines,
   caseSetIdOfManifest,
   caseSetLimits,
   sourcePackageLimits,
@@ -1632,6 +1633,45 @@ describe("author driver promote verb", () => {
     expect(parseArgs(["accept", "pay-card", "--refresh", "alpha, beta"])).toMatchObject({ flags: { refresh: { caseIds: ["alpha", "beta"] } } });
     expect(parseArgs(["accept", "pay-card", "--policy", "pixel-strict-v1", "--json"])).toMatchObject({ flags: { policy: "pixel-strict-v1", json: true } });
     expect(parseArgs(["accept-status", "acc_1", "--evidence", "run.zip"])).toMatchObject({ cmd: "accept-status", args: ["acc_1"], flags: { evidence: "run.zip" } });
+  });
+
+  /**
+   * BR-06: `accept-resume <runId>` — ровно один позиционал и подмножество флагов `accept`
+   * **после** постановки. `--refresh`/`--policy`/`--case-set` тут не флаги, а ошибка: продолжение
+   * исполняет ран предка, и «снять иначе» — это `accept`.
+   */
+  test("accept-resume parses one run id and refuses re-shaping flags", () => {
+    expect(parseArgs(["accept-resume", "acc_1"])).toMatchObject({ cmd: "accept-resume", args: ["acc_1"], flags: {} });
+    expect(parseArgs(["accept-resume", "acc_1", "--summary", "--timeout-sec", "600", "--evidence", "run.zip"]))
+      .toMatchObject({ cmd: "accept-resume", args: ["acc_1"], flags: { summary: true, timeoutSec: 600, evidence: "run.zip" } });
+    for (const args of [
+      ["accept-resume"], ["accept-resume", "acc_1", "acc_2"],
+      ["accept-resume", "acc_1", "--refresh", "all"], ["accept-resume", "acc_1", "--policy", "pixel-strict-v1"],
+    ]) {
+      expect(() => parseArgs(args)).toThrow();
+    }
+  });
+
+  /**
+   * BR-06: родословная печатается **до** отчёта и только когда она есть. Доволновой сервер полей
+   * не шлёт — вывод обязан остаться прежним, поэтому пустой массив здесь так же важен, как строки.
+   */
+  test("lineage lines report the attempt, the previous stop and the resume hint", () => {
+    expect(lineageLines({ runId: "acc_1", status: "pass" })).toEqual([]);
+    expect(lineageLines({ runId: "acc_1", attempt: 1, resumedFromRunId: null, resume: null })).toEqual([]);
+    expect(lineageLines({
+      runId: "acc_2", attempt: 2, resumedFromRunId: "acc_1",
+      resume: { resumable: true, resumedFrom: { runId: "acc_1", statusReason: "phase_timeout", phase: "capture", lastCompletedPhase: "validate" } },
+    })).toEqual([
+      "lineage: attempt 2 resumed from acc_1",
+      "previous stop: phase_timeout at phase capture (last completed validate)",
+    ]);
+    expect(lineageLines({
+      runId: "acc_3", attempt: 1,
+      resume: { resumable: true, phase: "allocate-renderer", lastCompletedPhase: "validate" },
+    })).toEqual([
+      "stopped at phase allocate-renderer (last completed validate); resume with 'driver.mjs accept-resume acc_3'",
+    ]);
   });
 
   /** W2: `case-set` — подкоманда в первом позиционале, арность проверяется до сети. */

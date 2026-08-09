@@ -179,6 +179,8 @@ test("флаг OFF: весь набор acceptance-ручек отвечает 4
     [`/acceptance-runs/${runId}/cases`, "GET"],
     [`/acceptance-runs/${runId}/evidence`, "GET"],
     [`/acceptance-runs/${runId}/cancel`, "POST", {}],
+    // BR-06: продолжение живёт под тем же гейтом — без матрицы ручки нет вовсе.
+    [`/acceptance-runs/${runId}/resume`, "POST", {}],
     [`/components/${COMPONENT_ID}/impact`, "POST", { candidateId: `cand_${"0".repeat(64)}`, baselineRunId: runId }],
   ];
   for (const [path, method, body] of calls) {
@@ -366,6 +368,52 @@ test("cancel: queued отменяется, второй нетерминальн
   const again = await handler(req(`/acceptance-runs/${run.runId}/cancel`, "POST", {}));
   expect(again.status).toBe(409);
   expect(await jsonOf<{ error: { code: string } }>(again)).toMatchObject({ error: { code: "run_not_cancellable" } });
+}, 120_000);
+
+/**
+ * BR-06: HTTP-поверхность продолжения. Предмет — коды отказов и форма ответа; продолжаемость,
+ * lineage и перенос гейтов живут в `server/acceptance/resume.test.ts`.
+ */
+test("resume: kill-switch, неподходящее состояние и повторное продолжение — типизированные 409", async () => {
+  const { handler, orchestrator } = await setup({ autoDrain: false });
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const run = await jsonOf<RunBody>(await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId })));
+
+  // Kill-switch отвечает **до** проверок состояния: агент получает один и тот же отказ.
+  process.env.EASYUI_ACCEPTANCE_RESUME_DISABLED = "1";
+  try {
+    const off = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+    expect(off.status).toBe(409);
+    expect(await jsonOf<{ error: { code: string } }>(off)).toMatchObject({ error: { code: "acceptance_resume_disabled" } });
+  } finally { delete process.env.EASYUI_ACCEPTANCE_RESUME_DISABLED; }
+
+  // Бегущий/поставленный ран продолжать нечем — он ещё идёт.
+  const running = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+  expect(running.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string } }>(running)).toMatchObject({ error: { code: "run_not_resumable" } });
+
+  // Тело — только `{}`: переопределять набор/профиль продолжением нельзя.
+  orchestrator!.repo.sweepNonTerminalRuns();
+  const withFields = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", { policy: "pixel-strict-v1" }));
+  expect(withFields.status).toBe(400);
+
+  const resumed = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+  expect(resumed.status, await resumed.clone().text()).toBe(202);
+  const body = await jsonOf<{ runId: string; attempt: number; resumedFromRunId: string; resumedFrom: { statusReason: string } }>(resumed);
+  expect(body.attempt).toBe(2);
+  expect(body.resumedFromRunId).toBe(run.runId);
+  expect(body.resumedFrom.statusReason).toBe("interrupted");
+
+  // Повтор называет продолжение, а не создаёт второе.
+  const again = await handler(req(`/acceptance-runs/${run.runId}/resume`, "POST", {}));
+  expect(again.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string; runId: string } }>(again))
+    .toMatchObject({ error: { code: "run_already_resumed", runId: body.runId } });
+
+  // Ран-предок остался неизменным: продолжение — новая строка, а не правка терминального рана.
+  const source = await jsonOf<RunView & { runId: string; attempt: number; resumedFromRunId: string | null }>(
+    await handler(req(`/acceptance-runs/${run.runId}`)));
+  expect(source).toMatchObject({ status: "error", statusReason: "interrupted", attempt: 1, resumedFromRunId: null });
 }, 120_000);
 
 // ------------------------------------------------------- case-set-манифесты (W2)
@@ -835,8 +883,11 @@ test("view: default остаётся полным ответом, неизвес
   // Регрессия формы полного вида: набор ключей и вложенность failedCases не менялись волной W8.
   const full = await jsonOf<Record<string, unknown>>(await handler(req(`/acceptance-runs/${runId}`)));
   expect(Object.keys(full).sort()).toEqual([
+    // BR-06 (2026-08-08): аддитивная тройка родословной — `attempt`, `resumedFromRunId`, `resume`.
+    "attempt",
     "candidateId", "caseSetId", "componentId", "createdAt", "eta", "evidenceManifestHash", "failedCases",
     "finishedAt", "gates", "idempotencyKey", "impact", "policy", "progress", "refresh", "remediationGroups",
+    "resume", "resumedFromRunId",
     // W7 (2026-08-07): аддитивный раздел `warnings` — advisory-предупреждения рана.
     "runId", "startedAt", "status", "statusReason", "warnings",
   ]);

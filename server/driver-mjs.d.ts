@@ -84,6 +84,8 @@ declare module "*/author/driver.mjs" {
   export function migrationCommitExitCode(phase: string): number;
   export function migrationCommitLines(receipt: Record<string, unknown>): string[];
   export function parseArgs(argv: readonly string[]): DriverParsedArgs;
+  /** BR-06: строки родословной и точки остановки рана (пустой массив у доволнового ответа). */
+  export function lineageLines(run: unknown): string[];
   export function rendererPreflightWarning(capabilities: unknown): string | null;
   export interface DriverViewport { width: number; height: number }
   export interface DriverSurface {

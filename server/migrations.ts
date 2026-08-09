@@ -1153,6 +1153,50 @@ export const migrations = [
       created_at TEXT NOT NULL)`);
     db.run("CREATE INDEX figma_source_packages_source ON figma_source_packages (design_system, file_key)");
   },
+  (db: Database) => {
+    // v37: возобновляемая приёмка — причина падения случая и происхождение рана
+    // (план `docs/plans/2026-08-08-blocker-removal-eui-br.md` §6, EUI-BR-06).
+    //
+    // Четыре аддитивные nullable-колонки (плюс одна с константным дефолтом) и один partial index.
+    // Почему именно так:
+    //
+    // 1. **`acceptance_cases.error_json`** — `{outcome, message, attempts, elapsedMs}` из
+    //    `CaptureInfraError`. Сегодня причина падения случая **не персистится нигде**
+    //    (`runner.ts` кладёт её только в in-memory `CaseExecution`), поэтому после рестарта
+    //    процесса «упал ли случай из-за инфраструктуры или из-за продукта» невосстановимо — а
+    //    именно на этот вопрос обязан отвечать resume. NULL — «случай не падал инфраструктурно»
+    //    (в том числе любая до-миграционная строка), а не «неизвестно».
+    // 2. **`acceptance_runs.resumed_from_run_id`** — плоская TEXT-ссылка **без FK**, по канону
+    //    A9-receipts (`component_publishes.acceptance_run_id`). FK здесь означал бы, что свипер
+    //    кандидатов (`sweepExpiredCandidates`, он удаляет раны построчно) не сможет удалить
+    //    предка, у которого есть продолжение, — то есть lineage начал бы держать GC. Ссылка
+    //    отчётная: терминальный ран неизменяем, а resume — **новый** ран.
+    // 3. **`acceptance_runs.attempt`** — `NOT NULL DEFAULT 1`. Единственная колонка волны с
+    //    дефолтом, и он константный: у всех существующих ранов попытка первая по определению.
+    //    Номер попытки — часть детерминированного `idempotency_key` (`resume:<runId>:<attempt>`),
+    //    без которого дедупликации повторного POST /resume не существует: NULL-значения в SQLite
+    //    различны, поэтому «пустой ключ» не дедуплицирует ничего.
+    // 4. **`acceptance_runs.resume_json`** — `{resumable, phase, lastCompletedPhase, elapsedMs,
+    //    resumeFrom, jobIds, resumedFrom{…}}`. Одна колонка, а не пять: это **отчёт** о том, где
+    //    ран остановился, он читается целиком и никогда не участвует в WHERE. NULL — ран
+    //    остановки не описывал (успешный ран, до-миграционный ран).
+    // 5. **Partial index по `resumed_from_run_id`** — единственный горячий lookup resume:
+    //    «есть ли у этого рана продолжение» (409 `run_already_resumed`). Partial, потому что
+    //    подавляющее большинство ранов — не продолжения.
+    //
+    // Откат образа переживается: v36-код читает обе таблицы через `SELECT *` и собирает ответы по
+    // именованным полям, поэтому лишние колонки ему не мешают (тот же инвариант, что у v28–v33).
+    // Обратная сторона отката — lineage продолжений: старый образ ручки `/resume` не знает и
+    // покажет цепочку как набор независимых ранов. Правило rollback-window: пока откат возможен —
+    // `POST /api/acceptance-runs/:id/resume` не использовать (kill-switch
+    // `EASYUI_ACCEPTANCE_RESUME_DISABLED=1` запрещает ровно эту операцию).
+    db.run("ALTER TABLE acceptance_cases ADD COLUMN error_json TEXT");
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN resumed_from_run_id TEXT");
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1");
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN resume_json TEXT");
+    db.run(`CREATE INDEX acceptance_runs_resumed_from ON acceptance_runs (resumed_from_run_id)
+      WHERE resumed_from_run_id IS NOT NULL`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

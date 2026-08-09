@@ -169,6 +169,11 @@ async function run(job) {
     // объявленный отпечаток и фактический запуск разъехались бы молча.
     const determinismArgs = Array.isArray(job.determinismArgs) ? job.determinismArgs : [];
     browser = await chromium.launch({ headless: true, args: [...buildLaunchArgs(denyPort, capturePort), ...determinismArgs] });
+    // Веха шва `allocate-renderer` (BR-06, план 2026-08-08 §6). Пишется **сразу** после запуска
+    // браузера и до любой работы над кадром: только она отделяет «рендерер не достался» от
+    // «съёмка не уложилась». Строка NDJSON — не результат: раннер отбирает результат по полю `ok`
+    // (см. `worker-runner.ts`), поэтому старые читатели «последней строки» не ломаются.
+    emitMilestone({ type: "allocated" });
     context = await browser.newContext({
       viewport: job.viewport,
       deviceScaleFactor: job.deviceScaleFactor,
@@ -326,6 +331,15 @@ async function run(job) {
  * кадрах (найдено корпусом рендерера, план 2026-08-03-renderer-contract-2 §5 R2b). Выходим
  * только после подтверждённой записи; таймер держит event loop и страхует от зависшего дренажа.
  */
+/**
+ * Веха протокола (BR-06): одна строка NDJSON, без ожидания дренажа и без выхода. Отдельная от
+ * {@link emitResult} функция намеренно — веха обязана уехать в пайп **до** того, как начнётся
+ * дорогая работа, и не имеет права ни завершать процесс, ни держать event loop.
+ */
+export function emitMilestone(message) {
+  try { process.stdout.write(`${JSON.stringify(message)}\n`); } catch { /* пайп закрыт — веха необязательна */ }
+}
+
 function emitResult(result, code) {
   const exit = () => process.exit(code);
   const guard = setTimeout(exit, 10_000);

@@ -5,6 +5,7 @@
  * реализации нет (в свёртке D10 такие гейты не участвуют).
  */
 import type { GateName } from "../policies";
+import type { RunPhase } from "./capture";
 import { auditGate } from "./audit";
 import { contractGate } from "./contract";
 import { defaultsGate } from "./defaults";
@@ -51,4 +52,24 @@ export { readinessBlocksVisual, readinessOfCase } from "./readiness";
 export { createGeometry2Gate, geometryTolerancesOf, paintShaKey } from "./geometry2";
 export { createVisualGate, maxRawDiffPctOf, visualIsRequired, visualSeverityClass } from "./visual";
 export * from "./types";
-export { captureCase, CaptureInfraError } from "./capture";
+export { captureCase, CaptureInfraError, RUN_PHASES, phaseRank, type RunPhase } from "./capture";
+
+/**
+ * Фаза рана, которой принадлежит гейт (BR-06). Три структурных гейта живут в одной публичной
+ * фазе `validate` — они не трогают кадр и исполняются до аллокации рендерера; `render` — это и
+ * есть фаза `capture` (аллокация отделена от неё швом в screenshot-сервисе, и её отказ приезжает
+ * своей фазой из `CaptureInfraError`); остальные гейты дают одноимённые фазы.
+ */
+export const GATE_PHASE: Partial<Record<GateName, RunPhase>> = {
+  contract: "validate", defaults: "validate", audit: "validate",
+  render: "capture", readiness: "readiness", geometry: "geometry", visual: "visual", determinism: "determinism",
+};
+
+/**
+ * Фаза гейта; объявленный, но не реализованный гейт (`regression`/`interactions`) фазы не
+ * занимает и читается как `verdict` — он не может оставить ран «недошедшим» до себя.
+ */
+export const phaseOfGate = (gate: GateName): RunPhase => GATE_PHASE[gate] ?? "verdict";
+
+/** Гейты фазы `validate`: единственные, чей завершённый результат имеет право переехать в resume. */
+export const RESUMABLE_GATES: readonly GateName[] = ["contract", "defaults", "audit"] as const;

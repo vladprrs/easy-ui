@@ -121,7 +121,18 @@ export interface CaptureQuality {
  * acceptance-ретраев своя таксономия. `queue_full` не бывает исходом поставленной джобы —
  * его возвращает enqueue (см. {@link jobOutcomeOfError}).
  */
-export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error" | "renderer_mismatch" | "surface_missing";
+export type JobOutcome =
+  | "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error" | "renderer_mismatch" | "surface_missing"
+  // BR-06 (план 2026-08-08 §6): шов `allocate-renderer` — аллокация браузера отделена от съёмки.
+  | "renderer_unavailable" | "allocate_timeout";
+
+/**
+ * Исходы **класса аллокации** (BR-06): рендерер не достался джобе вовсе — кадра нет и быть не
+ * могло. Это ровно те исходы, по которым считается circuit breaker рана приёмки: три подряд
+ * означают, что дальше платить N×3×60 s не за что.
+ */
+export const ALLOCATE_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_unavailable", "allocate_timeout", "queue_full"] as const;
+export const isAllocateJobOutcome = (outcome: JobOutcome): boolean => ALLOCATE_JOB_OUTCOMES.includes(outcome);
 
 /**
  * Исходы, которые ретраить бессмысленно (§5 R3, минор приёмки R1). `renderer_mismatch` —
@@ -133,7 +144,14 @@ export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "sub
  * `subprocess_error` и жгло `maxInfraRetries` приёмки, хотя повтор даёт ровно ту же пустую
  * страницу — терминальность по канону `renderer_mismatch`.
  */
-export const TERMINAL_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_mismatch", "surface_missing"] as const;
+/**
+ * `renderer_unavailable` (BR-06) — терминальный по тому же аргументу: бинаря chromium в образе
+ * нет либо `chromium.launch` бросил, и повтор в том же процессе даст ровно тот же отказ. До волны
+ * это ехало как `subprocess_error` (а 501 `screenshot_unavailable` — вообще мимо таксономии) и
+ * жгло `maxInfraRetries` каждого случая матрицы. `allocate_timeout` терминальным **не** является:
+ * аллокация могла не успеть под нагрузкой, и следующая попытка законно может успеть.
+ */
+export const TERMINAL_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_mismatch", "surface_missing", "renderer_unavailable"] as const;
 export const isTerminalJobOutcome = (outcome: JobOutcome): boolean => TERMINAL_JOB_OUTCOMES.includes(outcome);
 
 /**
@@ -203,6 +221,16 @@ export const VIEWPORT_SURFACE_PAINT_MARGIN_PX = 16;
 
 /** Классификация провала джобы по сообщению воркер-раннера/исключения execute. */
 export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | "queue_full"> {
+  // BR-06: два исхода шва аллокации проверяются **до** общего `timeout`/`worker_crash` — иначе
+  // «браузер не достался» неотличимо от «съёмка не уложилась», а это разные фазы с разной ценой
+  // и разной терминальностью. Маркеры дословные: их пишет `worker-runner.ts` и никто больше.
+  if (/renderer allocation timed out|allocate_timeout/i.test(message)) return "allocate_timeout";
+  // Только маркеры **отсутствующего браузера**: сюда намеренно не входит `worker spawn failed`
+  // (упал спавн node-процесса — это инфраструктурный шум, повтор может пройти), иначе
+  // ретраибельный отказ стал бы терминальным.
+  if (/renderer unavailable|renderer_unavailable|Executable doesn't exist|browserType\.launch|chromium.*(not installed|missing)/i.test(message)) {
+    return "renderer_unavailable";
+  }
   if (/timed out|timeout|deadline/i.test(message)) return "timeout";
   // `worker produced no result` — процесс умер, не написав результат (OOM/SIGKILL/креш chromium).
   if (/produced no result|target closed|browser has been closed|crash|SIGSEGV|SIGKILL|out of memory/i.test(message)) return "worker_crash";
@@ -212,6 +240,11 @@ export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | 
 /** Исход для ошибки постановки/чтения джобы: 429 `queue_full` — единственный enqueue-исход. */
 export function jobOutcomeOfError(error: unknown): Exclude<JobOutcome, "ok"> {
   if (error instanceof ApiError && error.code === "queue_full") return "queue_full";
+  // BR-06: `501 screenshot_unavailable` — это отсутствующий рендерер, а не «сервер приболел».
+  // До волны он не попадал в таксономию вовсе (`classifyJobFailure` по тексту давал
+  // `subprocess_error`), проходил мимо `isProductRefusal` (статус ≥ 500) и ретраился
+  // `maxInfraRetries` раз на каждом случае матрицы. Теперь это терминальный исход аллокации.
+  if (error instanceof ApiError && error.code === "screenshot_unavailable") return "renderer_unavailable";
   return classifyJobFailure(error instanceof Error ? error.message : String(error));
 }
 

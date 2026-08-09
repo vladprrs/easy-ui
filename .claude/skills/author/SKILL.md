@@ -471,6 +471,7 @@ node driver.mjs accept pay-payment-card --evidence run.zip    # + скачать
 node driver.mjs accept pay-payment-card --summary             # компактный отчёт (канон для агента)
 node driver.mjs accept-status acc_… --summary                 # вердикт уже поставленного рана, компактно
 node driver.mjs accept-status acc_… --case disabled-dark      # drill-down: гейты, причины и квитанция одного случая
+node driver.mjs accept-resume acc_…                           # продолжить ран, вставший без вердикта (рестарт сервера, phase_timeout, breaker аллокации)
 node driver.mjs reject cand_… --reason "межстрочный интервал не по макету"  # отклонить сборку (терминально)
 node driver.mjs impact pay-payment-card --candidate cand_… --baseline-run acc_…   # dry-run: что придётся переснять
 node driver.mjs accept pay-payment-card --baseline-run acc_…  # частичная пересъёмка: снять только затронутое

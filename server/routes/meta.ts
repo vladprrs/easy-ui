@@ -44,9 +44,11 @@ import {
 } from "../../src/acceptance/caseSetSchema";
 import { GEOMETRY_SURFACES } from "../../src/acceptance/surfaces";
 import { candidateOverlayEnabled } from "../acceptance/caseSets";
+import { acceptanceResumeEnabled } from "../acceptance/orchestrator";
 import { geometrySurfacesEnabled } from "../acceptance/gates/geometry2";
 import { suggestedPolicyEnabled } from "../acceptance/suggest";
 import { RESOURCE_BARRIER_DISABLED } from "../capture/resourceBarrier";
+import { LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION, PROTOTYPE_SCHEMA_RESOLVER_VERSION, schemaResolverV2Enabled } from "../validation";
 import { RESOURCE_BARRIER_MAX_BUDGET_MS, RESOURCE_BARRIER_MAX_RESOURCES } from "../../src/capture/readinessPolicy";
 import { runtimeDefaultsDisabled } from "../components/runtimeDefaults";
 import { GEOMETRY_CONTRACT_VERSION } from "../../src/capture/geometry.mjs";
@@ -347,6 +349,14 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // `limits.caseSetMaxOverlayNodes`). Гаснет матрицей (без неё кандидатов нет) и собственным
       // `EASYUI_CANDIDATE_OVERLAY_DISABLED=1` (манифест с overlay — `422 candidate_overlay_disabled`).
       candidateDependencyOverlay: options.acceptanceMatrix === true && candidateOverlayEnabled(),
+      // BR-06 (план 2026-08-08 §6): `POST /api/acceptance-runs/:runId/resume` — продолжение
+      // остановленного рана **новым** раном с lineage (`resumedFromRunId`/`attempt`) и переносом
+      // завершённых structural-гейтов по совпавшим per-gate отпечаткам. Гейтится матричной
+      // приёмкой (без неё acceptance-ручек нет вовсе) **и** собственным kill-switch'ем
+      // `EASYUI_ACCEPTANCE_RESUME_DISABLED=1`; false — ручка отвечает `409 acceptance_resume_disabled`.
+      // Наблюдаемость волны (причина падения случая, шов allocate-renderer, circuit breaker)
+      // этим флагом **не** управляется: это фиксы дефектов, а не фича.
+      acceptanceResumeV1: options.acceptanceMatrix === true && acceptanceResumeEnabled(),
       // §W5: `POST /api/prototypes/:id/snap-plan` — импакт-план галерейной съёмки (какие экраны
       // снимать и почему, какие переиспользуются с доказательством). Матричной приёмкой **не**
       // гейтится: галерея к ней не относится. false — при `EASYUI_IMPACTED_SNAP_DISABLED=1`, и
@@ -380,6 +390,20 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // блок аддитивен, а сами capture-маршруты SPA вынесены из-под `AuthProvider`, поэтому
       // источник шума удалён, а не подавлен.
       captureNoiseSummary: true,
+      /**
+       * BR-01a (план 2026-08-08 §1): один резолвер схемы published component на save и readiness —
+       * пины композиции применяются только к элементам её раскрытия, `track:head` резолвит голову
+       * в дизайн-системе закреплённой версии, неизвестный prop отвечает типизированным
+       * `component_prop_unknown` с фактически применённой схемой. Матрицей не гейтится: путь
+       * save/readiness к приёмке не относится. false — при `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1`,
+       * и тогда `prototypeSchemaResolverVersion` честно откатывается на доволновую 1.
+       */
+      prototypeSchemaResolverV2: schemaResolverV2Enabled(),
+      /**
+       * Версия контракта резолвера (фидбэк §4) — **число**, а не факт существования: клиенту нужно
+       * знать, по какому контракту этот инстанс отвечает прямо сейчас, а не что умеет образ.
+       */
+      prototypeSchemaResolverVersion: schemaResolverV2Enabled() ? PROTOTYPE_SCHEMA_RESOLVER_VERSION : LEGACY_PROTOTYPE_SCHEMA_RESOLVER_VERSION,
       // §W6b: версия схемы агентской квитанции драйвера (`envelope: {schemaVersion, command, ok,
       // summary, items, artifacts, warnings, nextActions}`) — число, а не булев флаг: конверт
       // печатается всегда, и клиенту нужна его **форма**, а не факт существования. Растёт только

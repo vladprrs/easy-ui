@@ -2044,6 +2044,29 @@ const acceptanceImpactSchema = z.looseObject({
   recaptureCount: z.number(), reason: z.string(),
 });
 
+/**
+ * Отчёт об остановке рана (BR-06, план 2026-08-08 §6). Одна форма на два случая — «где встали» и
+ * «чьим продолжением являемся», — потому что оба отвечают на один вопрос агента: с какой точки
+ * продолжать. `resumable: false` бывает: не всякая остановка продолжаема (cancel, пустой скоуп).
+ */
+const acceptanceResumeSchema = z.looseObject({
+  resumable: z.boolean(),
+  /** Фаза, на которой ран встал: `resolve|validate|allocate-renderer|capture|readiness|geometry|visual|determinism|verdict`. */
+  phase: z.string().optional(),
+  /** Минимальная фаза по НЕЗАВЕРШЁННЫМ случаям: «дальше неё ран целиком не продвинулся». */
+  lastCompletedPhase: z.string().optional(),
+  elapsedMs: z.number().optional(),
+  resumeFrom: z.string().optional(),
+  /** Джобы капчура, названные упавшими случаями. */
+  jobIds: z.array(z.string()).optional(),
+  /** Продолжение: прежние статус, причина и фаза рана-предка. */
+  resumedFrom: z.looseObject({
+    runId: z.string(), attempt: z.number(), status: z.string(),
+    statusReason: z.string().nullable(), phase: z.string().nullable(),
+    lastCompletedPhase: z.string().nullable(), jobIds: z.array(z.string()),
+  }).optional(),
+});
+
 const acceptanceRunViewSchema = z.looseObject({
   runId: z.string(), candidateId: z.string(), componentId: z.string(), status: acceptanceRunStatusSchema,
   policy: z.looseObject({ id: z.string(), hash: z.string() }),
@@ -2054,8 +2077,18 @@ const acceptanceRunViewSchema = z.looseObject({
   impact: acceptanceImpactSchema.nullable(),
   /** Алгебра refresh (C1); `null` — ран поставлен до миграции v29. */
   refresh: acceptanceRefreshAlgebraSchema.nullable(),
-  /** Причина терминального статуса (`refresh_scope_empty`, D2); `null` у обычного исхода. */
+  /**
+   * Причина терминального статуса; `null` у обычного исхода. Словарь: `refresh_scope_empty` (D2),
+   * BR-06 добавил `interrupted`, `phase_timeout`, `renderer_unavailable`,
+   * `capture_budget_exhausted`, `queue_starvation`.
+   */
   statusReason: z.string().nullable(),
+  /** BR-06: ран, продолжением которого этот является; `null` — самостоятельный. */
+  resumedFromRunId: z.string().nullable().optional(),
+  /** BR-06: номер попытки в цепочке продолжений (1 — исходный ран). */
+  attempt: z.number().optional(),
+  /** BR-06: отчёт об остановке либо lineage продолжения; `null` — остановки ран не описывал. */
+  resume: acceptanceResumeSchema.nullable().optional(),
   remediationGroups: z.array(acceptanceRemediationGroupSchema),
   /** W7 (AC §9.3): advisory-предупреждения рана; пустой массив — «нечего перепроверять». */
   warnings: z.array(acceptanceRunWarningSchema),
@@ -2081,6 +2114,10 @@ const acceptanceRunSummarySchema = z.looseObject({
   /** Маркер контракта (C23): его отсутствие означает сервер, который проигнорировал `view`. */
   view: z.literal("summary"),
   runId: z.string(), status: acceptanceRunStatusSchema, statusReason: z.string().nullable(),
+  /** BR-06: `attempt 2 after acc_…` — поля нет у самостоятельной первой попытки. */
+  lineage: z.string().optional(),
+  /** BR-06: `phase_timeout@capture last=validate resumable` — поля нет, если ран не вставал. */
+  resume: z.string().optional(),
   progress: acceptanceProgressSchema,
   /** `{gate: "pass:17 fail:8"}` — по строке на гейт. */
   gates: z.record(z.string(), z.string()),
@@ -2238,6 +2275,14 @@ export const getAcceptanceRunCasesContract = registerContract({
         reuseReason: z.string().optional(),
       }).nullable(),
       referenceAssetId: z.string().nullable(), startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
+      /**
+       * BR-06: причина инфраструктурного падения случая. `null` — случай инфраструктурно не падал
+       * (в том числе любая строка старше миграции v37: до неё причина не хранилась нигде).
+       */
+      error: z.looseObject({
+        outcome: z.string(), message: z.string(),
+        attempts: z.number().optional(), elapsedMs: z.number().optional(), phase: z.string().optional(),
+      }).nullable().optional(),
       gates: z.array(acceptanceGateResultSchema), causes: z.array(acceptanceCauseSchema),
       suggestedPolicy: acceptanceSuggestedPolicySchema.nullable(),
       artifacts: z.array(z.looseObject({ name: z.string(), sha256: z.string(), bytes: z.number() })),
@@ -2264,6 +2309,34 @@ export const cancelAcceptanceRunContract = registerContract({
   errors: [
     ...acceptanceAuthErrors,
     { status: 409, code: "run_not_cancellable", description: "only queued runs can be cancelled" },
+  ],
+});
+
+/**
+ * BR-06 (план 2026-08-08 §6, фидбэк §9): продолжение остановленного рана. Живёт под тем же
+ * гейтом `EASYUI_ACCEPTANCE_MATRIX=1` и собственным kill-switch'ем.
+ */
+export const resumeAcceptanceRunContract = registerContract({
+  method: "POST", path: "/api/acceptance-runs/{runId}/resume",
+  summary: "Resume a run that STOPPED without a verdict (`capabilities.features.acceptanceResumeV1`). Resume is a NEW RUN, not a resurrection: a terminal run is immutable because publishes, `evidence_manifest_hash` and the promote invariants reference it, so the server queues a fresh run over the same candidate, case set and policy profile and answers 202 with its id, `resumedFromRunId`, `attempt` and `resumedFrom {runId, attempt, status, statusReason, phase, lastCompletedPhase, jobIds}` — the previous error travels with the lineage instead of requiring a second request. Only a run that declared itself resumable can be resumed: after a process restart the startup sweep marks non-terminal runs `error` with `statusReason: \"interrupted\"` (their `running`/`pending` cases are unfinished BY DEFINITION — nobody closed them), a typed infrastructure timeout terminalizes with `statusReason: \"phase_timeout\"` naming the phase, and the allocate circuit breaker terminalizes with `renderer_unavailable` / `capture_budget_exhausted` / `queue_starvation` after three consecutive allocation-class case outcomes. Anything else — a verdict, a cancel, `refresh_scope_empty` — is 409 run_not_resumable; queue an ordinary run instead. WHAT IS REUSED: completed gates of the `validate` phase (contract/defaults/audit) whose PER-GATE FINGERPRINT still matches are carried over verbatim and are not re-executed; everything from `capture` onward is captured again, because the ancestor's frame may not exist at all. A partially executed case carries exactly its finished structural gates. Idempotency is deterministic — `idempotency_key = \"resume:<sourceRunId>:<attempt>\"` — so repeating the call returns the same run, and a second concurrent resume of the same candidate is refused by the one-in-flight index (409 acceptance_run_in_flight). Resuming an already resumed run is 409 run_already_resumed with the successor's id in `error.runId`. The body must be `{}`: the case set, surface, policy and candidate come from the ancestor — overriding them would be a new run, not a continuation. With EASYUI_ACCEPTANCE_RESUME_DISABLED=1 the handle answers 409 acceptance_resume_disabled (the observability half of the wave — per-case `error`, the allocate-renderer seam and the circuit breaker — stays on regardless: those are defect fixes, not a feature).",
+  status: 202,
+  requestSchema: z.strictObject({}),
+  responseSchema: z.looseObject({
+    runId: z.string(), status: acceptanceRunStatusSchema, candidateId: z.string(), componentId: z.string(),
+    policy: z.looseObject({ id: z.string(), hash: z.string() }),
+    progress: acceptanceProgressSchema, cases: z.number(), cached: z.boolean(),
+    refresh: acceptanceRefreshAlgebraSchema.optional(),
+    resumedFromRunId: z.string().nullable(),
+    attempt: z.number(),
+    resumedFrom: z.looseObject({}).nullable(),
+  }),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 409, code: "acceptance_resume_disabled", description: "EASYUI_ACCEPTANCE_RESUME_DISABLED=1 on this server" },
+    { status: 409, code: "run_not_resumable", description: "the run is still going, or it stopped in a state that is not resumable (verdict, cancel, refresh_scope_empty)" },
+    { status: 409, code: "run_already_resumed", description: "a continuation of this run already exists; its id is in error.runId" },
+    { status: 409, code: "acceptance_run_in_flight", description: "the candidate already has a queued/running run" },
+    { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
   ],
 });
 
@@ -3438,12 +3511,29 @@ export const capabilitiesResponseSchema = z.object({
     /** Сага миграционного коммита `/api/migration-commits*` (план 2026-08-07 §W4); гаснет матрицей и `EASYUI_MIGRATION_COMMIT_DISABLED=1`. */
     migrationCommit: z.boolean(),
     /**
+     * `POST /api/acceptance-runs/:runId/resume` — продолжение остановленного рана **новым** раном
+     * (BR-06, план 2026-08-08 §6); гаснет матрицей и `EASYUI_ACCEPTANCE_RESUME_DISABLED=1`.
+     * Наблюдаемость той же волны (per-case `error`, шов allocate-renderer, circuit breaker) от
+     * флага не зависит — это фиксы дефектов, а не фича.
+     */
+    acceptanceResumeV1: z.boolean(),
+    /**
      * Версия схемы агентской квитанции драйвера (`envelope`, план 2026-08-07 §1.4, W6b) —
      * **число**, а не булев флаг: конверт существует всегда, вопрос только в том, какую его
      * форму понимает эта пара «сервер × харнес». Растёт лишь при несовместимом изменении самого
      * конверта; новые ключи внутри `summary` версию не двигают.
      */
     receiptEnvelopeVersion: z.number().int().positive(),
+    /**
+     * Единый резолвер схемы published component на save/readiness (план 2026-08-08 §1, BR-01a):
+     * пины композиции — только на её раскрытие, `track:head` резолвит голову в ДС закреплённой
+     * версии, неизвестный prop — `component_prop_unknown` с `resolvedVersion`/`sourceHash`/
+     * `propsSchemaHash`/`catalogRevision`/`acceptedKeys`. Матрицей не гейтится; false — при
+     * `EASYUI_SCHEMA_RESOLVER_V2_DISABLED=1` (доволновая семантика byte-for-byte).
+     */
+    prototypeSchemaResolverV2: z.boolean(),
+    /** Контрактная версия этого резолвера: 2 — волна BR-01a, 1 — доволновой путь под kill-switch. */
+    prototypeSchemaResolverVersion: z.number().int().positive(),
   }),
   /**
    * Именованные пресеты live-text AA-бюджета (план 2026-08-06 §W4): значения владеет сервер,

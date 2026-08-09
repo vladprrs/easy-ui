@@ -20,7 +20,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... [--no-barrier] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> [--overlay <json|file>] | case-set validate <manifest.json> [--overlay <json|file>] | case-set get <caseSetId> | case-set coverage <caseSetId> | source-package upload <manifest.json> [--design-system <id>] | source-package list [--design-system <id>] [--file-key <key>] [--limit N] | source-package show <packageId> | source-package skeleton <packageId> --component <componentId> [--nodes a,b] [--out file.json] | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | migration-commit start <componentId> [--gallery <prototypeId>] [--screen <fragment.json>] [--candidate <candidateId>] [--acceptance-run <runId>]... [--expected-cases N] [--supersede auto|none] [--message <text>] [--audit-design-system <id>] [--idempotency-key <key>] [--receipt <file.json|file.txt>] [--timeout-sec N] [--dry-run] | migration-commit --status <commitId> | migration-commit --advance <commitId> | migration-commit --cancel <commitId> [--reason <text>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json, --summary-json (stdout carries ONLY the envelope receipt {schemaVersion, command, ok, summary, items, artifacts, warnings, nextActions} — the same object --json nests under `envelope`) and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap asks the server for the deterministic resource barrier (readiness: \"barrier\") by default because driver captures are SERVICE captures — --no-barrier is the rollback to the pre-wave v1 readiness; with --receipt snap/preview also print the barrier block (decoded/expected, fonts, stable frames, late resources, ms) and one summary line of suppressed console noise; case-set put/validate --overlay <json|file> merges the candidateOverlay map {\"<componentId>\": \"cand_...\"} into the manifest (accept has no --overlay: the graph belongs to the manifest); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure; migration-commit polls the SERVER-side saga (preflight \u2192 promote \u2192 gallery-save \u2192 verify \u2192 impacted-regression \u2192 audit): the idempotency key defaults to (component, headRev, sourceHash) so a repeat returns the same saga, a saga stopped in needs-<phase> exits 2 and is resumed with --advance or closed with --cancel, and --receipt writes the single agent record (.json = machine receipt, .txt = the printed lines)\nsource-package uploads the Figma source manifest (nodes + exports by assetId, never bytes: upload the PNGs with POST /api/assets first) — the package id is the content address of the manifest, so re-uploading the same one answers deduplicated: true; the manifest form (required fields, exports ≤ limits.sourcePackageMaxExports, every referenced nodeId declared in nodes[]) is checked BEFORE the request, and 'source-package skeleton <packageId> --component <id>' asks the server for a DRAFT case-set manifest (empty props, no invented expectedGeometry) that --out file.json writes for 'case-set put'";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... [--no-barrier] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> [--overlay <json|file>] | case-set validate <manifest.json> [--overlay <json|file>] | case-set get <caseSetId> | case-set coverage <caseSetId> | source-package upload <manifest.json> [--design-system <id>] | source-package list [--design-system <id>] [--file-key <key>] [--limit N] | source-package show <packageId> | source-package skeleton <packageId> --component <componentId> [--nodes a,b] [--out file.json] | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | accept-resume <runId> [--timeout-sec N] [--evidence <file.zip>] [--summary] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | migration-commit start <componentId> [--gallery <prototypeId>] [--screen <fragment.json>] [--candidate <candidateId>] [--acceptance-run <runId>]... [--expected-cases N] [--supersede auto|none] [--message <text>] [--audit-design-system <id>] [--idempotency-key <key>] [--receipt <file.json|file.txt>] [--timeout-sec N] [--dry-run] | migration-commit --status <commitId> | migration-commit --advance <commitId> | migration-commit --cancel <commitId> [--reason <text>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept-resume <runId> continues a run that STOPPED WITHOUT A VERDICT (server restart -> statusReason interrupted, typed phase_timeout, or the allocate circuit breaker: renderer_unavailable/capture_budget_exhausted/queue_starvation) by queueing a NEW run with lineage (resumedFromRunId/attempt): finished contract/defaults/audit gates whose per-gate fingerprint still matches are NOT re-executed, everything from capture onward is captured again; a run that produced a verdict is 409 run_not_resumable (re-run it with accept --refresh), an already continued run is 409 run_already_resumed naming the successor; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json, --summary-json (stdout carries ONLY the envelope receipt {schemaVersion, command, ok, summary, items, artifacts, warnings, nextActions} — the same object --json nests under `envelope`) and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap asks the server for the deterministic resource barrier (readiness: \"barrier\") by default because driver captures are SERVICE captures — --no-barrier is the rollback to the pre-wave v1 readiness; with --receipt snap/preview also print the barrier block (decoded/expected, fonts, stable frames, late resources, ms) and one summary line of suppressed console noise; case-set put/validate --overlay <json|file> merges the candidateOverlay map {\"<componentId>\": \"cand_...\"} into the manifest (accept has no --overlay: the graph belongs to the manifest); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure; migration-commit polls the SERVER-side saga (preflight \u2192 promote \u2192 gallery-save \u2192 verify \u2192 impacted-regression \u2192 audit): the idempotency key defaults to (component, headRev, sourceHash) so a repeat returns the same saga, a saga stopped in needs-<phase> exits 2 and is resumed with --advance or closed with --cancel, and --receipt writes the single agent record (.json = machine receipt, .txt = the printed lines)\nsource-package uploads the Figma source manifest (nodes + exports by assetId, never bytes: upload the PNGs with POST /api/assets first) — the package id is the content address of the manifest, so re-uploading the same one answers deduplicated: true; the manifest form (required fields, exports ≤ limits.sourcePackageMaxExports, every referenced nodeId declared in nodes[]) is checked BEFORE the request, and 'source-package skeleton <packageId> --component <id>' asks the server for a DRAFT case-set manifest (empty props, no invented expectedGeometry) that --out file.json writes for 'case-set put'";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -386,6 +386,26 @@ export const flagSpecs = Object.freeze({
     // артефакты ровно одного случая вместо всего рана.
     "--case": { value: true, key: "case" },
   },
+  /**
+   * BR-06 (план 2026-08-08 §6): продолжение остановленного рана. Флаги — те же, что у `accept`
+   * **после** постановки: ждать вердикт, скачать evidence, напечатать сводку. Ни `--policy`, ни
+   * `--case-set`, ни `--refresh` тут нет намеренно: продолжение исполняет ран предка, а «снять
+   * иначе» — это `accept`, а не resume.
+   */
+  "accept-resume": {
+    ...jsonFlag,
+    "--timeout-sec": {
+      value: true,
+      key: "timeoutSec",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 10 || number > 7200) invalid("--timeout-sec must be an integer from 10 to 7200");
+        return number;
+      },
+    },
+    "--evidence": { value: true, key: "evidence" },
+    "--summary": { value: false, key: "summary" },
+  },
   // RFC candidate-acceptance R3b: отклонение кандидата человеком. Решение терминально — ручки
   // «разотклонить» нет ни в драйвере, ни на сервере; выход — новая ревизия компонента.
   reject: { ...jsonFlag, "--reason": { value: true, key: "reason" } },
@@ -510,6 +530,8 @@ const ranges = Object.freeze({
   provenance: [2, 2],
   accept: [1, 1],
   "accept-status": [1, 1],
+  // BR-06: `accept-resume <runId>` — ровно один позиционал, ран-предок.
+  "accept-resume": [1, 1],
   reject: [1, 1],
   impact: [1, 1],
   // `migration-commit start <componentId>` (2) | `migration-commit --status|--advance|--cancel <id>` (0).
@@ -4099,6 +4121,44 @@ async function runAccept(args, flags) {
 }
 
 /**
+ * `accept-resume <runId>` (BR-06, план 2026-08-08 §6) — продолжение остановленного рана.
+ *
+ * **Это новый ран, а не воскрешение**: терминальный ран неизменяем (на него ссылаются receipts
+ * публикаций и promote-инварианты), поэтому сервер ставит свежий ран поверх того же кандидата,
+ * набора и профиля, а lineage (`resumedFromRunId`/`attempt`) связывает их. Драйвер печатает эту
+ * связь и **прежнюю** причину остановки: без неё «продолжили» неотличимо от «начали заново».
+ *
+ * Отказы отдаются как продуктовые (exit 2), а не как сбой инструмента: `run_not_resumable` значит
+ * «ран дал вердикт — продолжать нечего, пересними `accept --refresh`», `run_already_resumed` —
+ * «продолжение уже есть, вот оно».
+ */
+async function runAcceptResume(args, flags) {
+  const [sourceRunId] = args;
+  const capabilities = await requireAcceptanceMatrix();
+  if (capabilities.features?.acceptanceResumeV1 !== true) {
+    throw new CliError("server does not support resumable acceptance (features.acceptanceResumeV1 is off; needs EASYUI_ACCEPTANCE_RESUME_DISABLED unset); re-run the matrix with 'driver.mjs accept <componentId>'");
+  }
+  const response = await call("POST", `/acceptance-runs/${encodeURIComponent(sourceRunId)}/resume`, {});
+  const code = errorCode(response);
+  if (response.status === 409 && (code === "run_not_resumable" || code === "run_already_resumed" || code === "acceptance_resume_disabled" || code === "acceptance_run_in_flight")) {
+    const other = response.json?.error?.runId;
+    throw new CliError(`${code}: ${response.json?.error?.message ?? `run ${sourceRunId} cannot be resumed`}`
+      + (other && other !== sourceRunId ? `; see 'driver.mjs accept-status ${other}'` : ""), { exitCode: EXIT.productErrors });
+  }
+  const queued = await requireOk("acceptance resume", response, [202]);
+  const previous = queued.resumedFrom ?? null;
+  progress(`resume ${queued.runId} attempt ${queued.attempt} of ${queued.resumedFromRunId ?? sourceRunId} with ${queued.cases} cases`);
+  if (previous) {
+    progress(`previous stop: ${previous.statusReason ?? previous.status ?? "-"}`
+      + `${previous.phase ? ` at phase ${previous.phase}` : ""}`
+      + `${previous.lastCompletedPhase ? ` (last completed ${previous.lastCompletedPhase})` : ""}`);
+  }
+  const run = await pollAcceptanceRun(queued.runId, { deadlineMs: (flags.timeoutSec ?? ACCEPT_DEFAULT_TIMEOUT_SEC) * 1000 });
+  const summary = flags.summary ? await acceptanceSummary(run, capabilities) : null;
+  await reportAcceptance(run, { command: "accept-resume", componentId: run.componentId, flags, summary });
+}
+
+/**
  * Импакт-анализ (план 2026-08-03 §5 W6) — **dry-run**: ничего не снимает и ничего не пишет.
  *
  * Печатает базис (`asset-only` / `theme-only` / `conservative`), что именно изменилось и сколько
@@ -4182,6 +4242,34 @@ async function reportAcceptanceCase(runId, caseId) {
   if (exitCode !== EXIT.ok) throw new CliError(`case ${caseId} of run ${runId} is ${item.verdict ?? item.status}`, { exitCode });
 }
 
+/**
+ * Родословная и точка остановки рана (BR-06). Печатается **до** отчёта: «этот ран — вторая
+ * попытка» и «предыдущая встала на allocate-renderer» меняют чтение всего остального, поэтому
+ * не могут быть строчкой в конце. Поля опциональны — сервер доволновой сборки их не шлёт, и
+ * тогда вывод остаётся прежним байт-в-байт.
+ */
+export function lineageLines(run) {
+  const lines = [];
+  const attempt = Number.isInteger(run?.attempt) ? run.attempt : 1;
+  if (run?.resumedFromRunId || attempt > 1) {
+    lines.push(`lineage: attempt ${attempt}${run.resumedFromRunId ? ` resumed from ${run.resumedFromRunId}` : ""}`);
+  }
+  const resume = run?.resume ?? null;
+  if (resume && typeof resume === "object") {
+    const previous = resume.resumedFrom ?? null;
+    if (previous) {
+      lines.push(`previous stop: ${previous.statusReason ?? previous.status ?? "-"}`
+        + `${previous.phase ? ` at phase ${previous.phase}` : ""}`
+        + `${previous.lastCompletedPhase ? ` (last completed ${previous.lastCompletedPhase})` : ""}`);
+    }
+    if (resume.phase || resume.lastCompletedPhase) {
+      lines.push(`stopped at phase ${resume.phase ?? "-"} (last completed ${resume.lastCompletedPhase ?? "-"})`
+        + `${resume.resumable === true ? `; resume with 'driver.mjs accept-resume ${run.runId}'` : ""}`);
+    }
+  }
+  return lines;
+}
+
 async function runAcceptStatus(args, flags) {
   const [runId] = args;
   const capabilities = await requireAcceptanceMatrix();
@@ -4192,6 +4280,7 @@ async function runAcceptStatus(args, flags) {
   // Полный ран берётся всегда: он — источник link/receipt и терминальной проверки. `--summary`
   // добавляет к нему компактный отчёт, а не заменяет источник (D-E).
   const run = await requireOk("acceptance run", await call("GET", `/acceptance-runs/${encodeURIComponent(runId)}`));
+  for (const line of lineageLines(run)) out(line);
   const summary = flags.summary ? await acceptanceSummary(run, capabilities) : null;
   if (!ACCEPT_TERMINAL.has(run.status)) {
     report(
@@ -5107,6 +5196,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "provenance") await runProvenance(args, flags);
   else if (cmd === "accept") await runAccept(args, flags);
   else if (cmd === "accept-status") await runAcceptStatus(args, flags);
+  else if (cmd === "accept-resume") await runAcceptResume(args, flags);
   else if (cmd === "reject") await runReject(args, flags);
   else if (cmd === "impact") await runImpact(args, flags);
   else if (cmd === "migration-commit") await runMigrationCommit(args, flags);

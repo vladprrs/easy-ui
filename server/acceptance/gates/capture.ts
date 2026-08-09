@@ -11,7 +11,7 @@
  *   повтор даст тот же ответ.
  */
 import { ApiError } from "../../http";
-import { isTerminalJobOutcome, jobOutcomeOfError, type JobOutcome } from "../../screenshot/service";
+import { isAllocateJobOutcome, isTerminalJobOutcome, jobOutcomeOfError, type JobOutcome } from "../../screenshot/service";
 import type { CaptureQuality, CaptureReadinessOutcome, ScreenshotResult } from "../../screenshot/service";
 import type { GateContext } from "./types";
 
@@ -22,11 +22,39 @@ export const QUEUE_BACKOFF_MAX_MS = 5_000;
 export const CAPTURE_POLL_TIMEOUT_MS = 5 * 60_000;
 const POLL_INTERVAL_MS = 25;
 
-/** Инфраструктурный отказ, исчерпавший бюджет ретраев: случай уходит в `error` (D10). */
+/**
+ * Публичные фазы рана приёмки (BR-06, план 2026-08-08 §6; §9 фидбэка).
+ *
+ * Порядок значим — он и есть шкала `lastCompletedPhase`. Мапятся на реальность так:
+ * `resolve` — `resolveCandidateSubject`; `validate` — гейты `contract`/`defaults`/`audit`
+ * (компиляции как отдельного шага у нас нет: кандидат уже собран); `allocate-renderer` —
+ * получение браузера под джобу (шов в screenshot-сервисе, собственный дедлайн); дальше — гейты
+ * один-в-один; `verdict` — свёртка и запись манифеста.
+ *
+ * **Фаза наблюдается покейсово.** Ран не имеет своей фазы: каждый случай проходит шкалу целиком,
+ * поэтому run-level `lastCompletedPhase` определён как **минимум** по незавершённым случаям —
+ * то есть «дальше этой фазы ран целиком не продвинулся». Ран без незавершённых случаев отдаёт
+ * `verdict`.
+ */
+export const RUN_PHASES = [
+  "resolve", "validate", "allocate-renderer", "capture", "readiness", "geometry", "visual", "determinism", "verdict",
+] as const;
+export type RunPhase = (typeof RUN_PHASES)[number];
+export const phaseRank = (phase: RunPhase): number => RUN_PHASES.indexOf(phase);
+
+/**
+ * Инфраструктурный отказ, исчерпавший бюджет ретраев: случай уходит в `error` (D10).
+ *
+ * `phase` (BR-06) — та фаза шкалы, на которой отказ произошёл: `allocate-renderer` для исходов
+ * класса аллокации, `capture` для всего остального. Без неё typed timeout не мог назвать ни
+ * ресурс, ни точку продолжения, и «180 s без единой строчки диагностики» оставалось нормой.
+ */
 export class CaptureInfraError extends Error {
-  constructor(readonly outcome: JobOutcome, readonly attempts: number, message: string) {
+  readonly phase: RunPhase;
+  constructor(readonly outcome: JobOutcome, readonly attempts: number, message: string, phase?: RunPhase) {
     super(message);
     this.name = "CaptureInfraError";
+    this.phase = phase ?? (isAllocateJobOutcome(outcome) ? "allocate-renderer" : "capture");
   }
 }
 
@@ -73,7 +101,15 @@ function readinessOf(result: ScreenshotResult): CaptureReadinessOutcome | undefi
  */
 const isRetryable = (outcome: JobOutcome): boolean => outcome !== "ok" && !isTerminalJobOutcome(outcome);
 
-/** Доменный (не инфраструктурный) отказ постановки: ответ детерминирован, повтор бессмыслен. */
+/**
+ * Доменный (не инфраструктурный) отказ постановки: ответ детерминирован, повтор бессмыслен.
+ *
+ * BR-06: `501 screenshot_unavailable` сюда **не** попадает и попадать не должен — это не
+ * продуктовый отказ компонента, а отсутствие рендерера, и случай обязан получить
+ * `status:"error"` с названным исходом `renderer_unavailable`, а не `fail` гейта. Терминальность
+ * ему даёт таксономия (`TERMINAL_JOB_OUTCOMES`), а не эта функция: до волны 501 проходил мимо
+ * обеих проверок и жёг `maxInfraRetries` на каждом случае матрицы.
+ */
 function isProductRefusal(error: unknown): boolean {
   return error instanceof ApiError && error.status < 500 && error.code !== "queue_full";
 }
@@ -161,7 +197,13 @@ export async function captureCase(
       if (isProductRefusal(error)) throw error;
       lastOutcome = jobOutcomeOfError(error);
       lastMessage = error instanceof Error ? error.message : String(error);
-      if (!isRetryable(lastOutcome)) throw error;
+      // BR-06: терминальный исход постановки обрывает цикл и уходит наружу **как
+      // `CaptureInfraError` с названным исходом**, а не сырым ApiError. До волны здесь стоял
+      // `throw error`: 501 `screenshot_unavailable` вылетал мимо таксономии, и `executeCase`
+      // трактовал его как доменный отказ гейта (`fail` компонента за отсутствующий браузер).
+      // Для прежних терминальных исходов ветка была недостижима (их не производит ни
+      // `jobOutcomeOfError`, ни `classifyJobFailure`), поэтому легаси-поведение не меняется.
+      if (!isRetryable(lastOutcome)) break;
       continue;
     }
     const finished = await awaitJob(ctx, jobId);
