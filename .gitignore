@@ -50,3 +50,8 @@ playwright-report/
 # Брендовый кит шрифтов (лицензия Commercial Type) — в репозиторий не кладём
 Шрифты.zip
 .draft-preview-test-*/
+
+# временные каталоги тестовых прогонов (bun test материализует модули в корне)
+.composition-v3-test-*/
+.migration-commit-test-*/
+.bundle-import-*/
